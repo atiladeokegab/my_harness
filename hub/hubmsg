@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Cross-protocol wake for the hub.
+#
+# SendMessage only reaches Claude sessions: it speaks a Claude-specific Unix socket
+# protocol, and Codex cannot answer it in either direction. Every hub agent does run
+# inside a tmux session named hub-<agent>, so typing into that pane is a wake mechanism
+# that works regardless of which vendor's CLI is on the other end.
+#
+# Queue *and* ping, same as the Claude-native path: `hub notify` is durable but passive,
+# the keystroke is what gets attention now.
+#
+#   hubmsg <Agent> "text" [--task T-003]
+set -euo pipefail
+
+HUB_DIR="${HUB_DIR:-$HOME/hub}"
+WAKE_DIR="$HUB_DIR/wake"
+
+# HUB_DIR is runtime data and may point at a throwaway board. Resolve code from this
+# script instead, following the ~/.local/bin/hubmsg symlink used by normal installs.
+source_path="${BASH_SOURCE[0]}"
+while [ -L "$source_path" ]; do
+    source_dir="$(cd -P "$(dirname "$source_path")" && pwd)"
+    source_path="$(readlink "$source_path")"
+    [[ "$source_path" = /* ]] || source_path="$source_dir/$source_path"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$source_path")" && pwd)"
+RELAY="$SCRIPT_DIR/hubwaked"
+
+usage() { echo "usage: hubmsg <Agent> \"message\" [--task T-003]" >&2; exit 2; }
+
+[ $# -ge 2 ] || usage
+target="$1"; shift
+message="$1"; shift
+
+task=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --task) task="${2:-}"; [ -n "$task" ] || usage; shift 2 ;;
+        *) usage ;;
+    esac
+done
+
+sender="${HUB_AGENT:-${CLAUDE_CODE_SESSION_NAME:-unknown}}"
+# Canonicalise: board identities are capitalised, tmux sessions are lowercase.
+target="$(tr '[:lower:]' '[:upper:]' <<<"${target:0:1}")$(tr '[:upper:]' '[:lower:]' <<<"${target:1}")"
+sess="hub-$(tr '[:upper:]' '[:lower:]' <<<"$target")"
+
+if [ "$target" = "$sender" ]; then
+    echo "hubmsg: refusing to message yourself ($sender)" >&2
+    exit 1
+fi
+
+message_id="$(date +%s%N)-$$-$RANDOM"
+
+# 1. Durable half — survives restarts, read with `hub inbox`.
+if [ -n "$task" ]; then
+    hub notify "$target" "$message" --task "$task" --message-id "$message_id" >/dev/null
+else
+    hub notify "$target" "$message" --message-id "$message_id" >/dev/null
+fi
+echo "queued  -> $target inbox"
+
+# 2. Wake half. The prompt is deliberately short and contains no payload.
+# The payload stays in the locked durable inbox. Tmux carries only an idempotent pull
+# instruction, so retrying an ambiguous wake cannot execute the message twice.
+line="[hub wake:$message_id] Run exactly: hub receive $message_id"
+
+write_request() {
+    mkdir -p "$WAKE_DIR"
+    request="$WAKE_DIR/$message_id.wake"
+    # Keep session and payload as the first two lines so an already-running pre-v1 relay
+    # can deliver requests during a rolling upgrade. Versioned metadata follows them.
+    # The payload has already had newlines folded, so parsing needs no eval or escaping.
+    {
+        printf '%s\n' "$sess"
+        printf '%s\n' "$line"
+        printf 'version=1\n'
+        printf 'id=%s\n' "$message_id"
+        printf 'attempts=0\n'
+    } > "$request.tmp"
+    mv "$request.tmp" "$request"
+}
+
+# Typing into a pane needs the tmux server, and a sandboxed agent (Codex) is blocked from
+# connecting to its socket by seccomp -- stat succeeds, connect returns EPERM. That is
+# indistinguishable from "target is asleep" unless we look at the error: a reachable
+# server says "can't find session", an unreachable one says "error connecting". When we
+# cannot reach it ourselves, hand the keystroke to hubwaked, which runs unsandboxed.
+err="$(tmux has-session -t "$sess" 2>&1 >/dev/null)" && found=1 || found=0
+
+if [ "$found" = 1 ]; then
+    write_request
+    set +e
+    "$RELAY" --deliver "$request"
+    delivery_rc=$?
+    set -e
+    # rc=3 means the daemon atomically claimed the shared request first. Wait for that
+    # single owner's receipt instead of pasting a second copy ourselves.
+    if [ "$delivery_rc" -eq 3 ]; then
+        set +e
+        "$RELAY" --wait "$message_id"
+        delivery_rc=$?
+        set -e
+    fi
+    if [ "$delivery_rc" -eq 0 ]; then
+        echo "woke    -> $sess (confirmed, id $message_id)"
+    else
+        if [ "$delivery_rc" -eq 4 ]; then
+            echo "deferred -> $sess is attached; durable message will wake after detach (id $message_id)"
+            exit 0
+        fi
+        echo "pending -> $sess (submission unconfirmed; safe idempotent retry queued, id $message_id)"
+        exit 1
+    fi
+elif grep -qiE "error connecting|operation not permitted|permission denied" <<<"$err"; then
+    write_request
+    echo "relayed -> $sess (via hubwaked; tmux unreachable from this sandbox, id $message_id)"
+else
+    echo "asleep  -> $sess not running; message waits in the inbox"
+fi

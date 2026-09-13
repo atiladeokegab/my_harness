@@ -1,0 +1,20 @@
+# Hub runtime state, if anyone points HUB_DIR at a checkout. Data, never source.
+board.json
+events.jsonl
+inbox/
+wake/
+.board.lock
+.board.wal
+
+# Never commit agent credentials or local overrides.
+.credentials.json
+auth.json
+settings.local.json
+.env
+.env.*
+
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+*.bak

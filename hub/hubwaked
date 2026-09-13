@@ -1,0 +1,359 @@
+#!/usr/bin/env bash
+# Wake relay for sandboxed agents.
+#
+# Codex runs under a seccomp filter that blocks connecting to the tmux socket, so
+# Prometheus can queue a durable inbox message but cannot type into anyone's pane. It can
+# write to $HUB_DIR, so hubmsg drops the keystroke there as a request and this daemon --
+# which runs outside any sandbox -- performs it.
+#
+# Only agents that cannot reach tmux themselves use this path; Claude agents send their
+# own keystrokes directly and never touch the queue.
+set -uo pipefail
+
+HUB_DIR="${HUB_DIR:-$HOME/hub}"
+WAKE_DIR="$HUB_DIR/wake"
+LOG="$HUB_DIR/wake/hubwaked.log"
+DELIVERED_DIR="$WAKE_DIR/delivered"
+FAILED_DIR="$WAKE_DIR/failed"
+INFLIGHT_DIR="$WAKE_DIR/inflight"
+DEFERRED_DIR="$WAKE_DIR/deferred"
+PIDFILE="$WAKE_DIR/hubwaked.pid"
+HEARTBEAT="$WAKE_DIR/hubwaked.heartbeat"
+CONFIRM_POLLS=48
+CONFIRM_POLL_SECONDS=0.25
+MAX_LOG_BYTES=$((256 * 1024))
+KEEP_LOG_BYTES=$((128 * 1024))
+STALE_AFTER_SECONDS=10
+RECEIPT_RETENTION_SECONDS=$((24 * 60 * 60))
+PRUNE_INTERVAL_SECONDS=300
+last_prune=0
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+
+mkdir -p "$WAKE_DIR" "$DELIVERED_DIR" "$FAILED_DIR" "$INFLIGHT_DIR" "$DEFERRED_DIR"
+# Anyone who can write a request here can cause a keystroke into an agent's pane, so keep
+# the queue private to this user rather than world-readable.
+chmod 700 "$WAKE_DIR" "$DELIVERED_DIR" "$FAILED_DIR" "$INFLIGHT_DIR" "$DEFERRED_DIR" 2>/dev/null || true
+rotate_log() {
+    local size=0
+    [ -f "$LOG" ] && size="$(stat -c %s "$LOG" 2>/dev/null || echo 0)"
+    if [ "$size" -gt "$MAX_LOG_BYTES" ]; then
+        tail -c "$KEEP_LOG_BYTES" "$LOG" > "$LOG.tmp.$$" && mv "$LOG.tmp.$$" "$LOG"
+    fi
+}
+
+log() {
+    rotate_log
+    printf '%s %s\n' "$(date -Is)" "$*" >> "$LOG"
+}
+
+# A pane showing a confirmation dialog is NOT safe to type into: the Enter that submits a
+# wake also CONFIRMS whatever option is highlighted. Observed live during this cycle -- an
+# agent sat on "Yes, and don't ask again for commands that start with `sleep 2`", and a
+# wake delivered at that moment would have granted that permission on its behalf.
+#
+# Deferring is the safe direction: the message stays durable and is retried, whereas a
+# wrongly-approved permission cannot be taken back. So this matches known dialog shapes
+# from both vendors and defers on any of them.
+MODAL_MARKERS=(
+    "Press enter to confirm"
+    "esc to cancel"
+    "don't ask again"
+    "what to do differently"
+    "Do you want to"
+    "Do you trust"
+)
+
+pane_shows_modal() {
+    local sess="$1" tail_text marker
+    tail_text="$(tmux capture-pane -p -t "$sess" 2>/dev/null | tail -25)" || return 1
+    for marker in "${MODAL_MARKERS[@]}"; do
+        case "$tail_text" in *"$marker"*) return 0 ;; esac
+    done
+    return 1
+}
+
+code_fingerprint() {
+    sha256sum "$SCRIPT_PATH" | awk '{print $1}'
+}
+
+is_relay_pid() {
+    local pid="$1"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    tr '\0' ' ' < "/proc/$pid/cmdline" | grep -Fq -- "hubwaked"
+}
+
+relay_status() {
+    local pid="" recorded_hash="" current_hash state="down" queue=0 failed=0 oldest=0 now_ts age=0 heartbeat_age=999 f mtime newest last_error=""
+    [ -f "$PIDFILE" ] && pid="$(sed -n '1p' "$PIDFILE")"
+    [ -f "$PIDFILE" ] && recorded_hash="$(sed -n '2p' "$PIDFILE")"
+    current_hash="$(code_fingerprint)"
+    now_ts="$(date +%s)"
+    if [ -f "$HEARTBEAT" ]; then
+        heartbeat_age=$((now_ts - $(stat -c %Y "$HEARTBEAT" 2>/dev/null || echo 0)))
+    fi
+    if { [ -n "$pid" ] && is_relay_pid "$pid"; } || [ "$heartbeat_age" -le 3 ]; then
+        if [ "$recorded_hash" = "$current_hash" ]; then state="running"; else state="stale"; fi
+    else
+        pid="-"
+    fi
+
+    shopt -s nullglob
+    local pending=("$WAKE_DIR"/*.wake)
+    local failures=("$FAILED_DIR"/*.wake)
+    queue="${#pending[@]}"
+    failed="${#failures[@]}"
+    for f in "${pending[@]}"; do
+        mtime="$(stat -c %Y "$f" 2>/dev/null || echo "$now_ts")"
+        if [ "$oldest" -eq 0 ] || [ "$mtime" -lt "$oldest" ]; then oldest="$mtime"; fi
+    done
+    [ "$oldest" -eq 0 ] || age=$((now_ts - oldest))
+    [ "$age" -ge 0 ] || age=0
+    if [ "$failed" -gt 0 ]; then
+        newest="$(ls -1t "$FAILED_DIR"/*.wake 2>/dev/null | head -n 1)"
+        [ -z "$newest" ] || last_error="$(request_value last_error "$newest" 2>/dev/null || true)"
+    fi
+
+    printf 'relay=%s pid=%s queue=%s oldest=%ss failed=%s\n' "$state" "$pid" "$queue" "$age" "$failed"
+    [ "$state" != stale ] || printf 'warning: relay code changed since pid %s started; restart required\n' "$pid"
+    [ "$age" -le "$STALE_AFTER_SECONDS" ] || printf 'warning: oldest wake is %ss old (threshold %ss)\n' "$age" "$STALE_AFTER_SECONDS"
+    [ "$failed" -eq 0 ] || printf 'warning: %s failed wake(s) retained in %s\n' "$failed" "$FAILED_DIR"
+    [ -z "$last_error" ] || printf 'last_error: %s\n' "$last_error"
+    [ "$state" = running ]
+}
+
+acquire_pidfile() {
+    local old_pid="" heartbeat_age=999 now_ts
+    if [ -f "$PIDFILE" ]; then old_pid="$(sed -n '1p' "$PIDFILE")"; fi
+    now_ts="$(date +%s)"
+    if [ -f "$HEARTBEAT" ]; then
+        heartbeat_age=$((now_ts - $(stat -c %Y "$HEARTBEAT" 2>/dev/null || echo 0)))
+    fi
+    if { [ -n "$old_pid" ] && is_relay_pid "$old_pid"; } || [ "$heartbeat_age" -le 3 ]; then
+        echo "hubwaked already running (pid $old_pid)" >&2
+        return 1
+    fi
+    rm -f "$PIDFILE"
+    set -o noclobber
+    if ! printf '%s\n%s\n' "$$" "$(code_fingerprint)" > "$PIDFILE" 2>/dev/null; then
+        set +o noclobber
+        echo "hubwaked start raced another process" >&2
+        return 1
+    fi
+    set +o noclobber
+}
+
+cleanup() {
+    local recorded=""
+    [ -f "$PIDFILE" ] && recorded="$(sed -n '1p' "$PIDFILE")"
+    [ "$recorded" != "$$" ] || rm -f "$PIDFILE" "$HEARTBEAT"
+    log "hubwaked stopped (pid $$)"
+}
+
+prune_delivered() {
+    local now_ts marker id mtime
+    now_ts="$(date +%s)"
+    [ $((now_ts - last_prune)) -ge "$PRUNE_INTERVAL_SECONDS" ] || return 0
+    shopt -s nullglob
+    for marker in "$DELIVERED_DIR"/*; do
+        [ -f "$marker" ] || continue
+        id="$(basename "$marker")"
+        # A failed request is diagnostic evidence and could be manually re-queued much
+        # later. Keep its receipt for as long as that request exists so fail-closed
+        # delivery can never become duplicating delivery merely because time passed.
+        [ -e "$FAILED_DIR/$id.wake" ] && continue
+        mtime="$(stat -c %Y "$marker" 2>/dev/null || echo "$now_ts")"
+        [ $((now_ts - mtime)) -lt "$RECEIPT_RETENTION_SECONDS" ] || rm -f "$marker"
+    done
+    last_prune="$now_ts"
+}
+
+request_value() {
+    local key="$1" file="$2" value
+    value="$(sed -n "s/^${key}=//p" "$file" | head -n 1)"
+    [ -n "$value" ] || return 1
+    printf '%s' "$value"
+}
+
+cursor_position() {
+    local sess="$1"
+    tmux display-message -p -t "$sess" '#{cursor_x}:#{cursor_y}' 2>/dev/null
+}
+
+recover_inflight() {
+    local file base handler id
+    shopt -s nullglob
+    for file in "$INFLIGHT_DIR"/*.wake; do
+        base="$(basename "$file" .wake)"
+        handler="${base%%.*}"
+        id="${base#*.}"
+        [[ "$handler" =~ ^[0-9]+$ ]] || continue
+        kill -0 "$handler" 2>/dev/null && continue
+        # The owning process died before recording an outcome. Return the durable request
+        # to the queue; the delivered receipt still prevents duplication if it got far.
+        mv "$file" "$WAKE_DIR/$id.wake"
+        log "recovered inflight id=$id from dead handler=$handler"
+    done
+}
+
+wait_for_outcome() {
+    local id="$1" attempt inflight
+    [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+    for attempt in $(seq 1 60); do
+        [ ! -e "$DEFERRED_DIR/$id" ] || return 4
+        [ ! -e "$FAILED_DIR/$id.wake" ] || return 1
+        shopt -s nullglob
+        inflight=("$INFLIGHT_DIR"/*."$id".wake)
+        if [ -e "$DELIVERED_DIR/$id" ] && [ "${#inflight[@]}" -eq 0 ]; then return 0; fi
+        sleep 0.25
+    done
+    return 1
+}
+
+mark_failed() {
+    local file="$1" id="$2" reason="$3" dest="$FAILED_DIR/$id.wake"
+    printf 'last_error=%s\n' "$reason" >> "$file"
+    mv "$file" "$dest"
+    log "failed id=$id reason=$reason retained=$dest"
+}
+
+requeue_request() {
+    local file="$1" id="$2" delay="$3" queued="$WAKE_DIR/$id.wake"
+    mv "$file" "$queued"
+    touch -d "@$(( $(date +%s) + delay ))" "$queued"
+}
+
+deliver_request() {
+    local file="$1" version id sess line attempt before after pasted claimed
+    [ -f "$file" ] || { log "request vanished: $file"; return 1; }
+    version="$(request_value version "$file")" || {
+        log "bad request (no version), quarantined: $file"
+        mv "$file" "$FAILED_DIR/invalid-$(basename "$file")"
+        return 1
+    }
+    id="$(request_value id "$file")" || {
+        log "bad request (no id), quarantined: $file"
+        mv "$file" "$FAILED_DIR/invalid-$(basename "$file")"
+        return 1
+    }
+    # The live queue is shared by direct hubmsg calls and the daemon. Rename is the
+    # atomic claim: exactly one handler can move the source; losers wait on its outcome.
+    if [[ "$file" != "$INFLIGHT_DIR/"* ]]; then
+        claimed="$INFLIGHT_DIR/$$.$id.wake"
+        if ! mv "$file" "$claimed" 2>/dev/null; then return 3; fi
+        file="$claimed"
+    fi
+    rm -f "$DEFERRED_DIR/$id"
+    sess="$(sed -n '1p' "$file")"
+    line="$(sed -n '2p' "$file")"
+    [ -n "$sess" ] || { mark_failed "$file" "$id" "missing-session"; return 1; }
+    [ -n "$line" ] || { mark_failed "$file" "$id" "missing-line"; return 1; }
+
+    if [ "$version" != 1 ] || [[ ! "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ ! "$sess" =~ ^hub-[a-z0-9]+$ ]]; then
+        mark_failed "$file" "${id//[^A-Za-z0-9._-]/_}" "invalid-request"
+        return 1
+    fi
+    if [ -e "$DELIVERED_DIR/$id" ]; then
+        rm -f "$file"
+        log "deduplicated id=$id session=$sess"
+        return 0
+    fi
+    if ! tmux has-session -t "$sess" 2>/dev/null; then
+        log "waiting id=$id session=$sess (not running)"
+        return 2
+    fi
+    if [ "$(tmux display-message -p -t "$sess" '#{session_attached}' 2>/dev/null)" -gt 0 ]; then
+        # Never inject keystrokes into a pane a person may be editing. Return the claimed
+        # request to the durable queue; the daemon will retry after they detach.
+        : > "$DEFERRED_DIR/$id"
+        requeue_request "$file" "$id" 5
+        # A deferred wake is otherwise invisible to the person at the keyboard. The status
+        # line reaches them without touching the input they are typing.
+        tmux display-message -t "$sess" "hub: message waiting - run 'hub inbox'" 2>/dev/null || true
+        log "deferred id=$id session=$sess (attached)"
+        return 4
+    fi
+    if pane_shows_modal "$sess"; then
+        # Same treatment as an attached pane: requeue rather than risk confirming a dialog.
+        : > "$DEFERRED_DIR/$id"
+        requeue_request "$file" "$id" 5
+        log "deferred id=$id session=$sess (confirmation dialog on screen)"
+        return 4
+    fi
+
+    # Confirm that the literal paste moved the terminal cursor before sending Enter. This
+    # works for wrapped and paste-collapsed input without interpreting pane history.
+    before="$(cursor_position "$sess")"
+    tmux send-keys -t "$sess" -l -- "$line"
+    for attempt in 1 2 3 4 5; do
+        pasted="$(cursor_position "$sess")"
+        [ "$pasted" != "$before" ] && break
+        sleep "0.$((attempt * 2))"
+    done
+    pasted="$(cursor_position "$sess")"
+    if [ "$pasted" = "$before" ]; then
+        requeue_request "$file" "$id" 2
+        log "retry queued id=$id reason=paste-not-visible"
+        return 5
+    fi
+
+    # Send Enter once. Repeated Enter retries can create blank turns, and a busy TUI may
+    # render the submitted turn several seconds later even though it accepted the key.
+    tmux send-keys -t "$sess" Enter
+    for attempt in $(seq 1 "$CONFIRM_POLLS"); do
+        sleep "$CONFIRM_POLL_SECONDS"
+        after="$(cursor_position "$sess")"
+        # Submission clears/moves the input cursor. Exactly one atomic owner can paste,
+        # so a second writer can no longer manufacture this state change.
+        if [ "$after" != "$pasted" ]; then
+            : > "$DELIVERED_DIR/$id"
+            rm -f "$file"
+            log "delivered id=$id session=$sess confirm_poll=$attempt"
+            return 0
+        fi
+    done
+    # The wake contains only an idempotent `hub receive`, never the payload. Retrying an
+    # ambiguous submission is therefore safe: receive() reveals the message at most once.
+    requeue_request "$file" "$id" 2
+    log "retry queued id=$id reason=submit-unconfirmed"
+    return 5
+}
+
+if [ "${1:-}" = "--deliver" ]; then
+    [ $# -eq 2 ] || { echo "usage: hubwaked --deliver REQUEST" >&2; exit 2; }
+    deliver_request "$2"
+    exit $?
+elif [ "${1:-}" = "--status" ]; then
+    [ $# -eq 1 ] || { echo "usage: hubwaked --status" >&2; exit 2; }
+    relay_status
+    exit $?
+elif [ "${1:-}" = "--wait" ]; then
+    [ $# -eq 2 ] || { echo "usage: hubwaked --wait MESSAGE_ID" >&2; exit 2; }
+    wait_for_outcome "$2"
+    exit $?
+elif [ $# -gt 0 ]; then
+    echo "usage: hubwaked [--deliver REQUEST|--wait MESSAGE_ID|--status]" >&2
+    exit 2
+fi
+
+acquire_pidfile || exit 1
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+log "hubwaked started (pid $$)"
+touch "$HEARTBEAT"
+recover_inflight
+prune_delivered
+
+while :; do
+    touch "$HEARTBEAT"
+    shopt -s nullglob
+    for f in "$WAKE_DIR"/*.wake; do
+        [ "$(stat -c %Y "$f" 2>/dev/null || date +%s)" -le "$(date +%s)" ] || continue
+        # A sleeping target returns 2 and remains queued; other failures quarantine the
+        # request. Neither outcome should stop the daemon's scan.
+        deliver_request "$f" || true
+    done
+    prune_delivered
+    sleep 1
+done

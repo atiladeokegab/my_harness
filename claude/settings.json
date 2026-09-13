@@ -1,0 +1,28 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "model": "opus",
+  "theme": "dark",
+  "agentPushNotifEnabled": true,
+  "autoMode": {
+    "environment": [
+      "### User-specific",
+      "**Primary use of Claude Code**: software development, run as a multi-agent hub (a lead that plans, workers that execute) sharing a file-based task board",
+      "**Org-specific CLIs**: hub, hubmsg, hubwaked (the task board, cross-agent messaging and wake relay installed by my_harness) are routine in every project",
+      "**Python toolchain**: uv is the only Python entry point; `uv run`, `uv sync`, `uv add` are routine",
+      "**Trusted repos**: <list the repos you trust, e.g. /home/you/code/yourproject -> github.com/you/yourproject>",
+      "**Secrets management**: <where secrets live and which paths must never be shared, e.g. .env, keys/*.pem>",
+      "**Sensitive remote targets**: anything whose name carries `prod` or `production` as a whole word or name segment"
+    ],
+    "allow": [
+      "$defaults",
+      "Bash(uv run:*)",
+      "Bash(hub:*)",
+      "Bash(hubmsg:*)"
+    ],
+    "soft_deny": [
+      "$defaults"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+# Runtime state, not source. The board and its ledger are data five agents mutate
+# continuously; tracking them would make every task a commit and every commit a conflict.
+board.json
+events.jsonl
+inbox/
+wake/
+.board.lock
+.board.wal
+
+# Superseded by git itself — the reason this repo exists.
+*.bak
+
+# Python bytecode from importing board.py in tests.
+__pycache__/
+*.pyc
