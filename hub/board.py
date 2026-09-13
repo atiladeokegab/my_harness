@@ -109,13 +109,21 @@ def _repair_jsonl_tail(path):
         pass
 
 
-def read_events():
-    """Read complete ledger records after repairing a crash-torn final append."""
-    _repair_jsonl_tail(EVENTS)
+def read_events(repair=True):
+    """Read complete ledger records.
+
+    Callers holding the board lock repair a crash-torn final append. Lock-free readers pass
+    repair=False and skip an unterminated last line instead: it may be a concurrent
+    writer's append still in progress, and truncating it would tear the ledger mid-file.
+    """
+    if repair:
+        _repair_jsonl_tail(EVENTS)
     records = []
     try:
         with open(EVENTS) as f:
             for line in f:
+                if not line.endswith("\n"):
+                    break
                 if line.strip():
                     records.append(json.loads(line))
     except FileNotFoundError:
@@ -446,10 +454,18 @@ def deliver(agent, text, message_id=None):
     agent = addressable(agent, "recipient")
     path = os.path.join(INBOX_DIR, f"{agent}.jsonl")
     with inbox_lock(agent):
+        # Every append happens under this lock, so an unterminated last line here can only
+        # be a crashed writer's leftover. Drop it first: appending onto it would fuse the
+        # new record into the torn one, and a message acknowledged as queued would be lost.
+        _repair_jsonl_tail(path)
         if message_id and any(m.get("id") == message_id for m in read_msgs(path)):
             return
         with open(path, "a") as f:
             f.write(json.dumps({"at": now(), "text": text, **({"id": message_id} if message_id else {})}) + "\n")
+
+
+def new_message_id():
+    return f"{time.time_ns()}-{os.getpid()}-{os.urandom(2).hex()}"
 
 
 def notify_hint(targets):
@@ -462,11 +478,12 @@ def notify_hint(targets):
     """
     if not targets:
         return
-    print("\nto ping them live (queues and wakes in one call):")
-    for agent, text in targets:
+    print("\nto ping them live (wakes them; --id reuses the message already queued):")
+    for agent, text, message_id in targets:
         # shlex.quote so the line stays copy-pasteable when a task title contains
-        # quotes, apostrophes or $ -- which task titles routinely do.
-        print(f"  hubmsg {shlex.quote(agent)} {shlex.quote(text)}")
+        # quotes, apostrophes or $ -- which task titles routinely do. --id makes hubmsg's
+        # own queueing a no-op, so running the hint never lands the message twice.
+        print(f"  hubmsg {shlex.quote(agent)} {shlex.quote(text)} --id {message_id}")
 
 
 def fmt_row(t, data=None):
@@ -509,8 +526,9 @@ def cmd_new(a):
     if not a.detail:
         print("  note: no --detail given. Tasks should carry enough plan for another agent to execute cold.")
     if a.owner:
-        deliver(a.owner, f"{nid} assigned to you: {a.title}")
-        notify_hint([(a.owner, f"{nid} is yours: {a.title}. Run: hub show {nid}")])
+        mid = new_message_id()
+        deliver(a.owner, f"{nid} assigned to you: {a.title}", mid)
+        notify_hint([(a.owner, f"{nid} is yours: {a.title}. Run: hub show {nid}", mid)])
 
 
 def cmd_list(a):
@@ -580,7 +598,9 @@ def cmd_next(a):
 
 
 def cmd_claim(a):
-    me = whoami(a.as_agent)
+    # An owner must be addressable: a task owned by "Unknown" can never be released or
+    # finished by a real agent without --force.
+    me = addressable(whoami(a.as_agent), "claiming agent")
     with board(write=True) as (data, events):
         t = find(data, a.id)
         missing = unmet_deps(data, t)
@@ -620,13 +640,14 @@ def cmd_done(a):
                 log(events, me, "unblocked", x["id"], by_task=t["id"])
                 text = f"{x['id']} is ready — unblocked by {t['id']}: {x['title']}"
                 if x.get("owner"):
-                    deliver(x["owner"], text)
-                    pings.append((x["owner"], text))
+                    mid = new_message_id()
+                    deliver(x["owner"], text, mid)
+                    pings.append((x["owner"], text, mid))
                 else:
-                    pings.append((None, f"{x['id']} is now claimable: {x['title']}"))
+                    pings.append((None, f"{x['id']} is now claimable: {x['title']}", None))
     print(f"{t['id']} marked done by {me}")
     unowned = [p for p in pings if p[0] is None]
-    for _, text in unowned:
+    for _, text, _ in unowned:
         print(f"  → {text}")
     notify_hint([p for p in pings if p[0]])
 
@@ -656,11 +677,12 @@ def cmd_notify(a):
     target = addressable(a.agent, "recipient")
     if a.message_id and not MESSAGE_ID_RE.match(a.message_id):
         sys.exit(f"invalid message id: {a.message_id!r}")
-    deliver(target, f"{a.text}  (from {me})", a.message_id)
+    mid = a.message_id or new_message_id()
+    deliver(target, f"{a.text}  (from {me})", mid)
     with board(write=True) as (_, events):
         log(events, me, "notify", a.task or "-", to=target, text=a.text)
     print(f"queued for {target}: {a.text}")
-    notify_hint([(target, a.text)])
+    notify_hint([(target, a.text, mid)])
 
 
 def cmd_brief(a):
@@ -780,11 +802,11 @@ def cmd_events(a):
     if not os.path.exists(EVENTS):
         print("no events recorded yet")
         return
-    lines = read_events()
+    lines = read_events(repair=False)
     aborted = {e.get("txid") for e in lines if e.get("event") == "abort"}
     lines = [e for e in lines if e.get("event") not in ("commit", "abort") and e.get("txid") not in aborted]
     if a.task:
-        tid = a.task.upper()
+        tid = norm_id(a.task)
         lines = [e for e in lines if e.get("task") == tid]
     for e in lines[-a.tail:]:
         extra = {k: v for k, v in e.items() if k not in ("at", "by", "event", "task") and v}

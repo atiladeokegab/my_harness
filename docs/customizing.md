@@ -12,7 +12,9 @@ export HUB_CODEX_AGENTS="Ken"                # Codex agents ("" for none)
 ```
 
 Each name becomes a lower-case shell command (`ada`, `grace`, `ken`) and a tmux session
-(`hub-ada`). Non-lead Claude agents get their own config directory, `~/.claude-<name>`.
+(`hub-ada`). **Re-run `./install.sh` with these exported** so the new names are linked in
+`~/.local/bin`, which is what makes them work from zsh. `hubctl <name>` always works in the
+meantime. `HUB_CODEX_AGENTS=""` means no Codex agents at all. Non-lead Claude agents get their own config directory, `~/.claude-<name>`.
 The board has no roster, so any name works.
 
 Then update the names in `~/.claude/CLAUDE.md` and `~/hub/AGENTS-codex.md`. They tell each

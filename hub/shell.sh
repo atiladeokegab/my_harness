@@ -17,9 +17,20 @@ export HUB_DIR="${HUB_DIR:-$HOME/hub}"
 export HUB_CODE_DIR="${HUB_CODE_DIR:-$HOME/code}"
 export HUB_HOME_PROJECT="${HUB_HOME_PROJECT:-}"
 HUB_LEAD="${HUB_LEAD:-Zeus}"
-HUB_CLAUDE_AGENTS="${HUB_CLAUDE_AGENTS:-Zeus Apollo Hermes Athena}"
-HUB_CODEX_AGENTS="${HUB_CODEX_AGENTS:-Prometheus}"
+# `-` not `:-`: an explicitly empty roster (e.g. HUB_CODEX_AGENTS="" for a Claude-only
+# setup) is honoured; only an unset variable falls back to the default.
+HUB_CLAUDE_AGENTS="${HUB_CLAUDE_AGENTS-Zeus Apollo Hermes Athena}"
+HUB_CODEX_AGENTS="${HUB_CODEX_AGENTS-Prometheus}"
 HUB_RELAY_SESSION="${HUB_RELAY_SESSION:-hub-relay}"
+
+# `timeout` is GNU coreutils. macOS has none by default; Homebrew's coreutils installs it
+# as `gtimeout`. Without either, run the command unbounded rather than not at all.
+_hub_timeout() {
+    local secs="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$secs" "$@"
+    else "$@"; fi
+}
 
 # Resolve a project name to its checkout. Any git repo directly under $HUB_CODE_DIR works
 # with no registration, and the hub itself resolves by its directory name.
@@ -110,7 +121,11 @@ _hub_project_for() {
     top="$(cd "$dir" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || return 0
     [ -n "$top" ] || return 0
     [ "$top" -ef "$HUB_DIR" ] && return 0
-    basename "$top" | tr '[:upper:]' '[:lower:]'
+    # board.py accepts [a-z0-9][a-z0-9._-]{0,47}. Map anything else (spaces, a leading
+    # dot or underscore, very long names) onto that, or every hub command in the session
+    # would exit with "invalid project name".
+    basename "$top" | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9._-]/-/g; s/^[^a-z0-9]*//' | cut -c1-48
 }
 
 _hub_session() { echo "hub-$(echo "$1" | tr '[:upper:]' '[:lower:]')"; }
@@ -132,6 +147,9 @@ _hub_enter() {
 
     _hub_prune_sockets
     _hub_bootstrap_config "$name" "$cfg"
+    # hubmsg defers a wake to an attached pane and hands it to the relay. Without a relay,
+    # a deferred or relayed wake is never delivered, so start it for every agent.
+    _hub_start_relay
 
     if ! tmux has-session -t "$sess" 2>/dev/null; then
         # Env is passed to the tmux session only — never exported into this shell, or it
@@ -264,11 +282,11 @@ hubaccounts() {
 hubs() {
     _hub_prune_sockets
     echo "tmux sessions:"
-    timeout 5 tmux list-sessions -F "  #{session_name}  (#{?session_attached,attached,detached})" 2>/dev/null \
+    _hub_timeout 5 tmux list-sessions -F "  #{session_name}  (#{?session_attached,attached,detached})" 2>/dev/null \
         | grep "hub-" || echo "  none"
     echo
     echo "claude sessions:"
-    timeout 15 claude agents --json 2>/dev/null \
+    _hub_timeout 15 claude agents --json 2>/dev/null \
         | python3 -c "import json,sys; [print(f\"  {a['name']}  {a['kind']}  {a['status']}\") for a in json.load(sys.stdin)]" \
         2>/dev/null || echo "  none (or claude agents timed out)"
     echo
@@ -282,7 +300,7 @@ hubs() {
 hubkill() {
     if [ -z "$1" ]; then echo "usage: hubkill <agent|all>"; return 1; fi
     if [ "$1" = "all" ]; then
-        timeout 5 tmux list-sessions -F "#{session_name}" 2>/dev/null | grep "^hub-" \
+        _hub_timeout 5 tmux list-sessions -F "#{session_name}" 2>/dev/null | grep "^hub-" \
             | while read -r s; do tmux kill-session -t "$s" && echo "stopped $s"; done
     else
         local sess; sess="$(_hub_session "$1")"

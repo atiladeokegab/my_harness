@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -113,6 +114,38 @@ class BoardCase(unittest.TestCase):
         self.assertIn("hubmsg", result.stdout)
         self.assertNotIn("SendMessage", result.stdout)
         self.assertIn("Prometheus", result.stdout)
+
+    def test_unknown_identity_cannot_own_a_task(self):
+        self.assert_ok(self.run_hub("new", "work"))
+        refused = self.run_hub("claim", "1", "--as", "Unknown")
+        self.assertNotEqual(refused.returncode, 0, "a session with no identity became an owner")
+        self.assertEqual(self.read_board()["tasks"][0]["status"], "open")
+
+    def test_events_task_filter_accepts_every_id_spelling(self):
+        self.assert_ok(self.run_hub("new", "work"))
+        for spelling in ("1", "t-1", "T-001"):
+            out = self.run_hub("events", "--task", spelling)
+            self.assert_ok(out)
+            self.assertIn("T-001", out.stdout, f"--task {spelling} matched nothing")
+
+    def test_events_reader_never_truncates_an_append_in_progress(self):
+        self.assert_ok(self.run_hub("new", "work"))
+        path = self.root / "events.jsonl"
+        with open(path, "a") as f:
+            f.write('{"at": "x", "by": "Zeus", "event": "note", "task": "T-0')  # half-written
+        before = path.read_bytes()
+        self.assert_ok(self.run_hub("events"))
+        self.assertEqual(path.read_bytes(), before, "a lock-free reader truncated the ledger")
+
+    def test_ping_hint_reuses_the_queued_message(self):
+        result = self.run_hub("new", "handoff", "--owner", "Prometheus")
+        self.assert_ok(result)
+        match = re.search(r"--id (\S+)$", result.stdout, re.M)
+        self.assertIsNotNone(match, result.stdout)
+        # What running the printed hubmsg hint does for its durable half:
+        self.assert_ok(self.run_hub("notify", "Prometheus", "handoff", "--message-id", match.group(1)))
+        inbox = self.load_module().read_msgs(self.root / "inbox" / "Prometheus.jsonl")
+        self.assertEqual(len(inbox), 1, f"the hint queued the message twice: {inbox}")
 
     def test_durable_message_receive_is_idempotent(self):
         mid = "msg-123"

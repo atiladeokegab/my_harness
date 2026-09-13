@@ -78,7 +78,10 @@ acceptance criterion in a skill.
 
 ## Requirements
 
-- Linux, macOS or WSL2 with **bash**, **tmux**, **git** and **python3**.
+- Linux or WSL2 with **bash**, **tmux**, **git** and **python3**.
+- **macOS:** also GNU coreutils and a modern bash, because macOS ships bash 3.2 and BSD
+  tools: `brew install bash coreutils tmux python git`. The installer checks for both. The
+  agent commands are installed as executables, so they work from the default zsh.
 - [Claude Code](https://claude.com/claude-code) for the Claude agents.
 - Optional: [Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`) for
   the Codex worker, [uv](https://docs.astral.sh/uv/) for Python work, and `gh`.
@@ -98,7 +101,7 @@ They never type into a real agent's pane.
 
 ## Status and honesty
 
-The hub has run real multi-agent work for weeks. [`hub/ARCHITECTURE.md`](hub/ARCHITECTURE.md)
+The hub has run real multi-agent work daily since it was built in September 2026. [`hub/ARCHITECTURE.md`](hub/ARCHITECTURE.md)
 lists what has been verified by running it and what is only inferred. The main open point:
 the transport wakes agents by typing into their tmux pane. That is guarded (it never types
 into a pane a human is attached to, or one showing a confirmation dialog), but it is still

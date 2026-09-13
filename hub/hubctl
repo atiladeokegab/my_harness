@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Shell-independent entry point for the hub launchers.
+#
+# shell.sh defines the agent commands as bash functions, which only exist in a bash shell
+# that sourced it. macOS logs in to zsh, so install.sh also links every command name in
+# ~/.local/bin to this script. It loads shell.sh inside bash and runs the function named
+# after the link it was called by:
+#
+#   zeus [project]        apollo [project]        prometheus [project]
+#   hubs                  hubaccounts             hubkill <agent|all>
+#   hubctl <command> [args]      # the same, by name
+#
+# The roster comes from the environment (HUB_CLAUDE_AGENTS, HUB_CODEX_AGENTS, HUB_LEAD);
+# see shell.sh for the full list of settings.
+
+# Resolve our own directory through the ~/.local/bin symlink: shell.sh lives next to us.
+source_path="${BASH_SOURCE[0]}"
+while [ -L "$source_path" ]; do
+    source_dir="$(cd -P "$(dirname "$source_path")" && pwd)"
+    source_path="$(readlink "$source_path")"
+    [[ "$source_path" = /* ]] || source_path="$source_dir/$source_path"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$source_path")" && pwd)"
+
+export HUB_DIR="${HUB_DIR:-$SCRIPT_DIR}"
+# shellcheck source=shell.sh
+. "$SCRIPT_DIR/shell.sh"
+
+cmd="$(basename "$0")"
+if [ "$cmd" = "hubctl" ]; then
+    if [ $# -eq 0 ]; then
+        echo "usage: hubctl <agent|hubs|hubaccounts|hubkill> [args]" >&2
+        echo "agents: $(echo $HUB_CLAUDE_AGENTS $HUB_CODEX_AGENTS | tr '[:upper:]' '[:lower:]')" >&2
+        exit 2
+    fi
+    cmd="$1"; shift
+fi
+cmd="$(echo "$cmd" | tr '[:upper:]' '[:lower:]')"
+
+case "$cmd" in
+    _*|"") echo "hubctl: not a hub command: $cmd" >&2; exit 2 ;;
+esac
+if declare -F "$cmd" >/dev/null; then
+    "$cmd" "$@"
+else
+    echo "hubctl: unknown command or agent: $cmd" >&2
+    echo "agents: $(echo $HUB_CLAUDE_AGENTS $HUB_CODEX_AGENTS | tr '[:upper:]' '[:lower:]')" >&2
+    exit 2
+fi

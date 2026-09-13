@@ -9,8 +9,19 @@
 # Queue *and* ping, same as the Claude-native path: `hub notify` is durable but passive,
 # the keystroke is what gets attention now.
 #
-#   hubmsg <Agent> "text" [--task T-003]
+#   hubmsg <Agent> "text" [--task T-003] [--id MESSAGE_ID]
+#
+# --id reuses a message that `hub done`/`hub new`/`hub notify` already queued: the durable
+# half deduplicates on the id, so only the wake is new.
 set -euo pipefail
+
+# macOS: prefer Homebrew's GNU coreutils for this process (date +%N, and hubwaked's
+# GNU-only flags when it is invoked from here).
+if [ "$(uname -s)" = Darwin ]; then
+    for _gnubin in /opt/homebrew/opt/coreutils/libexec/gnubin /usr/local/opt/coreutils/libexec/gnubin; do
+        [ -d "$_gnubin" ] && { PATH="$_gnubin:$PATH"; break; }
+    done
+fi
 
 HUB_DIR="${HUB_DIR:-$HOME/hub}"
 WAKE_DIR="$HUB_DIR/wake"
@@ -26,16 +37,18 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$source_path")" && pwd)"
 RELAY="$SCRIPT_DIR/hubwaked"
 
-usage() { echo "usage: hubmsg <Agent> \"message\" [--task T-003]" >&2; exit 2; }
+usage() { echo "usage: hubmsg <Agent> \"message\" [--task T-003] [--id MESSAGE_ID]" >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 target="$1"; shift
 message="$1"; shift
 
 task=""
+message_id=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --task) task="${2:-}"; [ -n "$task" ] || usage; shift 2 ;;
+        --id) message_id="${2:-}"; [[ "$message_id" =~ ^[A-Za-z0-9._-]{1,96}$ ]] || usage; shift 2 ;;
         *) usage ;;
     esac
 done
@@ -50,7 +63,7 @@ if [ "$target" = "$sender" ]; then
     exit 1
 fi
 
-message_id="$(date +%s%N)-$$-$RANDOM"
+[ -n "$message_id" ] || message_id="$(date +%s%N)-$$-$RANDOM"
 
 # 1. Durable half — survives restarts, read with `hub inbox`.
 if [ -n "$task" ]; then

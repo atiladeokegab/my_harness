@@ -2,6 +2,18 @@
 
 ## 1. Install
 
+**On macOS, first:**
+
+```bash
+brew install bash coreutils tmux python git
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # where the agent commands go
+```
+
+The hub's relay uses GNU `coreutils` flags, and macOS's own bash is 3.2. The hub scripts
+pick up Homebrew's versions by themselves, without changing your interactive shell. This
+path is written for macOS but hasn't been run on a Mac yet. If something breaks, the
+runbooks and `hubs` output are the first places to look.
+
 ```bash
 git clone https://github.com/atiladeokegab/my_harness.git ~/code/my_harness
 cd ~/code/my_harness
@@ -116,5 +128,7 @@ no peers, see "The one load-bearing constraint" in
 - **WSL:** enter with `wsl ~`, not plain `wsl`. Plain `wsl` keeps your Windows directory,
   so agents launch in `/mnt/c/...`, which is the wrong place and slow.
 - `~/.local/bin` must be on `PATH`. The installer tells you if it isn't.
-- `shell.sh` is bash. If your login shell is zsh, run agents from a bash shell.
+- The agent commands (`zeus`, `apollo`, `hubs`, ...) are executables in `~/.local/bin`,
+  so they work from zsh or any other shell. Bash users also get them as functions through
+  `~/.bashrc`, which behave the same way.
 - Don't delete `~/hub/.board.lock`. It's a zero-byte anchor for `flock`.

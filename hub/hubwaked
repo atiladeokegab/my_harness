@@ -10,6 +10,15 @@
 # own keystrokes directly and never touch the queue.
 set -uo pipefail
 
+# macOS: this script uses GNU coreutils flags (readlink -f, stat -c, date -Is, touch -d,
+# sha256sum). Homebrew's coreutils provides the GNU versions under gnubin; prefer them for
+# this process only. install.sh checks they are present.
+if [ "$(uname -s)" = Darwin ]; then
+    for _gnubin in /opt/homebrew/opt/coreutils/libexec/gnubin /usr/local/opt/coreutils/libexec/gnubin; do
+        [ -d "$_gnubin" ] && { PATH="$_gnubin:$PATH"; break; }
+    done
+fi
+
 HUB_DIR="${HUB_DIR:-$HOME/hub}"
 WAKE_DIR="$HUB_DIR/wake"
 LOG="$HUB_DIR/wake/hubwaked.log"
@@ -80,8 +89,8 @@ is_relay_pid() {
     local pid="$1"
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     kill -0 "$pid" 2>/dev/null || return 1
-    [ -r "/proc/$pid/cmdline" ] || return 1
-    tr '\0' ' ' < "/proc/$pid/cmdline" | grep -Fq -- "hubwaked"
+    # ps rather than /proc/<pid>/cmdline, which does not exist on macOS.
+    ps -p "$pid" -o command= 2>/dev/null | grep -Fq -- "hubwaked"
 }
 
 relay_status() {
@@ -227,12 +236,16 @@ requeue_request() {
 deliver_request() {
     local file="$1" version id sess line attempt before after pasted claimed
     [ -f "$file" ] || { log "request vanished: $file"; return 1; }
-    version="$(request_value version "$file")" || {
+    # A read can fail because another handler claimed (moved) the file after the -f check.
+    # That is a lost race, not a bad request: report it as claimed-elsewhere (3).
+    version="$(request_value version "$file" 2>/dev/null)" || {
+        [ -f "$file" ] || return 3
         log "bad request (no version), quarantined: $file"
         mv "$file" "$FAILED_DIR/invalid-$(basename "$file")"
         return 1
     }
-    id="$(request_value id "$file")" || {
+    id="$(request_value id "$file" 2>/dev/null)" || {
+        [ -f "$file" ] || return 3
         log "bad request (no id), quarantined: $file"
         mv "$file" "$FAILED_DIR/invalid-$(basename "$file")"
         return 1
@@ -250,7 +263,7 @@ deliver_request() {
     [ -n "$sess" ] || { mark_failed "$file" "$id" "missing-session"; return 1; }
     [ -n "$line" ] || { mark_failed "$file" "$id" "missing-line"; return 1; }
 
-    if [ "$version" != 1 ] || [[ ! "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ ! "$sess" =~ ^hub-[a-z0-9]+$ ]]; then
+    if [ "$version" != 1 ] || [[ ! "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ ! "$sess" =~ ^hub-[a-z0-9_-]+$ ]]; then
         mark_failed "$file" "${id//[^A-Za-z0-9._-]/_}" "invalid-request"
         return 1
     fi
@@ -260,6 +273,9 @@ deliver_request() {
         return 0
     fi
     if ! tmux has-session -t "$sess" 2>/dev/null; then
+        # The request is already claimed into inflight/, which the scan loop never reads.
+        # Put it back in the live queue, or it waits for a relay restart to be recovered.
+        requeue_request "$file" "$id" 5
         log "waiting id=$id session=$sess (not running)"
         return 2
     fi

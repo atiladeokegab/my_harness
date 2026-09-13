@@ -119,8 +119,8 @@ a manual human job. Deliberate, but it is an unfinished edge.
 Two suites, dependency-free, run against throwaway boards and scratch tmux sessions:
 
 ```bash
-python3 tests/test_board.py       # 11 checks
-python3 tests/test_messaging.py   # 21 checks
+python3 tests/test_board.py       # 13 tests
+python3 tests/test_messaging.py   # 30 checks
 ```
 
 The rule that mattered most: **each suite was written by the agent that did not write the
@@ -169,14 +169,14 @@ no longer confirm a dialog it happens to land on.
 
 | File | Lines | Role |
 |---|---|---|
-| `board.py` | 677 | Task board: state machine, locking, ledger, inboxes |
-| `hubwaked` | 276 | Wake relay daemon for sandboxed agents |
-| `hubmsg` | 115 | Queue-and-ping, the only cross-vendor message path |
-| `shell.sh` | 190 | Session launchers, account status, relay supervision |
-| `tests/` | 487 | The two suites |
-| `HUB.md` | 259 | Operating manual |
-| `README.md` | 248 | What it is and what is verified versus assumed |
-| `AGENTS-codex.md` | 88 | Protocol for the Codex agent (it reads `AGENTS.md`, never `CLAUDE.md`) |
+| `board.py` | 889 | Task board: state machine, locking, ledger, inboxes |
+| `hubwaked` | 359 | Wake relay daemon for sandboxed agents |
+| `hubmsg` | 120 | Queue-and-ping, the only cross-vendor message path |
+| `shell.sh` | 292 | Session launchers, account status, relay supervision |
+| `tests/` | 647 | The two suites |
+| `HUB.md` | 365 | Operating manual |
+| `ARCHITECTURE.md` | 252 | What it is and what is verified versus assumed |
+| `AGENTS-codex.md` | 107 | Protocol for the Codex agent (it reads `AGENTS.md`, never `CLAUDE.md`) |
 | `runbooks/` | — | Problems that already cost real time once, with symptom and fix |
 
 ---

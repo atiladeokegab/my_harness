@@ -49,7 +49,7 @@ class Bed:
         # Session names must be unique per run: two people running this suite at once
         # (which happens -- Zeus and Prometheus both run it) would otherwise create and
         # kill each other's panes and both see phantom failures. hubwaked validates the
-        # target as ^hub-[a-z0-9]+$, so the tag stays lowercase alphanumeric.
+        # target as ^hub-[a-z0-9_-]+$; the tag stays lowercase alphanumeric.
         self.tag = uuid.uuid4().hex[:6]
         json.dump({"next_id": 1, "tasks": []}, open(os.path.join(self.dir, "board.json"), "w"))
         # $HUB_DIR is the data directory only: hubmsg resolves the relay relative to its
@@ -163,6 +163,37 @@ def test_relay_rejects_bad_targets(b):
         r = sh([HUBWAKED, "--deliver", p], env=b.env)
         check(f"relay rejects {label}", r.returncode != 0 and not os.path.exists(p),
               f"rc={r.returncode} still_present={os.path.exists(p)}")
+
+
+def test_hyphenated_agent_name_is_woken(b):
+    """board.py allows - and _ in agent names (e.g. a second hub's Prometheus-w), so the
+    relay must accept the tmux session they map to rather than quarantine every wake."""
+    _, out = b.target("t12h-w")
+    r = b.msg(f"T12h-w{b.tag}", "hyphen ok")
+    wait_for(out)
+    got = b.receive(f"T12h-w{b.tag}", r).stdout
+    check("agent with a hyphen in its name is woken", confirmed(r) and "hyphen ok" in got,
+          r.stdout + r.stderr + got)
+
+
+def test_asleep_request_returns_to_queue(b):
+    """A request claimed for a target that is not running must go back to the live queue;
+    left in inflight/, the scan loop never sees it again until a relay restart."""
+    wake = os.path.join(b.dir, "wake")
+    for sub in ("", "inflight", "failed", "delivered", "deferred"):
+        os.makedirs(os.path.join(wake, sub), exist_ok=True)
+    rid = f"sleepy-{uuid.uuid4().hex[:8]}"
+    p = os.path.join(wake, f"{rid}.wake")
+    with open(p, "w") as f:
+        f.write(f"hub-sleepy{b.tag}\n[hub wake:{rid}] Run exactly: hub receive {rid}\n"
+                f"version=1\nid={rid}\nattempts=0\n")
+    r = sh([HUBWAKED, "--deliver", p], env=b.env)
+    stuck = [n for n in os.listdir(os.path.join(wake, "inflight")) if rid in n]
+    check("request for a sleeping target returns to the live queue",
+          r.returncode == 2 and os.path.exists(p) and not stuck,
+          f"rc={r.returncode} queued={os.path.exists(p)} inflight={stuck}")
+    if os.path.exists(p):
+        os.remove(p)
 
 
 def test_dedup(b):
@@ -366,7 +397,9 @@ def main():
     print(f"bed: {b.dir}\n")
     try:
         for t in (test_content_integrity, test_newline_folding, test_cold_target,
-                  test_asleep_vs_relay, test_relay_rejects_bad_targets, test_dedup,
+                  test_asleep_vs_relay, test_relay_rejects_bad_targets,
+                  test_hyphenated_agent_name_is_woken, test_asleep_request_returns_to_queue,
+                  test_dedup,
                   test_relay_health_and_recovery, test_stale_code_and_resolved_error_status,
                   test_attached_pane_defers_without_collision,
                   test_single_delivery_with_daemon_running,

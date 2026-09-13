@@ -6,13 +6,12 @@
 set -euo pipefail
 
 REPO="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HUB_DIR_FROM_ENV="${HUB_DIR:+yes}"
 HUB_DIR="${HUB_DIR:-$HOME/hub}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 CLAUDE_DIR="$HOME/.claude"
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
-
-HUB_DIR_FROM_ENV="${HUB_DIR:+yes}"
 
 DRY=0 DO_CLAUDE=1 DO_CODEX=1 DO_SHELL=1 DO_BIN=1
 
@@ -36,7 +35,7 @@ EOF
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1 ;;
-        --hub-dir) HUB_DIR="${2:?--hub-dir needs a path}"; shift ;;
+        --hub-dir) HUB_DIR="${2:?--hub-dir needs a path}"; HUB_DIR_FROM_ENV=""; shift ;;
         --no-claude) DO_CLAUDE=0 ;;
         --no-codex) DO_CODEX=0 ;;
         --no-shell) DO_SHELL=0 ;;
@@ -89,6 +88,19 @@ done
 for c in claude uv codex gh node; do
     if have "$c"; then say "  ok       $c"; else say "  absent   $c (optional)"; fi
 done
+if [ "$(uname -s)" = Darwin ]; then
+    # hubwaked needs GNU coreutils (stat -c, touch -d, readlink -f, sha256sum), and the
+    # scripts expect a modern bash rather than macOS's bash 3.2.
+    if [ -d /opt/homebrew/opt/coreutils/libexec/gnubin ] || [ -d /usr/local/opt/coreutils/libexec/gnubin ]; then
+        say "  ok       GNU coreutils (Homebrew)"
+    else
+        say "  MISSING  GNU coreutils (required on macOS)"; missing=1
+    fi
+    bash_major="$(bash -c 'echo ${BASH_VERSINFO[0]}')"
+    if [ "${bash_major:-3}" -ge 4 ]; then say "  ok       bash $bash_major"
+    else say "  MISSING  bash 4+ (macOS ships 3.2)"; missing=1; fi
+    [ "$missing" = 1 ] && say "  on macOS:  brew install bash coreutils tmux python git"
+fi
 [ "$missing" = 1 ] && { say "install the required tools first."; exit 1; }
 [ "$DRY" = 1 ] && say "  (dry run: nothing will be written)"
 
@@ -96,15 +108,18 @@ done
 step "hub -> $HUB_DIR"
 [ -n "$HUB_DIR_FROM_ENV" ] && say "  (HUB_DIR taken from your environment; unset it or pass --hub-dir to choose another)"
 run mkdir -p "$HUB_DIR/tests" "$HUB_DIR/runbooks"
-for f in board.py hubmsg hubwaked; do put "$REPO/hub/$f" "$HUB_DIR/$f" 755 owned; done
+for f in board.py hubmsg hubwaked hubctl; do put "$REPO/hub/$f" "$HUB_DIR/$f" 755 owned; done
 put "$REPO/hub/shell.sh" "$HUB_DIR/shell.sh" 644 owned
 put "$REPO/hub/.gitignore" "$HUB_DIR/.gitignore" 644 owned
+# Docs and the Codex protocol are yours to edit (docs/customizing.md tells you to rename
+# agents in AGENTS-codex.md), so a differing copy is backed up before it is refreshed.
 for f in HUB.md OVERVIEW.md ARCHITECTURE.md AGENTS-codex.md; do
-    put_text "$REPO/hub/$f" "$HUB_DIR/$f" owned
+    put_text "$REPO/hub/$f" "$HUB_DIR/$f"
 done
 for f in "$REPO"/hub/tests/*.py; do put "$f" "$HUB_DIR/tests/$(basename "$f")" 644 owned; done
-# Runbooks you wrote yourself are left alone; shipped ones are refreshed.
-for f in "$REPO"/runbooks/*.md; do put_text "$f" "$HUB_DIR/runbooks/$(basename "$f")" owned; done
+# Runbooks you wrote yourself are left alone; shipped ones are refreshed, with a backup
+# if you edited them.
+for f in "$REPO"/runbooks/*.md; do put_text "$f" "$HUB_DIR/runbooks/$(basename "$f")"; done
 
 if [ ! -f "$HUB_DIR/board.json" ]; then
     if [ "$DRY" = 1 ]; then say "  would: seed $HUB_DIR/board.json"
@@ -120,7 +135,14 @@ if [ "$DO_BIN" = 1 ]; then
     run mkdir -p "$BIN_DIR"
     # Symlinks to the installed copy: board.py resolves its data directory from its own real
     # path, so a link into the git checkout would put your board inside the repo.
-    for pair in "hub:board.py" "hubmsg:hubmsg" "hubwaked:hubwaked"; do
+    # Agent launchers and hubs/hubaccounts/hubkill are also linked to hubctl, so they work
+    # from any shell (macOS logs in to zsh; shell.sh is bash). Re-run the installer after
+    # changing the roster to link new names.
+    pairs="hub:board.py hubmsg:hubmsg hubwaked:hubwaked hubctl:hubctl"
+    for name in ${HUB_CLAUDE_AGENTS-Zeus Apollo Hermes Athena} ${HUB_CODEX_AGENTS-Prometheus} hubs hubaccounts hubkill; do
+        pairs="$pairs $(echo "$name" | tr '[:upper:]' '[:lower:]'):hubctl"
+    done
+    for pair in $pairs; do
         name="${pair%%:*}" target="$HUB_DIR/${pair#*:}"
         if [ "$(readlink "$BIN_DIR/$name" 2>/dev/null)" != "$target" ]; then
             [ -e "$BIN_DIR/$name" ] && [ ! -L "$BIN_DIR/$name" ] && backup "$BIN_DIR/$name"
@@ -211,7 +233,9 @@ if [ "$DO_SHELL" = 1 ]; then
     fi
     case "${SHELL##*/}" in
         bash) ;;
-        *) say "  NOTE: your login shell is ${SHELL##*/}; shell.sh is bash. Run agents from bash." ;;
+        *) say "  NOTE: your login shell is ${SHELL##*/}. The agent commands (zeus, hubs, ...) are"
+           say "        installed as executables in $BIN_DIR, so they work there too; make sure"
+           say "        $BIN_DIR is on PATH in that shell's rc file (e.g. ~/.zshrc)." ;;
     esac
 fi
 
