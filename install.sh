@@ -109,6 +109,7 @@ step "hub -> $HUB_DIR"
 [ -n "$HUB_DIR_FROM_ENV" ] && say "  (HUB_DIR taken from your environment; unset it or pass --hub-dir to choose another)"
 run mkdir -p "$HUB_DIR/tests" "$HUB_DIR/runbooks"
 for f in board.py hubmsg hubwaked hubctl; do put "$REPO/hub/$f" "$HUB_DIR/$f" 755 owned; done
+put "$REPO/hub/gh_sync.py" "$HUB_DIR/gh_sync.py" 644 owned   # imported by board.py: missing = hub crashes
 put "$REPO/hub/shell.sh" "$HUB_DIR/shell.sh" 644 owned
 put "$REPO/hub/.gitignore" "$HUB_DIR/.gitignore" 644 owned
 # Docs and the Codex protocol are yours to edit (docs/customizing.md tells you to rename

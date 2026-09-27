@@ -48,9 +48,10 @@ acceptance criterion in a skill.
 | Path | What it is |
 |---|---|
 | [`install.sh`](install.sh) | Idempotent installer. Backs up anything it replaces and never touches board data. Re-run it after `git pull` to upgrade. |
-| [`hub/`](hub/) | The multi-agent hub: `board.py` (the `hub` CLI), `hubmsg`, `hubwaked`, `shell.sh`, and two test suites. [`HUB.md`](hub/HUB.md) is the operating manual. |
+| [`hub/`](hub/) | The multi-agent hub: `board.py` (the `hub` CLI), `gh_sync.py` (`hub gh-sync`), `hubmsg`, `hubwaked`, `shell.sh`, and three test suites. [`HUB.md`](hub/HUB.md) is the operating manual. |
 | [`claude/CLAUDE.md`](claude/CLAUDE.md) | Global instructions for every session: the hub protocol, how I like to work, and engineering defaults (uv, testing, deploys). |
 | [`claude/settings.json`](claude/settings.json) | Settings template with agent teams on and an auto-mode skeleton. |
+| [`claude/skills/hackathon/`](claude/skills/hackathon/) | The lead agent's script for a team hackathon: deadlines first, plan, assign, publish to GitHub Issues, review and merge. See the [hackathon kit](docs/hackathon-kit.md). |
 | [`claude/skills/design-system/`](claude/skills/design-system/) | A skill for authoring and enforcing a binding design system, then verifying it in a real browser. Includes a WCAG contrast and Display-P3 colour tool. |
 | [`examples/refinery-design/`](examples/refinery-design/) | A real, filled-in design skill from a shipping product: the worked example. |
 | [`runbooks/`](runbooks/) | Problems that already cost real time, each with the symptom, how to confirm it, and the fix. |
@@ -73,6 +74,9 @@ acceptance criterion in a skill.
 6. [**Hub architecture**](hub/ARCHITECTURE.md) and [**design review**](hub/OVERVIEW.md):
    how the hub works, what's verified and what's only assumed, and the decisions worth
    arguing about.
+7. [**Hackathon kit**](docs/hackathon-kit.md): run a human team the way the hub runs
+   agents. The lead plans, every task becomes a GitHub Issue, and every teammate's AI agent
+   follows one rulebook. Rehearsed on real GitHub with a second account.
 
 ---
 
@@ -94,9 +98,10 @@ acceptance criterion in a skill.
 cd hub
 python3 tests/test_board.py       # the board: state machine, locking, crash recovery
 python3 tests/test_messaging.py   # the transport: wakes, relay, dedup, dialog guards
+python3 tests/test_gh_sync.py     # hub gh-sync against a stub gh: guards, sync, crash safety
 ```
 
-Both suites are dependency-free and run against throwaway boards and scratch tmux sessions.
+All three suites are dependency-free and run against throwaway boards and scratch tmux sessions.
 They never type into a real agent's pane.
 
 ## Status and honesty

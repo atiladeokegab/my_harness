@@ -21,6 +21,7 @@ HUB_LEAD="${HUB_LEAD:-Zeus}"
 # setup) is honoured; only an unset variable falls back to the default.
 HUB_CLAUDE_AGENTS="${HUB_CLAUDE_AGENTS-Zeus Apollo Hermes Athena}"
 HUB_CODEX_AGENTS="${HUB_CODEX_AGENTS-Prometheus}"
+export HUB_LEAD HUB_CLAUDE_AGENTS HUB_CODEX_AGENTS  # `hub gh-sync` reads the roster
 HUB_RELAY_SESSION="${HUB_RELAY_SESSION:-hub-relay}"
 
 # `timeout` is GNU coreutils. macOS has none by default; Homebrew's coreutils installs it

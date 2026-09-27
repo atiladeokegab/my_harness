@@ -897,6 +897,9 @@ def main():
     recv.add_argument("id")
     recv.set_defaults(fn=cmd_receive)
 
+    import gh_sync
+    gh_sync.register(sub)
+
     ev = sub.add_parser("events", help="read the append-only ledger")
     ev.add_argument("--tail", type=int, default=30)
     ev.add_argument("--task", help="filter to one task")
