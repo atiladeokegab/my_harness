@@ -104,10 +104,13 @@ Rehearsed on real GitHub, including with a second account as a teammate:
 - A fine-grained personal access token can't accept the invite or push, so teammates log
   in with `gh auth login`.
 
-Tests: `python3 hub/tests/test_gh_sync.py` (54 cases against a stub `gh`).
+Tests: `python3 hub/tests/test_gh_sync.py` (58 cases against a stub `gh`).
 
-**Not yet rehearsed on real GitHub:** the `integration` flow (smoke, promote, revert) and
-questions. They are covered by tests and scripted checks only.
+**Not yet rehearsed on real GitHub:** the `integration` flow and questions. What is checked:
+gh-sync's side (the `integration` branch, protection, the `question` label, `Depends on`
+links, recovery from a lost issue create) has tests against the stub `gh`; the smoke,
+promote-the-tested-commit and revert commands were run against scratch Git repos. The agents'
+and people's side of the flow has not been run end to end.
 
 **Not yet run on:** macOS, or a full Windows session. The commands are checked in Windows
 PowerShell 5.1.

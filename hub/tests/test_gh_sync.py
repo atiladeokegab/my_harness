@@ -87,7 +87,7 @@ CFG = {
     "timezone": "Europe/London",
     "deadlines": [{"name": "code freeze", "at": "2026-10-04T14:00:00+01:00"},
                   {"name": "submit", "at": "2026-10-04T15:00:00+01:00"}],
-    "roster": [{"name": "Atilade", "github": "lead-gh", "lead": True},
+    "roster": [{"name": "Alex", "github": "lead-gh", "lead": True},
                {"name": "Sam", "github": "sam-gh"}],
 }
 
@@ -300,7 +300,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         [create] = self.calls(["issue", "create"])
         self.assertIn("--body-file", create)
         bodies = (self.stub / "bodies.jsonl").read_text().splitlines()
-        self.assertEqual(json.loads(bodies[0]), body)
+        self.assertEqual(json.loads(bodies[0]), body.rstrip() + "\n\n<!-- hub-task: T-001 -->")
 
     def test_init_creates_everything(self):
         self.env["GH_REPO_MISSING"] = "1"
@@ -439,7 +439,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertNotIn("--assignee", create)
 
     def test_owner_name_matches_the_hub_spelling(self):
-        self.write_cfg(roster=[{"name": "Atilade", "github": "lead-gh", "lead": True},
+        self.write_cfg(roster=[{"name": "Alex", "github": "lead-gh", "lead": True},
                                {"name": "DeShawn", "github": "ds-gh"}])
         self.env["GH_COLLABORATORS"] = "lead-gh,ds-gh"
         self.add_task("T-001", owner="Deshawn")         # the hub's canon() of DeShawn
@@ -490,6 +490,57 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertEqual(self.sync().returncode, 0)
         creates = [c for c in self.calls(["issue", "create"]) if "title T-001" in c]
         self.assertEqual(len(creates), 1)                # no duplicate for T-001
+
+    def test_create_accepted_but_unrecorded_is_not_duplicated(self):
+        # GitHub creates #1, then gh-sync dies before recording it (lost response, crash).
+        self.add_task("T-001")
+        self.env["GH_KILL_ON_CREATE"] = "1"
+        self.sync()
+        self.assertNotIn("issue", self.tasks()["T-001"])
+        body = json.loads((self.stub / "bodies.jsonl").read_text().splitlines()[0])
+        (self.stub / "issues.json").write_text(json.dumps([
+            {"number": 1, "title": "title T-001", "state": "OPEN", "stateReason": None,
+             "assignees": [], "labels": [{"name": "task"}], "url": "u"}]))
+        (self.stub / "body-1.txt").write_text(body)
+        del self.env["GH_KILL_ON_CREATE"]
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.calls(["issue", "create"])), 1)     # the lost one only
+        self.assertEqual(self.tasks()["T-001"]["issue"], 1)
+
+    def test_body_edit_folded_into_the_hub_clears_the_conflict(self):
+        self.add_task("T-001")
+        self.sync()
+        (self.stub / "body-1.txt").write_text("Context: agreed\nDeadline: submit")
+        data = json.loads((self.hub / "board.json").read_text())
+        data["tasks"][0]["detail"] = "Context: agreed\nDeadline: submit"   # lead folds the edit in
+        (self.hub / "board.json").write_text(json.dumps(data))
+        r = self.sync()
+        self.assertNotIn("not overwriting", r.stdout)
+        r = self.sync()                                                   # and it stays settled
+        self.assertNotIn("not overwriting", r.stdout)
+        self.assertEqual(self.calls(["issue", "edit"]), [])               # GitHub already has it
+
+    def test_dependencies_reach_the_issue(self):
+        self.add_task("T-001")
+        self.add_task("T-002", deps=["T-001"])
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        bodies = [json.loads(b) for b in (self.stub / "bodies.jsonl").read_text().splitlines()]
+        self.assertIn("Depends on: #1", bodies[1])
+        self.assertNotIn("Depends on", bodies[0])
+
+    def test_dry_run_init_leaves_an_existing_clone_alone(self):
+        home = self.hub / "home"
+        clone = home / "code" / "hk"
+        clone.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(clone)], check=True)
+        self.env["HOME"] = str(home)
+        r = self.sync("--init", "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        email = subprocess.run(["git", "-C", str(clone), "config", "--local", "user.email"],
+                               capture_output=True, text=True).stdout.strip()
+        self.assertEqual(email, "")
 
     def test_second_sync_while_one_runs_exits(self):
         import fcntl

@@ -41,9 +41,15 @@ Then every event's `hackathon.json` names it as `"template"`.
   directory it was launched in (plus the hub), and it has **no GitHub access**. So:
   - Before giving it event tasks, relaunch it in the event repo:
     `hubkill prometheus`, then `prometheus <event>`.
+  - **Plan first, through Zeus.** It sends its plan to Zeus by hubmsg; Zeus posts it as the
+    issue's plan comment (`gh issue comment <N> -R <repo> --body-file <file>`) and replies
+    with the comment's URL. Only then does it write code.
   - It works on a local branch named `<N>-<slug>`, commits, and messages Zeus.
-  - Zeus pushes that branch and opens the PR for it (`gh pr create`, with the PR
-    template), then reviews it like any other.
+  - Zeus pushes that branch and opens the PR for it
+    (`gh pr create -R <repo> --head <branch> --base integration --body-file <file>`, from the
+    PR template), then reviews it like any other and relays review comments by hubmsg.
+  - **It never runs `hub done` on a task that has an issue.** The task closes when gh-sync
+    sees its issue close, so a smoke revert that reopens the issue reopens the task too.
 - **Teammates** build in their own areas, push to their branches after every commit, and
   never merge.
 
@@ -239,11 +245,16 @@ the owners table after the first sync.
 picked up pool work and what got closed. A brief edited on GitHub is never overwritten: Zeus
 folds the edit into the hub task, then syncs.
 
+**Every GitHub command names the repo** (`-R <owner>/<p>`) and a number: Zeus runs from
+`~/hub`, where a bare `gh pr list` finds no repo, and from any other checkout it would act on
+the wrong one. **One integration pass at a time:** finish one merge's smoke and its promote
+or revert before merging the next.
+
 **If Zeus is down, the lead is the backup.** All state lives on the board and on GitHub, so the
 lead relaunches `zeus` in the event repo and it picks up from `hub brief` and `gh pr list`. In
 the last 30 minutes before a deadline, the lead may merge a PR Zeus has already reviewed, or
-one with green checks that matches its issue, with `gh pr merge --admin --squash
---delete-branch`, rather than wait, then smoke and promote as the Live loop does: the demo
+one with green checks that matches its issue, with `gh pr merge <PR> -R <repo> --admin
+--squash --delete-branch --match-head-commit <reviewed sha>`, rather than wait, then smoke and promote as the Live loop does: the demo
 runs from `main`, so a merge that never reaches it is missing from the demo.
 
 - **Keep the board in step:** start
@@ -262,59 +273,68 @@ runs from `main`, so a merge that never reaches it is missing from the demo.
     if a sync had closed it). Or, if the issue is gone, `hub new` a replacement task,
     which gets a fresh issue, and drop the old one as above. Don't edit `board.json` by
     hand.
-- **An owner changes:** update `IDEA.md`'s "Areas and owners" table to match, as one of **Zeus's own
-  commits**, then
-  and push.
+- **An owner changes:** update `IDEA.md`'s "Areas and owners" table to match, as one of
+  **Zeus's own commits** (below).
 - **A task is added after publishing:** put it in `IDEA.md` ("What we build" and the owners
   table) and give it a box on the C4 diagram *before* syncing. Otherwise its owner's PR
   has no box to name under Impact.
-- **Branches and PRs:** Zeus alone merges. On each loop, check `gh pr list` and each
-  owner's branch for pushes. Read each PR with `gh pr diff <PR>` and
-  `gh pr view <PR> --json title,body,files,reviews,comments`. Plain `gh pr view` fails on
-  gh older than 2.77; the `--json` form works on 2.63 and newer. Review it against its
-  issue, `IDEA.md` and its owner's area. Then either:
-  - `gh pr review --approve` and `gh pr merge --squash --delete-branch`; or
-  - `gh pr review --request-changes` with exactly what to fix.
+- **Branches and PRs:** Zeus alone merges. On each loop, check `gh pr list -R <repo>` and
+  each owner's branch for pushes. Read each PR with `gh pr diff <PR> -R <repo>` and
+  `gh pr view <PR> -R <repo> --json title,body,files,reviews,comments,baseRefName,headRefOid`.
+  Plain `gh pr view` fails on gh older than 2.77; the `--json` form works on 2.63 and newer.
+  A PR based on `main` gets `gh pr edit <PR> -R <repo> --base integration` first. Review it
+  against its issue, `IDEA.md` and its owner's area (a pool issue: exactly its `Files:`).
+  Note the `headRefOid` you reviewed; merging with `--match-head-commit <it>` makes a push
+  after the review fail the merge instead of slipping in. Then either:
+  - `gh pr review <PR> -R <repo> --approve` and
+    `gh pr merge <PR> -R <repo> --squash --delete-branch --match-head-commit <sha>`; or
+  - `gh pr review <PR> -R <repo> --request-changes` with exactly what to fix.
 
   GitHub doesn't let an account approve, or request changes on, its own PR, and hub
   agents' PRs come from the lead's account. For those, ask for fixes with
-  `gh pr review --comment`, and merge with `gh pr merge --admin --squash --delete-branch`
-  after the same review.
-- **Merge order:** merge PRs in dependency order. After each merge, check the others:
-  `gh pr list --json number,mergeable`. On every `CONFLICTING` PR, comment: "integration
-  moved: run `git pull --no-rebase origin integration`, fix the conflicts in your area, push."
+  `gh pr review <PR> -R <repo> --comment`, and merge with `gh pr merge <PR> -R <repo>
+  --admin --squash --delete-branch --match-head-commit <sha>` after the same review.
+- **Merge order:** merge PRs in dependency order (issues say `Depends on: #N`). After each
+  merge, check the others: `gh pr list -R <repo> --json number,mergeable`. On every
+  `CONFLICTING` PR, comment: "integration moved: run `git pull --no-rebase origin
+  integration`, fix the conflicts in your area, push."
 - **After every merge into `integration`: smoke, then promote or revert.** Never in
   the event checkout itself: a Codex agent may be building there. Use a throwaway worktree:
   ```bash
-  P="${HUB_CODE_DIR:-$HOME/code}/<p>"; git -C "$P" fetch -q origin
-  d=$(mktemp -d) && git -C "$P" worktree add -q --detach "$d" origin/integration && {
-    cp "$P/.env" "$d"/ 2>/dev/null
-    (cd "$d" && timeout 300 sh -c '<Smoke command from HACKATHON.md>'); ok=$?
-  } || ok=setup
-  git -C "$P" worktree remove --force "$d"
+  P="${HUB_CODE_DIR:-$HOME/code}/<p>"
+  git -C "$P" fetch -q origin && d=$(mktemp -d) &&
+    git -C "$P" worktree add -q --detach "$d" origin/integration &&
+    sha=$(git -C "$d" rev-parse HEAD) && {
+      cp "$P/.env" "$d"/ 2>/dev/null
+      (cd "$d" && timeout 300 sh -c '<Smoke command from HACKATHON.md>'); ok=$?
+    } || ok=setup
+  git -C "$P" worktree remove --force "$d" 2>/dev/null
   ```
-  `ok=setup` means the checkout itself failed: fix that and rerun; nobody's merge is at fault.
-  **Green** (`ok` is 0): `git -C "$P" push origin origin/integration:main`.
-  **Red:** find the squash commit, `gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid`,
+  `ok=setup` means the fetch or checkout failed: fix that and rerun; nobody's merge is at fault.
+  **Green** (`ok` is 0): `git -C "$P" push origin "$sha:refs/heads/main"`. It promotes exactly
+  the commit the smoke tested, and fails if `main` moved some other way.
+  **Red:** find the squash commit, `gh pr view <PR> -R <repo> --json mergeCommit --jq .mergeCommit.oid`,
   and revert it in a fresh worktree:
   ```bash
   d=$(mktemp -d) && git -C "$P" worktree add -q --detach "$d" origin/integration &&
     git -C "$d" revert --no-edit <sha> && git -C "$d" push origin HEAD:integration
   git -C "$P" worktree remove --force "$d"
   ```
-  Then `gh issue reopen <N> --comment "Reverted: the smoke failed after #<PR> merged.
+  Then `gh issue reopen <N> -R <repo> --comment "Reverted: the smoke failed after #<PR> merged.
   <failing output>. Fix it on the same branch and open a new PR."` Reopening puts the issue
   back in the owner's open list and reopens its hub task. `main` never moved.
 - **Zeus's own commits on the event repo** (the IDEA.md table, docs) follow the revert's
   pattern: a throwaway worktree on `origin/integration`, commit, `git -C "$d" push origin
   HEAD:integration`, then smoke and promote. Never commit in the event checkout once a Codex agent
   works there.
-- **At code freeze:** `P="${HUB_CODE_DIR:-$HOME/code}/<p>"; git -C "$P" fetch -q origin && git -C "$P" tag freeze origin/main && git -C "$P" push origin freeze`. After it, only
+- **At code freeze**, once (a rerun keeps the first tag):
+  `P="${HUB_CODE_DIR:-$HOME/code}/<p>"; git -C "$P" fetch -q origin && { git -C "$P" ls-remote --exit-code --tags origin freeze >/dev/null || { git -C "$P" tag freeze origin/main && git -C "$P" push origin freeze; }; }`.
+  After it, only
   fixes merge, and each moves `main` only on a green smoke. The demo and final runs use `main`.
 - **A repo made from an older copy of the template** (before areas and `integration`) still
   says `main` in its own AGENTS.md, and may have no Questions section. Before rerunning `--init` on it, bring in the new AGENTS.md, README.md,
   HACKATHON.md `Smoke:` line and IDEA.md table, and retarget open PRs with
-  `gh pr edit <n> --base integration`. A moved deadline alone doesn't need `--init`:
+  `gh pr edit <n> -R <repo> --base integration`. A moved deadline alone doesn't need `--init`:
   `gh api -X PATCH repos/<repo>/milestones/<number> -f due_on=<UTC time>`.
 - **Issues a teammate opened in their own area** (AGENTS §6) aren't on the hub board, so
   gh-sync never announces them. Expect PRs that close them: review against the area and
@@ -330,11 +350,15 @@ runs from `main`, so a merge that never reaches it is missing from the demo.
 - **gh-sync warns that someone hasn't accepted the invite:** nudge them. Their issues are
   already there, unassigned.
 - **Questions**, each pass:
-  `gh issue list -R <repo> --label question --state open --json number,title,assignees,createdAt,comments`.
-  - **Assigned to the lead** (the core, or a hub agent's area): show it to the lead at
+  `gh issue list -R <repo> --label question --state open --json number,title,body,assignees,createdAt,comments`.
+  A question's owner is its assignee or, if it has none, the handle @mentioned in its body.
+  An unassigned one whose owner has since accepted the invite gets
+  `gh issue edit <N> -R <repo> --add-assignee <handle>`. Skip any that already carry the
+  owner's answer: it's waiting for the asker, not the owner.
+  - **For the lead** (the core, or a hub agent's area): show it to the lead at
     this pass with a draft answer. The lead decides; Zeus posts it with
     `gh issue comment <N> -R <repo> --body-file <file>` and leaves the issue open for the asker.
-  - **Assigned to anyone else**, open over 20 minutes with no answer comment: comment
+  - **For anyone else**, open over 20 minutes with no answer comment: comment
     `@<owner> this is waiting on you`, unless it already carries that comment (read it from
     `comments`, not from memory: a restarted Zeus must not nag twice). Still unanswered 20
     minutes after that comment, tell the lead.

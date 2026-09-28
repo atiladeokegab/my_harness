@@ -74,10 +74,26 @@ def config_path(project):
     return os.path.join(hb.HUB_DIR, "projects", project, "hackathon.json")
 
 
+MARKER = "<!-- hub-task: {} -->"
+
+
 def digest(text):
-    # GitHub can hand a body back with \r\n or trimmed trailing whitespace.
-    norm = "\n".join(line.rstrip() for line in (text or "").replace("\r\n", "\n").strip().split("\n"))
+    # GitHub can hand a body back with \r\n or trimmed trailing whitespace. The task marker
+    # is bookkeeping, not brief: a teammate deleting it is not an edit to fold in.
+    lines = (text or "").replace("\r\n", "\n").strip().split("\n")
+    norm = "\n".join(l.rstrip() for l in lines if not l.startswith("<!-- hub-task: ")).strip()
     return hashlib.sha256(norm.encode()).hexdigest()
+
+
+def issue_body(t, by_id):
+    """The brief, its prerequisites as issue links, and a marker that finds the issue again
+    if GitHub created it but the reply was lost."""
+    body = (t.get("detail") or "").rstrip()
+    deps = [f"#{by_id[d]['issue']}" if "issue" in by_id.get(d, {}) else f"{d} (not published yet)"
+            for d in t.get("deps") or []]
+    if deps:
+        body += "\n\nDepends on: " + ", ".join(deps)
+    return body + "\n\n" + MARKER.format(t["id"])
 
 
 def is_pool(owner):
@@ -251,22 +267,36 @@ def push(tasks, cfg, gh, repo, failures, assignable, issues):
                   "their issues stay unassigned until a sync after they accept.")
         return False
 
+    by_id = {t["id"]: t for t in tasks}
     for t in tasks:
         if t["status"] == "done":  # finished work is neither created nor re-briefed
             continue
         try:
-            body = t.get("detail") or ""
+            body = issue_body(t, by_id)
             who, labels = target(t.get("owner"), cfg)
-            milestone = deadline(body)
+            milestone = deadline(t.get("detail"))
             if milestone not in deadlines:
                 raise GhError(f"Deadline: {milestone!r} is not a deadline in hackathon.json "
                               f"(choose from {', '.join(deadlines)})")
+            if "issue" not in t and t.get("issue_pending"):
+                # A create was sent and its reply never recorded: find it before sending another.
+                for i in issues.values():
+                    if i["title"] == t["title"] and MARKER.format(t["id"]) in \
+                            gh.json("issue", "view", i["number"], "-R", repo, "--json", "body")["body"]:
+                        record(t["id"], {"issue": i["number"], "issue_hash": digest(body), "issue_assignee": None,
+                                         "issue_title": t["title"], "issue_milestone": milestone,
+                                         "issue_pending": False}, "gh-found")
+                        t["issue"] = i["number"]
+                        break
+                if "issue" in t:
+                    continue
             if "issue" not in t:
                 assignee = who if can_assign(who, t) else None
                 args = ["issue", "create", "-R", repo, "--title", t["title"],
                         "--label", ",".join(labels), "--milestone", milestone]
                 if assignee:
                     args += ["--assignee", assignee]
+                record(t["id"], {"issue_pending": True}, "gh-creating")
                 url = gh(*args, body=body).strip()
                 if url:  # empty under --dry-run
                     try:
@@ -274,13 +304,19 @@ def push(tasks, cfg, gh, repo, failures, assignable, issues):
                     except (IndexError, ValueError):
                         raise GhError(f"unexpected output from gh issue create: {url!r}") from None
                     record(t["id"], {"issue": number, "issue_hash": digest(body), "issue_assignee": assignee,
-                                     "issue_title": t["title"], "issue_milestone": milestone}, "gh-created")
+                                     "issue_title": t["title"], "issue_milestone": milestone,
+                                     "issue_pending": False}, "gh-created")
+                    t["issue"] = number  # later tasks' "Depends on" lines link to it
                 continue
             n = t["issue"]
             held = False  # the new brief is held back, so its title and deadline are too
             if digest(body) != t["issue_hash"]:
                 remote = gh.json("issue", "view", n, "-R", repo, "--json", "body")["body"]
-                if digest(remote) != t["issue_hash"]:
+                if digest(remote) == digest(body):
+                    # The lead folded the GitHub edit into the brief: they agree, so adopt it.
+                    record(t["id"], {"issue_hash": digest(body), "notice_pending": True}, "gh-adopted")
+                    t["notice_pending"] = True
+                elif digest(remote) != t["issue_hash"]:
                     held = True
                     print(f"warning: #{n} ({t['id']}) was edited on GitHub; not overwriting. "
                           "Fold the edit into the hub task, then rerun.")
@@ -370,7 +406,7 @@ def init(cfg, gh, repo, failures, exists):
                            ("user.name", me["login"])):
             subprocess.run(["git", "-C", dest, "config", key, value], check=False, timeout=30)
     elif not os.path.isdir(dest):
-        print(f"warning: {dest} not cloned; run `hub init-repo` on your clone")
+        print(f"warning: {dest} not cloned; clone it there (gh repo clone {repo} {dest}) and rerun --init")
     steps = []
     for p in cfg["roster"]:
         if not p.get("lead"):
