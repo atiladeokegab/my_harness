@@ -10,9 +10,10 @@ description: >
 
 # Running a hackathon from this PC
 
-The lead plans here; teammates never touch the hub. Each event repo is made from your
+The whole team plans together at the lead's laptop (§1–§6); teammates never touch the hub
+themselves. Each event repo is made from your
 copy of the `hackathon_teamwork` template, whose `AGENTS.md` makes every agent plan before
-coding, branch per issue, stay in its files and raise change-requests. This skill gets
+coding, branch per issue, stay in its area and raise change-requests. This skill gets
 the plan onto GitHub as Issues. `hub gh-sync` is the bridge.
 
 ## One-time setup: your template repo
@@ -43,8 +44,41 @@ Then every event's `hackathon.json` names it as `"template"`.
   - It works on a local branch named `<N>-<slug>`, commits, and messages Zeus.
   - Zeus pushes that branch and opens the PR for it (`gh pr create`, with the PR
     template), then reviews it like any other.
-- **Teammates** build their own sections, push to their branches after every commit, and
+- **Teammates** build in their own areas, push to their branches after every commit, and
   never merge.
+
+## The planning session: the team at the lead's laptop
+
+Everything from §0 to §6 happens with the whole team in the room, in front of the lead's
+screen. Zeus asks one question at a time, as always, and **the room answers**:
+
+- Each teammate answers the roster questions about themselves.
+- **Pitch round, before Zeus proposes anything.** Once the track and deadlines are settled,
+  first ask one question: is everyone round the lead's laptop, or should Zeus collect ideas
+  from each person separately? Recommend "round one laptop"; that is the usual case.
+  - **Round one laptop:** one open question to the room: "Every idea on the table, one per
+    line, with whose it is." No suggestions to choose from. The room talks; the lead types.
+  - **Separately:** one question per person, "What would you build, in one line?",
+    showing only that person's strengths.
+
+  Then Zeus adds at most one pitch of its own, labelled as Zeus's. The room shortlists, and
+  the brainstorm and design continue together from the chosen pitch. Only after that are
+  builds and tasks handed out by strengths (§4). Without this round every option comes from
+  Zeus and the room only picks between them. The spec names whose pitch it grew from.
+- In the brainstorm and the grill, a teammate's own idea is an answer: it comes in as
+  "Other", and Zeus weighs it like any option.
+- Every approval is the team's decision. The lead gives it, and records "team agreed"
+  (or the disagreement) with it.
+- In the assignment grill, people claim tasks aloud; the recommendation is still shown first.
+- Nobody leaves until §6 has published: every teammate has accepted the invite, logged in
+  with `gh auth login`, and seen their own issues assigned to them.
+
+**Timebox: the session ends by build start + 60 minutes**, publish included. Grill only the
+decisions that change scope, ownership or acceptance; every smaller assumption goes into an
+`Assumptions` section of the spec instead of a question. At build start + 45 minutes, say how
+much is left and cut to it.
+
+The plans, specs and reviews on the lead's screen still live only in the hub's `projects/` folder, never in the team repo.
 
 ## 0. Deadlines first
 
@@ -80,14 +114,29 @@ freeze, recommend submit minus 60 minutes.
 
 ## 2. Design, spec, plan
 
-Plan it the way you plan any multi-agent project: agree the design with the lead
+Plan it the way you plan any multi-agent project: agree the design with the room
 (brainstorm it, challenge every decision, draw it), write the spec and the plan, then put
-each task on the board with `hub new --project <project>`. Every task `--detail` carries
-these headings, one per line, because teammates' agents rely on them:
+each task on the board with `hub new --project <project>`.
+
+**The idea is fixed when the design is approved, not at the end.** Zeus then writes the
+hub's `projects/<project>/IDEA.md`: the problem, the idea, what we build, what we don't
+build, the demo in one line, and the "Areas and owners" table with the areas and their
+directories filled in and the Owner and Issues cells left as `—`. The lead approves IDEA.md
+together with the design drawings; the spec, plan and board build on it.
+
+The design names the **areas** (a set of directories each, split by strength) and the
+**core** (shared contracts; Zeus owns it), and one **smoke command**: the unit tests plus one
+end-to-end run on a few sample inputs, under 2 minutes. It runs in a clean checkout with only
+`.env` copied in, so it includes its own install step (`uv run …` installs; `npm ci && …`).
+Until the pipeline exists, the smoke is the tests alone. Every task's `Files:` is its area's
+directories.
+
+Every task `--detail` carries these headings, one per line, because teammates' agents rely
+on them:
 
 ```
 Context:
-Files:        <the only files this task may touch>
+Files:        <the area's directories: the owner may change anything inside them>
 Approach:
 Acceptance:
 Verify:
@@ -98,31 +147,31 @@ Write `Verify:` commands that run on any teammate's machine: `python3`, not `pyt
 
 ## 3. Submission track
 
-Always add three tasks with `Deadline: submit`:
+Always add three tasks:
 
-- the demo script
-- the recording
-- the submission form
+- the demo script, `Deadline: code freeze` for the first draft, then adjusted after the final
+  run, so the recording is a rehearsal and not a discovery
+- the recording, `Deadline: submit` (or the demo-video deadline if the event has one)
+- the submission form, `Deadline: submit`
 
 ## 4. Assignment grill
 
-For each task, recommend one owner:
-
-- a roster name
-- a hub agent on your roster, as the lead's hands
-- `pool`: unassigned; whoever finishes early takes it
-
-Base the recommendation on strengths, balanced load, and one owner per file. Ask with one
-AskUserQuestion per task, recommendation first. Then `hub assign <id> <name>` (or
-`hub assign <id> pool`), then the lead's approval of the whole board.
+Assign **areas first**: one question per area, recommendation first, based on strengths
+and balanced load; a teammate claiming an area overrides. An area's owner is a roster name,
+or a hub agent on your roster as the lead's hands. Every task in an area inherits its owner.
+Ask per task only for the core (always Zeus) and for work outside any area, which may go to
+`pool`: unassigned, whoever finishes early takes it (submission, docs, diagrams). Then
+`hub assign <id> <name>` (or `hub assign <id> pool`), then the lead's approval of the whole
+board.
 
 ## 5. IDEA.md: the gate
 
-Before anything reaches GitHub, Zeus writes `IDEA.md` from the approved spec: the problem,
-the idea, what we build, what we don't build, the demo in one line, and the **sections and
-owners** table from the assignment grill. The lead approves it.
-**No issue is synced until `IDEA.md` is approved.** Issue numbers go into the owners table
-after the first sync.
+IDEA.md was approved with the design (§2). After the board is approved, fill in its **Areas
+and owners** table from the assignment: owners and hub task IDs. That is bookkeeping, not a
+new approval. Re-open IDEA.md for approval only if the spec, plan or board changed what we
+build or don't build since then; say which lines changed.
+**No issue is synced until `IDEA.md` is approved.** Issue numbers replace the task IDs in
+the owners table after the first sync.
 
 ## 6. Publish
 
@@ -135,19 +184,38 @@ after the first sync.
    the roster, and sets up labels, milestones and branch protection.
 3. `--init` only provisions. No issue exists until step 6. In the new clone, fill in
    every placeholder:
-   - `IDEA.md`: the approved text
+   - `IDEA.md`: the approved text, with the "Areas and owners" table
    - `HACKATHON.md`: from `hackathon.json`, both the event-time and the **UTC** column
-     (agents check the clock against UTC)
+     (agents check the clock against UTC), and the `Smoke:` command from the design
    - `README.md`: the title, the intro, the real `gh repo clone <you>/<p>` line,
      and the C4 PNGs in Architecture
 4. Check that nothing is left:
-   `grep -n "<[A-Za-z]\|<!--" README.md IDEA.md HACKATHON.md` must print nothing. A
-   teammate who follows a placeholder literally gets a shell error, and an empty
-   Architecture section leaves their agent with no boxes to name.
-5. Commit and push, after confirming with the lead: pushing is outward-facing.
+   `grep -n "<[A-Za-z]\|<!--" README.md IDEA.md HACKATHON.md` must print nothing, and
+   every C4 image README links must exist in the clone:
+   ```bash
+   imgs=$(grep -o 'docs/architecture/c4_[a-z]*\.png' README.md | sort -u)
+   [ -n "$imgs" ] && for f in $imgs; do [ -s "$f" ] || echo "missing $f"; done
+   ```
+   must print nothing and exit 0 (no link at all exits 1). A teammate who follows a
+   placeholder literally gets a shell error, and an empty Architecture section leaves
+   their agent with no boxes to name. Until the Architecture task redraws them from real
+   code, copy the approved planning PNGs from the hub's `projects/<p>/` to
+   `docs/architecture/`.
+5. Commit on `integration` and push, after confirming with the lead: pushing is
+   outward-facing. `--init` cloned before `integration` existed, and Zeus runs from `~/hub`,
+   so name the repo on every command:
+   ```bash
+   P="${HUB_CODE_DIR:-$HOME/code}/<p>"
+   git -C "$P" fetch origin && git -C "$P" checkout integration
+   git -C "$P" add IDEA.md HACKATHON.md README.md docs/architecture
+   git -C "$P" commit -m "docs: fill in the event"
+   git -C "$P" push origin integration && git -C "$P" push origin integration:main
+   ```
+   Do this before a Codex agent is relaunched in that checkout.
 6. Run `hub gh-sync --project <p>`. Every task becomes an issue.
-7. Put the real issue numbers into `IDEA.md`'s sections-and-owners table. Check each
-   number against `gh issue list` (the title must match the section), then commit and push.
+7. Put the real issue numbers into `IDEA.md`'s "Areas and owners" table. Check each
+   number against `gh issue list` (the title must fit the area), then commit it as
+   **Zeus's own commits** in §7 describes.
 8. Give the lead the repo URL to share with the team, and list who hasn't accepted the
    invite yet:
    `gh api repos/<repo>/invitations --jq '.[].invitee.login'`.
@@ -167,6 +235,17 @@ after the first sync.
   Only fixes, demo and submission work.
 - **After submit:** stop the loop. Nothing more is merged or synced.
 
+**Source of truth:** the hub owns each brief (title, body, owner, milestone); GitHub owns who
+picked up pool work and what got closed. A brief edited on GitHub is never overwritten: Zeus
+folds the edit into the hub task, then syncs.
+
+**If Zeus is down, the lead is the backup.** All state lives on the board and on GitHub, so the
+lead relaunches `zeus` in the event repo and it picks up from `hub brief` and `gh pr list`. In
+the last 30 minutes before a deadline, the lead may merge a PR Zeus has already reviewed, or
+one with green checks that matches its issue, with `gh pr merge --admin --squash
+--delete-branch`, rather than wait, then smoke and promote as the Live loop does: the demo
+runs from `main`, so a merge that never reaches it is missing from the demo.
+
 - **Keep the board in step:** start
   `/loop 10m run hub gh-sync --project <p>, then do the hackathon skill's Live review pass`.
   A sync is safe to repeat, and an overlapping one refuses to start. Fix any `error:` line
@@ -183,7 +262,8 @@ after the first sync.
     if a sync had closed it). Or, if the issue is gone, `hub new` a replacement task,
     which gets a fresh issue, and drop the old one as above. Don't edit `board.json` by
     hand.
-- **An owner changes:** update `IDEA.md`'s sections-and-owners table to match, then commit
+- **An owner changes:** update `IDEA.md`'s "Areas and owners" table to match, as one of **Zeus's own
+  commits**, then
   and push.
 - **A task is added after publishing:** put it in `IDEA.md` ("What we build" and the owners
   table) and give it a box on the C4 diagram *before* syncing. Otherwise its owner's PR
@@ -192,7 +272,7 @@ after the first sync.
   owner's branch for pushes. Read each PR with `gh pr diff <PR>` and
   `gh pr view <PR> --json title,body,files,reviews,comments`. Plain `gh pr view` fails on
   gh older than 2.77; the `--json` form works on 2.63 and newer. Review it against its
-  issue, `IDEA.md` and the task's `Files:`. Then either:
+  issue, `IDEA.md` and its owner's area. Then either:
   - `gh pr review --approve` and `gh pr merge --squash --delete-branch`; or
   - `gh pr review --request-changes` with exactly what to fix.
 
@@ -201,8 +281,47 @@ after the first sync.
   `gh pr review --comment`, and merge with `gh pr merge --admin --squash --delete-branch`
   after the same review.
 - **Merge order:** merge PRs in dependency order. After each merge, check the others:
-  `gh pr list --json number,mergeable`. On every `CONFLICTING` PR, comment: "main moved:
-  run `git pull --no-rebase origin main`, fix the conflicts in your files, push."
+  `gh pr list --json number,mergeable`. On every `CONFLICTING` PR, comment: "integration
+  moved: run `git pull --no-rebase origin integration`, fix the conflicts in your area, push."
+- **After every merge into `integration`: smoke, then promote or revert.** Never in
+  the event checkout itself: a Codex agent may be building there. Use a throwaway worktree:
+  ```bash
+  P="${HUB_CODE_DIR:-$HOME/code}/<p>"; git -C "$P" fetch -q origin
+  d=$(mktemp -d) && git -C "$P" worktree add -q --detach "$d" origin/integration && {
+    cp "$P/.env" "$d"/ 2>/dev/null
+    (cd "$d" && timeout 300 sh -c '<Smoke command from HACKATHON.md>'); ok=$?
+  } || ok=setup
+  git -C "$P" worktree remove --force "$d"
+  ```
+  `ok=setup` means the checkout itself failed: fix that and rerun; nobody's merge is at fault.
+  **Green** (`ok` is 0): `git -C "$P" push origin origin/integration:main`.
+  **Red:** find the squash commit, `gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid`,
+  and revert it in a fresh worktree:
+  ```bash
+  d=$(mktemp -d) && git -C "$P" worktree add -q --detach "$d" origin/integration &&
+    git -C "$d" revert --no-edit <sha> && git -C "$d" push origin HEAD:integration
+  git -C "$P" worktree remove --force "$d"
+  ```
+  Then `gh issue reopen <N> --comment "Reverted: the smoke failed after #<PR> merged.
+  <failing output>. Fix it on the same branch and open a new PR."` Reopening puts the issue
+  back in the owner's open list and reopens its hub task. `main` never moved.
+- **Zeus's own commits on the event repo** (the IDEA.md table, docs) follow the revert's
+  pattern: a throwaway worktree on `origin/integration`, commit, `git -C "$d" push origin
+  HEAD:integration`, then smoke and promote. Never commit in the event checkout once a Codex agent
+  works there.
+- **At code freeze:** `P="${HUB_CODE_DIR:-$HOME/code}/<p>"; git -C "$P" fetch -q origin && git -C "$P" tag freeze origin/main && git -C "$P" push origin freeze`. After it, only
+  fixes merge, and each moves `main` only on a green smoke. The demo and final runs use `main`.
+- **A repo made from an older copy of the template** (before areas and `integration`) still
+  says `main` in its own AGENTS.md, and may have no Questions section. Before rerunning `--init` on it, bring in the new AGENTS.md, README.md,
+  HACKATHON.md `Smoke:` line and IDEA.md table, and retarget open PRs with
+  `gh pr edit <n> --base integration`. A moved deadline alone doesn't need `--init`:
+  `gh api -X PATCH repos/<repo>/milestones/<number> -f due_on=<UTC time>`.
+- **Issues a teammate opened in their own area** (AGENTS §6) aren't on the hub board, so
+  gh-sync never announces them. Expect PRs that close them: review against the area and
+  `IDEA.md` like any other, and add the issue to IDEA.md's "Areas and owners" row as one of
+  Zeus's own commits.
+- **A PR whose diff leaves its owner's area** without an accepted change-request: request
+  changes, whatever else it does well.
 - **Re-review on push:** any push to an approved PR cancels the approval (stale-review
   dismissal). Review it again before merging.
 - **A secret in a PR or a push** (API key, token, `.env`): don't merge it. Tell the lead at
@@ -210,6 +329,18 @@ after the first sync.
   deleting the commit doesn't un-leak it. Then have the owner remove it from the branch.
 - **gh-sync warns that someone hasn't accepted the invite:** nudge them. Their issues are
   already there, unassigned.
+- **Questions**, each pass:
+  `gh issue list -R <repo> --label question --state open --json number,title,assignees,createdAt,comments`.
+  - **Assigned to the lead** (the core, or a hub agent's area): show it to the lead at
+    this pass with a draft answer. The lead decides; Zeus posts it with
+    `gh issue comment <N> -R <repo> --body-file <file>` and leaves the issue open for the asker.
+  - **Assigned to anyone else**, open over 20 minutes with no answer comment: comment
+    `@<owner> this is waiting on you`, unless it already carries that comment (read it from
+    `comments`, not from memory: a restarted Zeus must not nag twice). Still unanswered 20
+    minutes after that comment, tell the lead.
+  - **A Codex agent's questions** arrive by hubmsg: open them with
+    `--label question --label agent:<its name>`, and relay the answer back by hubmsg.
+  - Zeus never answers for another owner or reroutes a question.
 - **A branch with no pushes for an hour** while its issue is open: ask its owner in an
   issue comment what's blocking them.
 
@@ -218,5 +349,5 @@ after the first sync.
 - Fork the template. Use `gh repo create --template`, which `--init` does.
 - Put plans, specs or reviews in the team repo. They go to `~/hub/projects/<project>/`.
 - Edit `AGENTS.md` for one event. Event details go in `HACKATHON.md`.
-- Merge a PR that doesn't match its issue, `IDEA.md` or its `Files:` list, or that
+- Merge a PR that doesn't match its issue, `IDEA.md` or its owner's area, or that
   contains a secret.

@@ -323,6 +323,31 @@ def push(tasks, cfg, gh, repo, failures, assignable, issues):
             failures.append(t["id"])
 
 
+def ensure_integration(gh, repo, new, failures):
+    """PRs land on `integration` (the default branch); `main` only moves when the smoke is green.
+    Returns False when `integration` may not exist, so it isn't protected into a second error."""
+    create = ("api", "-X", "POST", f"repos/{repo}/git/refs", "-f", "ref=refs/heads/integration")
+    make_default = ("api", "-X", "PATCH", f"repos/{repo}", "-f", "default_branch=integration")
+    try:
+        if new and gh.dry:  # nothing on GitHub to read yet
+            gh(*create, "-f", "sha=<main>")
+            gh(*make_default)
+            return True
+        # matching-refs is a prefix match with no paging; /branches stops at 30, and mid-event
+        # issue branches (12-…) sort before "integration"
+        refs = gh.json("api", f"repos/{repo}/git/matching-refs/heads/integration") or []
+        if not any(r.get("ref") == "refs/heads/integration" for r in refs):
+            sha = gh.json("api", f"repos/{repo}/git/ref/heads/main")["object"]["sha"]
+            gh(*create, "-f", f"sha={sha}")
+        if (gh.json("api", f"repos/{repo}") or {}).get("default_branch") != "integration":
+            gh(*make_default)
+        return True
+    except (GhError, KeyError, TypeError) as e:
+        print(f"error: integration branch: {e}", file=sys.stderr)
+        failures.append("integration branch")
+        return False
+
+
 def init(cfg, gh, repo, failures, exists):
     """Once per hackathon. Every step checks first, so a rerun only fills gaps.
 
@@ -350,7 +375,7 @@ def init(cfg, gh, repo, failures, exists):
     for p in cfg["roster"]:
         if not p.get("lead"):
             steps.append(("api", "-X", "PUT", f"repos/{repo}/collaborators/{p['github']}"))
-    for label in ["task", "pool", "change-request", "submission", *(f"agent:{a.lower()}" for a in HUB_AGENTS)]:
+    for label in ["task", "pool", "change-request", "submission", "question", *(f"agent:{a.lower()}" for a in HUB_AGENTS)]:
         steps.append(("label", "create", label, "-R", repo, "--force"))
     have = {} if new and gh.dry else {m["title"]: m for m in gh.json("api", f"repos/{repo}/milestones?state=all")}
     for d in cfg["deadlines"]:
@@ -368,18 +393,20 @@ def init(cfg, gh, repo, failures, exists):
         except GhError as e:
             print(f"error: {e}", file=sys.stderr)
             failures.append(" ".join(s[:4]))
+    branches = ("main", "integration") if ensure_integration(gh, repo, new, failures) else ("main",)
     protection = {"required_status_checks": None, "enforce_admins": False, "restrictions": None,
                   "required_pull_request_reviews": {"required_approving_review_count": 1,
                                                     "require_code_owner_reviews": True,
                                                     # a push after approval voids it, so main
                                                     # only gets what the lead actually reviewed
                                                     "dismiss_stale_reviews": True}}
-    try:
-        gh("api", "-X", "PUT", f"repos/{repo}/branches/main/protection", "--input", "-",
-           stdin=json.dumps(protection))
-    except GhError as e:
-        print(f"error: branch protection: {e}", file=sys.stderr)
-        failures.append("branch protection")
+    for branch in branches:
+        try:
+            gh("api", "-X", "PUT", f"repos/{repo}/branches/{branch}/protection", "--input", "-",
+               stdin=json.dumps(protection))
+        except GhError as e:
+            print(f"error: branch protection ({branch}): {e}", file=sys.stderr)
+            failures.append(f"branch protection {branch}")
     return new
 
 

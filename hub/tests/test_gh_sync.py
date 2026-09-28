@@ -58,6 +58,17 @@ elif a[:1] == ["api"] and "collaborators" in a[-1] and "-X" not in a:
     print(json.dumps([{"login": p} for p in people if p]))
 elif a[:2] == ["api", "user"]:
     print(json.dumps({"id": 42, "login": "lead-gh"}))
+elif a[:1] == ["api"] and a[-1] == "repos/o/hk/branches" and "-X" not in a:
+    names = [n for n in os.environ.get("GH_BRANCHES", "main").split(",") if n]
+    print(json.dumps([{"name": n} for n in names[:30]]))      # GitHub's first page
+elif a[:1] == ["api"] and a[-1].startswith("repos/o/hk/git/matching-refs/heads/"):
+    prefix = a[-1].rsplit("/heads/", 1)[1]
+    names = [n for n in os.environ.get("GH_BRANCHES", "main").split(",") if n]
+    print(json.dumps([{"ref": f"refs/heads/{n}"} for n in names if n.startswith(prefix)]))
+elif a[:1] == ["api"] and a[-1] == "repos/o/hk/git/ref/heads/main":
+    print(json.dumps({"object": {"sha": "abc123"}}))
+elif a[:1] == ["api"] and a[-1] == "repos/o/hk" and "-X" not in a:
+    print(json.dumps({"default_branch": os.environ.get("GH_DEFAULT", "main")}))
 elif a[:2] == ["repo", "view"]:
     if os.environ.get("GH_REPO_MISSING") == "1":
         sys.stderr.write("GraphQL: Could not resolve to a Repository with the name 'o/hk'. (repository)")
@@ -301,7 +312,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertTrue(any(c[:3] == ["api", "-X", "PUT"] and c[3] == "repos/o/hk/collaborators/sam-gh" for c in calls))
         self.assertFalse(any("collaborators/lead-gh" in " ".join(c) for c in calls))
         labels = {c[2] for c in self.calls(["label", "create"])}
-        self.assertTrue({"task", "pool", "change-request", "submission", "agent:prometheus"} <= labels)
+        self.assertTrue({"task", "pool", "change-request", "submission", "question", "agent:prometheus"} <= labels)
         ms = [c for c in calls if c[:4] == ["api", "-X", "POST", "repos/o/hk/milestones"]]
         self.assertEqual(len(ms), 2)
         self.assertIn("due_on=2026-10-04T13:00:00Z", ms[0])      # 14:00 +01:00 in UTC
@@ -310,6 +321,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
 
     def test_init_is_idempotent(self):
         self.env["GH_REPO_MISSING"] = "0"                       # repo already exists
+        self.env.update(GH_BRANCHES="main,integration", GH_DEFAULT="integration")
         (self.stub / "milestones.json").write_text(json.dumps([
             {"number": 1, "title": "code freeze", "due_on": "2026-10-04T00:00:00Z"},
             {"number": 2, "title": "submit", "due_on": "2026-10-04T00:00:00Z"}]))
@@ -318,6 +330,72 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertEqual(self.calls(["repo", "create"]), [])
         self.assertFalse(any(c[:4] == ["api", "-X", "POST", "repos/o/hk/milestones"] for c in self.calls()))
         self.assertFalse(any(c[:3] == ["api", "-X", "PATCH"] for c in self.calls()))
+        self.assertIn("question", {c[2] for c in self.calls(["label", "create"])})   # rerun keeps labels
+
+    def test_init_creates_integration_and_makes_it_default(self):
+        self.env["GH_REPO_MISSING"] = "1"
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = self.calls()
+        self.assertIn(["api", "-X", "POST", "repos/o/hk/git/refs",
+                       "-f", "ref=refs/heads/integration", "-f", "sha=abc123"], calls)
+        self.assertIn(["api", "-X", "PATCH", "repos/o/hk", "-f", "default_branch=integration"], calls)
+        for branch in ("main", "integration"):
+            self.assertEqual(len([c for c in calls if f"repos/o/hk/branches/{branch}/protection" in c]), 1)
+
+    def test_init_rerun_leaves_integration_alone(self):
+        self.env.update(GH_BRANCHES="main,integration", GH_DEFAULT="integration")
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(any("repos/o/hk/git/refs" in c for c in self.calls()))
+        self.assertFalse(any(c[:4] == ["api", "-X", "PATCH", "repos/o/hk"] for c in self.calls()))
+
+    def test_init_fills_only_the_missing_default(self):
+        self.env.update(GH_BRANCHES="main,integration", GH_DEFAULT="main")
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(any("repos/o/hk/git/refs" in c for c in self.calls()))
+        self.assertIn(["api", "-X", "PATCH", "repos/o/hk", "-f", "default_branch=integration"], self.calls())
+
+    def test_init_rerun_finds_integration_past_the_first_page_of_branches(self):
+        issue_branches = [f"{n}-task" for n in range(10, 45)]   # sort before "integration"
+        self.env.update(GH_BRANCHES=",".join(["main", *issue_branches, "integration"]),
+                        GH_DEFAULT="integration")
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(any("repos/o/hk/git/refs" in c for c in self.calls()))
+
+    def test_init_does_not_mistake_a_prefix_branch_for_integration(self):
+        self.env.update(GH_BRANCHES="main,integration-old", GH_DEFAULT="integration-old")
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(["api", "-X", "POST", "repos/o/hk/git/refs",
+                       "-f", "ref=refs/heads/integration", "-f", "sha=abc123"], self.calls())
+
+    def test_dry_run_init_shows_integration_steps(self):
+        self.env.update(GH_REPO_404="1", GH_REPO_MISSING="1")
+        r = self.sync("--init", "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ref=refs/heads/integration", r.stdout)
+        self.assertIn("default_branch=integration", r.stdout)
+
+    def test_integration_error_is_one_line_and_protection_still_runs(self):
+        self.env["GH_FAIL_ARG"] = "repos/o/hk/git/refs"
+        r = self.sync("--init")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: integration branch:", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertTrue(any("repos/o/hk/branches/main/protection" in c for c in self.calls()))
+        self.assertEqual(r.stderr.count("error:"), 1, r.stderr)            # one line, not two
+        self.assertFalse(any("repos/o/hk/branches/integration/protection" in c for c in self.calls()))
+
+    def test_failed_branch_lookup_is_not_read_as_missing(self):
+        self.env["GH_FAIL_ARG"] = "repos/o/hk/git/matching-refs/heads/integration"
+        r = self.sync("--init")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("error: integration branch:", r.stderr)
+        self.assertFalse(any("repos/o/hk/git/refs" in c for c in self.calls()))   # no blind create
+        self.assertTrue(any("repos/o/hk/branches/main/protection" in c for c in self.calls()))
 
     def test_dry_run_init_on_missing_repo(self):
         self.env["GH_REPO_404"] = "1"             # repo does not exist yet: every read 404s
@@ -565,6 +643,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         (self.stub / "milestones.json").write_text(json.dumps([
             {"number": 1, "title": "code freeze", "due_on": "2026-10-01T00:00:00Z"},
             {"number": 2, "title": "submit", "due_on": "2026-10-04T00:00:00Z"}]))
+        self.env.update(GH_BRANCHES="main,integration", GH_DEFAULT="integration")
         r = self.sync("--init")
         self.assertEqual(r.returncode, 0, r.stderr)
         patches = [c for c in self.calls() if c[:3] == ["api", "-X", "PATCH"]]
