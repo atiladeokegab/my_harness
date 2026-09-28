@@ -350,7 +350,7 @@ runs from `main`, so a merge that never reaches it is missing from the demo.
 - **gh-sync warns that someone hasn't accepted the invite:** nudge them. Their issues are
   already there, unassigned.
 - **Questions**, each pass:
-  `gh issue list -R <repo> --label question --state open --json number,title,body,assignees,createdAt,comments`.
+  `gh issue list -R <repo> --label question --state open --limit 200 --json number,title,body,assignees,createdAt,comments`.
   A question's owner is its assignee or, if it has none, the handle @mentioned in its body.
   An unassigned one whose owner has since accepted the invite gets
   `gh issue edit <N> -R <repo> --add-assignee <handle>`. Skip any that already carry the
