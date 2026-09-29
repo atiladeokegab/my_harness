@@ -11,7 +11,10 @@ Three parts:
 |---|---|---|
 | **Template repo** | [atiladeokegab/hackathon_teamwork](https://github.com/atiladeokegab/hackathon_teamwork), copied once to your account | What teammates see: `AGENTS.md` (the rulebook their agent follows), `IDEA.md`, `HACKATHON.md`, issue forms, PR template, a README guide with diagrams |
 | **`hub gh-sync`** | `hub/gh_sync.py` | Pushes the event's hub tasks to GitHub Issues and pulls back what happened: closed, picked up, change-requests |
-| **`hackathon` skill** | `claude/skills/hackathon/` | The lead agent's script: deadlines first, roster, pitch round, plan, areas and assignment, `IDEA.md` gate, publish, live review loop with smoke checks |
+| **`hackathon` skill** | `claude/skills/hackathon/` | The lead agent's script: deadlines first, roster, pitch round, the designer's mockup, plan, live vertical breakdowns, publish, the live crew |
+| **`hub live`** | `hub/live.py`, `hub/live_merge.py` | The mechanical half of the build: sync, hands each new item once to the reviewer or the lead, merges approved PRs one at a time at the reviewed commit, smoke → promote `main` or revert, the freeze, reminders and nudges. It never judges |
+| **`hub review`** | `hub/review.py` | Approval windows: builds a page from pictures and markdown, waits for the click, saves the decision |
+| **`builder` agent** | `claude/agents/builder.md` | The rules for the lead's builder sub-agents: own worktree, plan comment first, Verify and smoke, PR, stop |
 
 ## Diagrams
 
@@ -36,6 +39,11 @@ diagrams live in the template's README.
    git commit -am "chore: I own this template" && git push
    gh repo edit <you>/hackathon_teamwork --template
    ```
+3. Make one GitHub Project board titled **Hackathon board (template)**: a `Status` field (Todo,
+   In progress, In review, Done), text fields `Agent` and `Deadline`, and a **By vertical** table
+   view grouped by Parent issue (add views in the browser; the API can't). `--init` copies it.
+4. If a reviewer agent (`$HUB_REVIEWER`, default Hermes) will approve PRs, allow `gh pr comment`,
+   `gh pr review` and `hub live` in its `/permissions`, or its auto mode blocks every approval.
 
 ## Each event
 
@@ -44,6 +52,7 @@ It writes `$HUB_DIR/projects/<event>/hackathon.json`:
 
 ```json
 {"repo": "<you>/<event>", "template": "<you>/hackathon_teamwork", "timezone": "Europe/London",
+ "event": "<event name>", "title": "<product>", "summary": "<one paragraph>", "smoke": "<command>",
  "deadlines": [{"name": "code freeze", "at": "2026-10-04T14:00+01:00"},
                {"name": "submit", "at": "2026-10-04T15:00+01:00"}],
  "roster": [{"name": "You", "github": "<you>", "lead": true},
@@ -54,11 +63,13 @@ It writes `$HUB_DIR/projects/<event>/hackathon.json`:
 hub gh-sync --project <event> --init --dry-run   # read what it would do
 hub gh-sync --project <event> --init             # repo from template, invites, labels, milestones,
                                                  # an `integration` default branch, protection on it and main
-# ...push IDEA.md, HACKATHON.md and the README...
+                                                 # and fills IDEA.md, HACKATHON.md, README, then pushes
 hub gh-sync --project <event>                    # every task becomes an issue; rerun any time
+tmux new -d -s hub-live-<event> "hub live --project <event>"   # the live crew's mechanical half
 ```
 
-`--init` only provisions: no issue exists until the approved `IDEA.md` is pushed.
+`--init` publishes the approved event docs itself (it refuses to while a placeholder is left), and
+every sync keeps `IDEA.md`'s owners table up to date.
 
 ## How the work flows
 

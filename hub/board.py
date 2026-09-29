@@ -7,12 +7,16 @@ to the snapshot is lost, so it's the place to look when debugging a race.
 """
 
 import argparse
+import difflib
 import fcntl
 import json
 import os
 import re
 import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -188,7 +192,7 @@ def valid_agent(name, what="agent"):
 
 
 def valid_project(name):
-    """Canonical project tag, or exit. Lowercased so refinery / Refinery are one project."""
+    """Canonical project tag, or exit. Lowercased so webapp / Webapp are one project."""
     c = (name or "").strip().lower()
     if not PROJECT_RE.match(c):
         sys.exit(
@@ -326,7 +330,61 @@ def find(data, tid):
     sys.exit(f"no such task: {tid}")
 
 
-def transition(t, verb, me, force=False):
+def is_hackathon(project):
+    return bool(project) and os.path.exists(
+        os.path.join(HUB_DIR, "projects", project, "hackathon.json"))
+
+
+def label(t):
+    if t.get("issue") and is_hackathon(t.get("project")):
+        return f"#{t['issue']}"
+    return t["id"]
+
+
+def resolve(data, ref, project=None):
+    s = str(ref).strip()
+    bare = s[1:] if s.startswith("#") else s
+    if bare.isdigit() and is_hackathon(project):
+        n = int(bare)
+        for t in data["tasks"]:
+            if t.get("project") == project and t.get("issue") == n:
+                return t
+        sys.exit(f"no task has issue #{n} in {project} yet; use its T-id (hub list)")
+    return find(data, bare)
+
+
+def roster(project):
+    if not is_hackathon(project):
+        return None
+    with open(os.path.join(HUB_DIR, "projects", project, "hackathon.json")) as f:
+        return json.load(f)
+
+
+def humans_of(project):
+    return {canon(p["name"]) for p in (roster(project) or {}).get("roster", [])}
+
+
+def agents_of(project):
+    return {canon(a["name"]): canon(p["name"])
+            for p in (roster(project) or {}).get("roster", []) for a in p.get("agents", [])}
+
+
+def actor(t):
+    return t.get("agent") or t.get("owner")
+
+
+def check_owner(project, owner, ref="<n>"):
+    if not is_hackathon(project) or owner is None or owner == "Pool" or owner in humans_of(project):
+        return
+    human = agents_of(project).get(owner)
+    if human:
+        sys.exit(f"{owner} is an agent, not a roster human: "
+                 f"hub assign {ref} {human}, then hub delegate {ref} {owner}")
+    sys.exit(f"{owner} is not a roster human in {project}: "
+             "owners are the roster humans in hackathon.json")
+
+
+def transition(t, verb, me, force=False, who=None):
     """Authorise and apply one status change, or exit explaining what is allowed.
 
     Returns True if an ownership/state rule was overridden, so the caller can record that
@@ -347,7 +405,7 @@ def transition(t, verb, me, force=False):
                 f"use --force to override, or check: hub show {t['id']}"
             )
 
-    owner = t.get("owner")
+    owner = who if who is not None else t.get("owner")
     # Ownership blocks a claim whatever the status: `hub new --owner Hermes` assigns work
     # up front, and letting anyone claim it anyway would make that assignment advisory.
     # An unowned task (never assigned, or released) is free for anyone to take.
@@ -375,11 +433,12 @@ def transition(t, verb, me, force=False):
     return overridden
 
 
-def validate_deps(data, deps, own_id):
+def validate_deps(data, deps, own_id, project=None):
     """Deps are normalised and proven sane at creation -- the only point they enter."""
     seen, out = set(), []
     for d in deps:
-        d = norm_id(d)
+        d = (resolve(data, d, project)["id"]
+             if is_hackathon(project) and str(d).lstrip("#").isdigit() else norm_id(d))
         if d == own_id:
             sys.exit(f"a task cannot depend on itself ({d})")
         if not any(t["id"] == d for t in data["tasks"]):
@@ -488,14 +547,16 @@ def notify_hint(targets):
 
 def fmt_row(t, data=None):
     mark = {"open": "○", "claimed": "◐", "done": "●", "blocked": "✗"}[t["status"]]
-    owner = f" @{t['owner']}" if t.get("owner") else ""
+    kind = "▣ " if t.get("kind") == "vertical" else ""
+    owner = (f" @{t['owner']}" if t.get("owner") else "") + (f"→{t['agent']}" if t.get("agent") else "")
     blocked = ""
     if data and t["status"] in ("open", "claimed"):
         missing = unmet_deps(data, t)
         if missing:
-            blocked = f"  ⇠ waits on {','.join(missing)}"
+            by_id = {x["id"]: x for x in data["tasks"]}
+            blocked = f"  ⇠ waits on {','.join(label(by_id[m]) if m in by_id else m for m in missing)}"
     tag = f" [{t['project']}]" if t.get("project") else ""
-    return f"  {mark} {t['id']}  {t['title']}{tag}{owner}{blocked}"
+    return f"  {mark} {kind}{label(t)}  {t['title']}{tag}{owner}{blocked}"
 
 
 def cmd_new(a):
@@ -503,10 +564,11 @@ def cmd_new(a):
     if a.owner:
         a.owner = addressable(a.owner, "owner")
     project = which_project(getattr(a, "project", None))
+    check_owner(project, a.owner)
     with board(write=True) as (data, events):
         nid = f"T-{data['next_id']:03d}"
         data["next_id"] += 1
-        deps = validate_deps(data, a.dep or [], nid)
+        deps = validate_deps(data, a.dep or [], nid, project)
         data["tasks"].append({
             "id": nid,
             "title": a.title,
@@ -519,13 +581,14 @@ def cmd_new(a):
             "updated": now(),
             "notes": [],
             "project": project,
+            **({"kind": "vertical"} if a.vertical else {}),
         })
         log(events, me, "created", nid, title=a.title, deps=deps, owner=a.owner,
             project=project)
     print(f"created {nid}: {a.title}" + (f"  [{project}]" if project else ""))
     if not a.detail:
         print("  note: no --detail given. Tasks should carry enough plan for another agent to execute cold.")
-    if a.owner:
+    if a.owner and a.owner != "Pool" and a.owner not in humans_of(project):
         mid = new_message_id()
         deliver(a.owner, f"{nid} assigned to you: {a.title}", mid)
         notify_hint([(a.owner, f"{nid} is yours: {a.title}. Run: hub show {nid}", mid)])
@@ -560,18 +623,124 @@ def cmd_list(a):
 
 def cmd_show(a):
     with board() as (data, _):
-        t = find(data, a.id)
-        print(f"\n{t['id']}  [{t['status']}]  {t['title']}")
+        t = resolve(data, a.id, which_project(getattr(a, "project", None)))
+        print(f"\n{'▣ ' if t.get('kind') == 'vertical' else ''}{label(t)}  [{t['status']}]  {t['title']}")
         print(f"owner: {t.get('owner') or '-'}   project: {t.get('project') or '-'}"
-              f"   created by {t['created_by']} at {t['created']}")
+              f"   created by {t['created_by']} at {t['created']}"
+              + (f"   key: {t['id']}" if label(t) != t["id"] else ""))
         if t.get("deps"):
             missing = unmet_deps(data, t)
-            print(f"deps: {', '.join(t['deps'])}" + (f"   UNMET: {','.join(missing)}" if missing else "   (all met)"))
+            by_id = {x["id"]: x for x in data["tasks"]}
+            named = lambda ids: ",".join(label(by_id[d]) if d in by_id else d for d in ids)
+            print(f"deps: {named(t['deps'])}" + (f"   UNMET: {named(missing)}" if missing else "   (all met)"))
         print(f"\n{t['detail'] or '(no detail)'}\n")
         for n in t["notes"]:
             print(f"  · [{n['at']}] {n['by']}: {n['text']}")
         if t["notes"]:
             print()
+
+
+def strip_issue_extras(body):
+    lines = [line.rstrip() for line in (body or "").replace("\r\n", "\n").split("\n")
+             if not line.startswith("<!-- hub-task: ") and not line.startswith("Depends on: ")]
+    return "\n".join(lines).strip()
+
+
+def set_deadline(detail, name, project):
+    if not is_hackathon(project):
+        sys.exit("--deadline needs a hackathon project")
+    with open(os.path.join(HUB_DIR, "projects", project, "hackathon.json")) as f:
+        names = [d["name"] for d in json.load(f)["deadlines"]]
+    if name not in names:
+        sys.exit(f"{name!r} is not a deadline in hackathon.json (choose from {', '.join(names)})")
+    if re.search(r"^Deadline:", detail, re.M):
+        return re.sub(r"^(Deadline:[ \t]*).*$", lambda m: m.group(1) + name, detail,
+                      count=1, flags=re.M)
+    return detail.rstrip("\n") + f"\nDeadline:     {name}"
+
+
+def edit_in_editor(text):
+    editor = os.environ.get("EDITOR") or ("nano" if shutil.which("nano") else "vi")
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
+        f.write(text)
+        path = f.name
+    try:
+        subprocess.run([*shlex.split(editor), path], check=True)
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    finally:
+        os.remove(path)
+
+
+def cmd_edit(a):
+    me = whoami(a.as_agent)
+    project = which_project(a.project)
+    with board() as (data, _):
+        t = dict(resolve(data, a.id, project))
+    if t["status"] == "done":
+        sys.exit(f"{label(t)} is done; reopen it before editing its brief")
+    if a.take_github and a.keep_hub:
+        sys.exit("choose one of --take-github and --keep-hub")
+    if (a.take_github or a.keep_hub) and a.detail_file:
+        sys.exit("--take-github and --keep-hub don't combine with --detail-file")
+    old_detail = t.get("detail") or ""
+    new_title, new_detail, extra = a.title or t["title"], old_detail, {}
+    if a.take_github or a.keep_hub:
+        if not t.get("issue"):
+            sys.exit(f"{label(t)} has no issue yet")
+        import gh_sync
+        try:
+            with open(gh_sync.config_path(t["project"])) as f:
+                repo = json.load(f)["repo"]
+            remote = gh_sync.Gh().json("issue", "view", t["issue"], "-R", repo,
+                                       "--json", "body")["body"]
+        except (OSError, gh_sync.GhError) as e:
+            sys.exit(f"hub edit: {e}")
+        if a.keep_hub:
+            extra["issue_hash"] = gh_sync.digest(remote)
+        else:
+            new_detail = strip_issue_extras(remote)
+    elif a.detail_file:
+        with open(a.detail_file, encoding="utf-8") as f:
+            new_detail = f.read()
+    elif not (a.title or a.deadline) and sys.stdin.isatty():
+        new_detail = edit_in_editor(old_detail)
+    if a.deadline:
+        new_detail = set_deadline(new_detail, a.deadline, t.get("project"))
+    new_detail = new_detail.replace("\r\n", "\n").rstrip()
+    if not new_detail.strip():
+        sys.exit("refusing an empty brief")
+    diff = []
+    if new_title != t["title"]:
+        diff += [f"-title: {t['title']}", f"+title: {new_title}"]
+    diff += list(difflib.unified_diff(old_detail.splitlines(), new_detail.splitlines(),
+                                     "brief (hub)", "brief (new)", lineterm=""))
+    if not diff and not extra:
+        sys.exit("nothing changed")
+    print("\n".join(diff) if diff else
+          f"{label(t)}: the next hub gh-sync overwrites GitHub with the hub brief")
+    if not a.yes:
+        if not sys.stdin.isatty():
+            sys.exit("not a terminal: pass --yes to save")
+        if input("Save? [y/N] ").strip().lower() != "y":
+            sys.exit("not saved")
+    with board(write=True) as (data, events):
+        cur = find(data, t["id"])
+        if cur["status"] == "done":
+            sys.exit(f"{label(cur)} is done; reopen it before editing its brief")
+        if cur["title"] != t["title"] or (cur.get("detail") or "") != old_detail:
+            sys.exit(f"{label(cur)} changed while you were editing; run hub edit again")
+        fields = []
+        if new_title != cur["title"]:
+            cur["title"] = new_title
+            fields.append("title")
+        if new_detail != old_detail:
+            cur["detail"] = new_detail
+            fields.append("detail")
+        cur.update(extra)
+        cur["updated"] = now()
+        log(events, me, "edited", cur["id"], fields=fields, keep_hub=bool(a.keep_hub))
+    print(f"{label(t)} saved" + ("; the next hub gh-sync pushes it" if is_hackathon(t.get("project")) else ""))
 
 
 def cmd_next(a):
@@ -585,16 +754,27 @@ def cmd_next(a):
             # is the whole reason project scoping exists.
             pool = [t for t in pool if (t.get("project") or "") == project]
         mine = [t for t in pool
-                if t["status"] == "open" and (t.get("owner") or "").lower() == me.lower()]
+                if t["status"] == "open" and (actor(t) or "").lower() == me.lower()]
         free = [t for t in pool
                 if t["status"] == "open" and not t.get("owner") and not unmet_deps(data, t)]
-        pick = next((t for t in mine if not unmet_deps(data, t)), None) or (free[0] if free else None)
+        # Scope keeps an agent out of unrelated FREE work; it must not hide work someone
+        # assigned to it by name. A project-scoped Prometheus was offered T-078 and never
+        # shown T-101..T-103, which Zeus had assigned it under project hub/testbed.
+        elsewhere = [t for t in data["tasks"] if t not in pool and t["status"] == "open"
+                     and (actor(t) or "").lower() == me.lower() and not unmet_deps(data, t)]
+        pick = (next((t for t in mine if not unmet_deps(data, t)), None)
+                or (free[0] if free else None) or (elsewhere[0] if elsewhere else None))
         if not pick:
             scope = f" in project {project}" if project else ""
             print(f"nothing available to pick up{scope}")
             return
-        print(f"{pick['id']}  {pick['title']}\n")
+        print(f"{label(pick)}  {pick['title']}\n")
         print(pick["detail"] or "(no detail)")
+        others = [t for t in elsewhere if t is not pick]
+        if others:
+            print("\nalso assigned to you in other projects:")
+            for t in others:
+                print(f"  {label(t)}  [{t.get('project') or '-'}] {t['title']}")
 
 
 def cmd_claim(a):
@@ -602,33 +782,98 @@ def cmd_claim(a):
     # finished by a real agent without --force.
     me = addressable(whoami(a.as_agent), "claiming agent")
     with board(write=True) as (data, events):
-        t = find(data, a.id)
+        t = resolve(data, a.id, which_project(getattr(a, "project", None)))
         missing = unmet_deps(data, t)
         if missing and not a.force:
             sys.exit(f"{t['id']} waits on unmet deps: {','.join(missing)} (use --force to override)")
-        overridden = transition(t, "claim", me, a.force)
-        t["owner"] = me
+        if is_hackathon(t.get("project")):
+            if t.get("owner") in (None, "Pool"):
+                sys.exit(f"{label(t)} is pool work: hub assign {label(t).lstrip('#')} <person>, "
+                         "then hub delegate ... <agent>")
+            if me == t.get("owner"):
+                t["agent"] = None
+            elif not t.get("agent") and agents_of(t["project"]).get(me) == t.get("owner"):
+                t["agent"] = me
+            overridden = transition(t, "claim", me, a.force, who=actor(t))
+            if actor(t) != me:
+                t["agent"] = me
+        else:
+            overridden = transition(t, "claim", me, a.force)
+            t["owner"] = me
         log(events, me, "claimed", t["id"], forced=bool(missing) or overridden)
-    print(f"{t['id']} claimed by {me}")
+    print(f"{label(t)} claimed by {me}")
 
 
 def cmd_release(a):
     me = whoami(a.as_agent)
     with board(write=True) as (data, events):
-        t = find(data, a.id)
-        overridden = transition(t, "release", me, a.force)
-        t["owner"] = None
+        t = resolve(data, a.id, which_project(getattr(a, "project", None)))
+        hackathon = is_hackathon(t.get("project"))
+        overridden = transition(t, "release", me, a.force, who=actor(t) if hackathon else None)
+        if hackathon:
+            t["agent"] = None
+        else:
+            t["owner"] = None
         log(events, me, "released", t["id"], forced=overridden)
-    print(f"{t['id']} released back to open")
+    print(f"{label(t)} released back to open")
 
+
+
+def cmd_assign(a):
+    """The planner hands a task to another agent. Open tasks only, unless --force (then the claim is dropped)."""
+    me = whoami(a.as_agent)
+    owner = addressable(a.owner, "owner")
+    with board(write=True) as (data, events):
+        t = resolve(data, a.id, which_project(getattr(a, "project", None)))
+        check_owner(t.get("project"), owner, label(t).lstrip("#"))
+        if t.get("status") not in ("open", None) and not a.force:
+            sys.exit(f"{t['id']} is {t['status']} by {t.get('owner')}; reassigning it drops that work. Use --force.")
+        before = t.get("owner")
+        t["owner"], t["status"], t["updated"] = owner, "open", now()
+        if is_hackathon(t.get("project")):
+            t["agent"] = None
+        log(events, me, "assigned", t["id"], owner=owner, was=before, forced=bool(a.force))
+    if owner != "Pool" and owner not in humans_of(t.get("project")):
+        mid = new_message_id()
+        deliver(owner, f"{t['id']} assigned to you: {t['title']}", mid)
+        notify_hint([(owner, f"{t['id']} is yours: {t['title']}. Run: hub show {t['id']}", mid)])
+    print(f"{label(t)} assigned to {owner} (was {before or 'nobody'})")
+
+
+def cmd_delegate(a):
+    me = whoami(a.as_agent)
+    if bool(a.agent) == bool(a.clear):
+        sys.exit("name an agent, or pass --clear")
+    with board(write=True) as (data, events):
+        t = resolve(data, a.id, which_project(a.project))
+        agent = None if a.clear else addressable(a.agent, "agent")
+        if agent and is_hackathon(t.get("project")):
+            owner = t.get("owner")
+            if agents_of(t["project"]).get(agent) != owner:
+                sys.exit(f"{agent} is not one of {owner}'s agents in hackathon.json")
+        was = t.get("agent")
+        t["agent"], t["updated"] = agent, now()
+        log(events, me, "delegated", t["id"], agent=agent, was=was)
+    if agent:
+        message = f"{label(t)} delegated to you by {t.get('owner') or me}: {t['title']}"
+        mid = new_message_id()
+        deliver(agent, message, mid)
+        notify_hint([(agent, f"{message}. Run: hub show {t['id']}", mid)])
+    print(f"{label(t)} " + (f"delegated to {agent}" if agent else "delegate cleared"))
 
 def cmd_done(a):
     me = whoami(a.as_agent)
     pings = []
     with board(write=True) as (data, events):
-        t = find(data, a.id)
+        t = resolve(data, a.id, which_project(getattr(a, "project", None)))
+        if t.get("kind") == "vertical":
+            open_children = [label(x) for x in data["tasks"]
+                             if x.get("parent") == t["id"] and x["status"] != "done"]
+            if open_children:
+                sys.exit(f"{label(t)} still has open tasks: {', '.join(open_children)}")
         blocked_before = {x["id"] for x in data["tasks"] if unmet_deps(data, x)}
-        overridden = transition(t, "done", me, a.force)
+        overridden = transition(t, "done", me, a.force,
+                                who=actor(t) if is_hackathon(t.get("project")) else None)
         if overridden:
             log(events, me, "override", t["id"], verb="done")
         if a.note:
@@ -639,13 +884,16 @@ def cmd_done(a):
             if x["id"] in blocked_before and x["status"] == "open" and not unmet_deps(data, x):
                 log(events, me, "unblocked", x["id"], by_task=t["id"])
                 text = f"{x['id']} is ready — unblocked by {t['id']}: {x['title']}"
-                if x.get("owner"):
+                recipient = actor(x) if is_hackathon(x.get("project")) else x.get("owner")
+                if recipient in humans_of(x.get("project")):
+                    continue  # humans read their GitHub issue; no hub inbox or pool notice
+                if recipient and recipient != "Pool":
                     mid = new_message_id()
-                    deliver(x["owner"], text, mid)
-                    pings.append((x["owner"], text, mid))
+                    deliver(recipient, text, mid)
+                    pings.append((recipient, text, mid))
                 else:
                     pings.append((None, f"{x['id']} is now claimable: {x['title']}", None))
-    print(f"{t['id']} marked done by {me}")
+    print(f"{label(t)} marked done by {me}")
     unowned = [p for p in pings if p[0] is None]
     for _, text, _ in unowned:
         print(f"  → {text}")
@@ -655,21 +903,22 @@ def cmd_done(a):
 def cmd_block(a):
     me = whoami(a.as_agent)
     with board(write=True) as (data, events):
-        t = find(data, a.id)
-        overridden = transition(t, "block", me, a.force)
+        t = resolve(data, a.id, which_project(getattr(a, "project", None)))
+        overridden = transition(t, "block", me, a.force,
+                                who=actor(t) if is_hackathon(t.get("project")) else None)
         t["notes"].append({"at": now(), "by": me, "text": a.note})
         log(events, me, "blocked", t["id"], reason=a.note, forced=overridden)
-    print(f"{t['id']} marked blocked by {me}")
+    print(f"{label(t)} marked blocked by {me}")
 
 
 def cmd_note(a):
     me = whoami(a.as_agent)
     with board(write=True) as (data, events):
-        t = find(data, a.id)
+        t = resolve(data, a.id, which_project(getattr(a, "project", None)))
         t["notes"].append({"at": now(), "by": me, "text": a.text})
         t["updated"] = now()
         log(events, me, "note", t["id"], text=a.text)
-    print(f"note added to {t['id']}")
+    print(f"note added to {label(t)}")
 
 
 def cmd_notify(a):
@@ -715,14 +964,14 @@ def cmd_brief(a):
                 and (t.get("owner") or "").lower() == me.lower()]
         if mine:
             out.append("\nYOURS, IN PROGRESS —")
-            out += [f"  {t['id']}  {t['title']}" for t in mine]
+            out += [f"  {label(t)}  {t['title']}" for t in mine]
 
         avail = [t for t in tasks if t["status"] == "open"
                  and not unmet_deps(data, t)
                  and (t.get("owner") or "").lower() in ("", me.lower())]
         if avail:
             out.append(f"\nAVAILABLE TO YOU — {len(avail)}. Take one with `hub claim <id>`.")
-            out += [f"  {t['id']}  {t['title']}" for t in avail[:8]]
+            out += [f"  {label(t)}  {t['title']}" for t in avail[:8]]
 
         # Whole board, not just this project: knowing a peer is mid-task elsewhere is
         # what stops two agents starting the same work or colliding on one file.
@@ -732,12 +981,12 @@ def cmd_brief(a):
             out.append("\nPEERS ARE HOLDING —")
             for t in others:
                 tag = f" [{t['project']}]" if t.get("project") else ""
-                out.append(f"  {t['id']}  {t['title']}{tag}  @{t['owner']}")
+                out.append(f"  {label(t)}  {t['title']}{tag}  @{t['owner']}")
 
         blocked = [t for t in tasks if t["status"] == "blocked"]
         if blocked:
             out.append("\nBLOCKED —")
-            out += [f"  {t['id']}  {t['title']}  @{t.get('owner') or '-'}" for t in blocked]
+            out += [f"  {label(t)}  {t['title']}  @{t.get('owner') or '-'}" for t in blocked]
 
     print("\n".join(out))
 
@@ -829,6 +1078,7 @@ def main():
     n.add_argument("--dep", action="append", help="task id this depends on (repeatable)")
     n.add_argument("--owner", help="assign to an agent up front")
     n.add_argument("--project", help="project this task belongs to (defaults to $HUB_PROJECT)")
+    n.add_argument("--vertical", action="store_true", help="create an owner-area vertical")
     n.set_defaults(fn=cmd_new)
 
     l = sub.add_parser("list", help="list tasks")
@@ -841,7 +1091,19 @@ def main():
 
     s = sub.add_parser("show", help="show one task in full")
     s.add_argument("id")
+    s.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
     s.set_defaults(fn=cmd_show)
+
+    ed = sub.add_parser("edit", help="change a task's title, brief or deadline")
+    ed.add_argument("id", help="T-id, or in a hackathon the issue number")
+    ed.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
+    ed.add_argument("--title")
+    ed.add_argument("--deadline", help="a deadline name from hackathon.json")
+    ed.add_argument("--detail-file", help="new brief from this file (for agents)")
+    ed.add_argument("--take-github", action="store_true", help="adopt the issue's GitHub body")
+    ed.add_argument("--keep-hub", action="store_true", help="next sync overwrites GitHub")
+    ed.add_argument("--yes", action="store_true", help="save without asking")
+    ed.set_defaults(fn=cmd_edit)
 
     nx = sub.add_parser("next", help="show the next task available to you")
     nx.add_argument("--project", help="only this project (defaults to $HUB_PROJECT)")
@@ -857,6 +1119,19 @@ def main():
     r.add_argument("--force", action="store_true",
                        help="override state/ownership rules (recorded in the ledger)")
     r.set_defaults(fn=cmd_release)
+
+    g = sub.add_parser("assign", help="hand a task to another owner (planner)")
+    g.add_argument("id")
+    g.add_argument("owner")
+    g.add_argument("--force", action="store_true", help="also reassign a claimed or blocked task (recorded)")
+    g.set_defaults(fn=cmd_assign)
+
+    dg = sub.add_parser("delegate", help="hand a task to one of its owner's agents")
+    dg.add_argument("id", help="T-id, or in a hackathon the issue number")
+    dg.add_argument("agent", nargs="?")
+    dg.add_argument("--clear", action="store_true", help="remove the delegate")
+    dg.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
+    dg.set_defaults(fn=cmd_delegate)
 
     d = sub.add_parser("done", help="mark a task done")
     d.add_argument("id")
@@ -899,6 +1174,10 @@ def main():
 
     import gh_sync
     gh_sync.register(sub)
+    import live
+    live.register(sub)
+    import review
+    review.register(sub)
 
     ev = sub.add_parser("events", help="read the append-only ledger")
     ev.add_argument("--tail", type=int, default=30)

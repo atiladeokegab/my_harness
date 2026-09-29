@@ -34,8 +34,12 @@ if os.environ.get("GH_REPO_404") and (a[:2] == ["issue", "list"] or (a[:1] == ["
     sys.stderr.write("gh: Not Found (HTTP 404)")
     sys.exit(1)
 if "--input" in a and a[a.index("--input") + 1] == "-":
+    data = sys.stdin.read()
     with open(os.path.join(d, "stdin.json"), "w") as f:
-        f.write(sys.stdin.read())
+        f.write(data)
+    if "/protection" in a[-3]:
+        with open(os.path.join(d, "protection-" + a[-3].split("/branches/")[1].split("/")[0] + ".json"), "w") as f:
+            f.write(data)
 if a[:2] == ["auth", "status"]:
     sys.exit(int(os.environ.get("GH_AUTH_FAIL", "0")))
 if a[:2] == ["issue", "create"]:
@@ -47,9 +51,21 @@ if a[:2] == ["issue", "create"]:
     print(f"https://github.com/o/hk/issues/{n}")
 elif a[:2] == ["issue", "list"]:
     p = os.path.join(d, "issues.json")
-    print(open(p).read() if os.path.exists(p) else "[]")
+    if os.path.exists(p):
+        print(open(p).read())
+    elif os.environ.get("GH_LIST_CREATED"):   # GitHub lists what was created earlier in the run
+        n = sum(1 for l in open(log) if json.loads(l)[:2] == ["issue", "create"])
+        print(json.dumps([{"number": k, "title": f"t{k}", "state": "OPEN", "stateReason": "",
+                           "assignees": [], "labels": [], "body": "",
+                           "url": f"https://github.com/o/hk/issues/{k}"} for k in range(1, n + 1)]))
+    else:
+        print("[]")
 elif a[:2] == ["issue", "view"]:
     print(json.dumps({"body": open(os.path.join(d, f"body-{a[2]}.txt")).read()}))
+elif a[:1] == ["api"] and "/sub_issues" in a[-1]:
+    n = a[-1].split("/issues/", 1)[1].split("/", 1)[0]
+    p = os.path.join(d, f"subissues-{n}.json")
+    print(open(p).read() if os.path.exists(p) else "[]")
 elif a[:1] == ["api"] and "milestones" in a[-1] and "-X" not in a:
     p = os.path.join(d, "milestones.json")
     print(open(p).read() if os.path.exists(p) else "[]")
@@ -69,6 +85,53 @@ elif a[:1] == ["api"] and a[-1] == "repos/o/hk/git/ref/heads/main":
     print(json.dumps({"object": {"sha": "abc123"}}))
 elif a[:1] == ["api"] and a[-1] == "repos/o/hk" and "-X" not in a:
     print(json.dumps({"default_branch": os.environ.get("GH_DEFAULT", "main")}))
+elif a[:2] == ["api", "graphql"]:
+    p = os.path.join(d, "graphql.json")
+    if not os.path.exists(p):
+        sys.stderr.write("graphql unavailable")
+        sys.exit(1)
+    print(open(p).read())
+elif a[:2] == ["variable", "set"]:
+    pass
+elif a[:2] == ["run", "list"]:
+    per_branch = os.path.join(d, f"runs-{a[a.index('--branch') + 1]}.json") if "--branch" in a else ""
+    p = per_branch if per_branch and os.path.exists(per_branch) else os.path.join(d, "runs.json")
+    print(open(p).read() if os.path.exists(p) else "[]")
+elif a[:2] == ["run", "rerun"]:
+    pass
+elif a[:2] == ["run", "view"]:
+    p = os.path.join(d, "run-views.json")
+    seq = json.load(open(p)) if os.path.exists(p) else ["in_progress"]
+    status = seq.pop(0) if len(seq) > 1 else seq[0]
+    json.dump(seq, open(p, "w"))
+    print(json.dumps({"status": status}))
+elif a[:2] == ["pr", "list"]:
+    p = os.path.join(d, "prs.json")
+    print(open(p).read() if os.path.exists(p) else "[]")
+elif a[:1] == ["api"] and a[-1] == "repos/o/hk/git/ref/tags/freeze" and "-X" not in a:
+    if os.environ.get("GH_TAG_ERROR"):
+        sys.stderr.write(os.environ["GH_TAG_ERROR"])
+        sys.exit(1)
+    if not os.path.exists(os.path.join(d, "tag-exists")):
+        sys.stderr.write("gh: Not Found (HTTP 404)")
+        sys.exit(1)
+    print(json.dumps({"object": {"sha": "old999"}}))
+elif a[:2] == ["project", "list"]:
+    p = os.path.join(d, "projects.json")
+    print(open(p).read() if os.path.exists(p) else '{"projects": []}')
+elif a[:2] == ["project", "copy"]:
+    print(json.dumps({"number": 9, "url": "https://github.com/users/lead-gh/projects/9", "id": "P9"}))
+elif a[:2] == ["project", "field-list"]:
+    if not os.path.exists(os.path.join(d, "fields.json")):
+        sys.stderr.write("no fields in the stub")
+        sys.exit(1)
+    print(open(os.path.join(d, "fields.json")).read())
+elif a[:2] == ["project", "item-list"]:
+    print(json.dumps({"items": []}))
+elif a[:2] == ["project", "item-add"]:
+    print(json.dumps({"id": "ITEM-" + a[a.index("--url") + 1].rsplit("/", 1)[1]}))
+elif a[:2] == ["project", "item-edit"]:
+    pass
 elif a[:2] == ["repo", "view"]:
     if os.environ.get("GH_REPO_MISSING") == "1":
         sys.stderr.write("GraphQL: Could not resolve to a Repository with the name 'o/hk'. (repository)")
@@ -85,11 +148,20 @@ CFG = {
     "repo": "o/hk",
     "template": "tpl/hackathon_teamwork",
     "timezone": "Europe/London",
+    "event": "Hack Day",
+    "title": "Sample App",
+    "summary": "A sample app for the accessibility track.",
+    "smoke": "python3 -m unittest",
     "deadlines": [{"name": "code freeze", "at": "2026-10-04T14:00:00+01:00"},
                   {"name": "submit", "at": "2026-10-04T15:00:00+01:00"}],
     "roster": [{"name": "Alex", "github": "lead-gh", "lead": True},
                {"name": "Sam", "github": "sam-gh"}],
 }
+
+AGENT_CFG = {**CFG, "roster": [
+    {"name": "Alex", "github": "lead-gh", "lead": True,
+     "agents": [{"name": "Zeus"}, {"name": "Prometheus", "github": "bot-gh"}]},
+    {"name": "Sam", "github": "sam-gh"}]}
 
 
 class GhSyncTest(unittest.TestCase):
@@ -140,6 +212,199 @@ class GhSyncTest(unittest.TestCase):
         return [c for c in self.calls() if c[:2] not in (["issue", "list"], ["issue", "view"], ["repo", "view"])
                 and not (c[:1] == ["api"] and "-X" not in c)]       # api without -X is a GET
 
+    def vertical_fixture(self, children, detail="Context: area\nFiles: expenses/parse/, tests/parse/\nDeadline: submit"):
+        self.add_task("T-001", kind="vertical", issue=1, issue_hash="h", issue_assignee="sam-gh",
+                      issue_title="title T-001", issue_milestone="submit", detail=detail)
+        data = json.loads((self.hub / "board.json").read_text())
+        data["next_id"] = 2
+        (self.hub / "board.json").write_text(json.dumps(data))
+        issues = [{
+            "number": 1, "title": "title T-001", "state": "OPEN", "stateReason": "",
+            "assignees": [{"login": "sam-gh"}], "labels": [{"name": "task"}, {"name": "vertical"}],
+            "url": "u1", "body": detail}]
+        issues += [{**child, "state": child["state"].upper(), "stateReason": "", "url": f"u{child['number']}"}
+                   for child in children]
+        (self.stub / "issues.json").write_text(json.dumps(issues))
+        (self.stub / "subissues-1.json").write_text(json.dumps(children))
+
+    def subissue(self, number=2, body="Context: parser\nFiles: expenses/parse/, tests/parse/\nDeadline: submit",
+                 labels=("task",), **extra):
+        return {"number": number, "title": f"parser {number}", "body": body, "state": "open",
+                "labels": [{"name": x} for x in labels], "assignees": [{"login": "sam-gh"}],
+                "milestone": {"title": "submit"}, **extra}
+
+    def test_approved_subissue_imports_once_without_rewriting_its_body(self):
+        child = self.subissue()
+        self.vertical_fixture([child])
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        imported = [t for t in self.tasks().values() if t.get("issue") == 2]
+        self.assertEqual(len(imported), 1)
+        t = imported[0]
+        self.assertEqual((t["kind"], t["parent"], t["owner"], t["detail"]),
+                         ("gh-imported", "T-001", "Sam", child["body"]))
+        self.assertEqual((t["issue_assignee"], t["issue_title"], t["issue_milestone"]),
+                         ("sam-gh", "parser 2", "submit"))
+        self.assertEqual(len(t["issue_hash"]), 64)
+        self.assertFalse(any(c[:3] == ["issue", "edit", "2"] for c in self.calls()))
+        self.assertIn("owners (for IDEA.md):", r.stdout)
+        self.assertEqual(self.sync().returncode, 0)
+        self.assertEqual(sum(t.get("issue") == 2 for t in self.tasks().values()), 1)
+
+    def test_import_alone_reprints_owners_on_pull_only(self):
+        self.vertical_fixture([self.subissue()])
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("owners (for IDEA.md):", r.stdout)
+        self.assertIn("#2 parser 2", r.stdout)
+
+    def test_import_is_not_duplicated_after_later_sync_failure(self):
+        self.vertical_fixture([self.subissue()])
+        self.env["GH_FAIL_ARG"] = "repos/o/hk/collaborators?per_page=100"
+        failed = self.sync()
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(sum(t.get("issue") == 2 for t in self.tasks().values()), 1)
+        del self.env["GH_FAIL_ARG"]
+        recovered = self.sync()
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(sum(t.get("issue") == 2 for t in self.tasks().values()), 1)
+
+    def test_dry_run_shows_import_without_changing_board(self):
+        self.vertical_fixture([self.subissue()])
+        r = self.sync("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("would import #2 under #1", r.stdout)
+        self.assertEqual(len(self.tasks()), 1)
+
+    def test_draft_imports_after_draft_label_is_removed(self):
+        child = self.subissue(labels=("task", "draft"))
+        self.vertical_fixture([child])
+        self.assertEqual(self.sync("--pull-only").returncode, 0)
+        self.assertEqual(len(self.tasks()), 1)
+        child["labels"] = [{"name": "task"}]
+        (self.stub / "subissues-1.json").write_text(json.dumps([child]))
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.tasks()["T-002"]["issue"], 2)
+
+    def test_subissue_of_non_vertical_is_not_imported(self):
+        self.vertical_fixture([self.subissue()])
+        data = json.loads((self.hub / "board.json").read_text())
+        del data["tasks"][0]["kind"]
+        (self.hub / "board.json").write_text(json.dumps(data))
+        self.assertEqual(self.sync("--pull-only").returncode, 0)
+        self.assertEqual(len(self.tasks()), 1)
+        self.assertFalse(any("/sub_issues" in " ".join(c) for c in self.calls()))
+
+    def test_subissue_files_outside_vertical_warn_and_do_not_import(self):
+        child = self.subissue(body="Context: totals\nFiles: expenses/totals/x.py\nDeadline: submit")
+        self.vertical_fixture([child])
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("#2 Files: expenses/totals/x.py is outside #1 Files: expenses/parse/, tests/parse/", r.stdout)
+        self.assertEqual(len(self.tasks()), 1)
+
+    def test_empty_files_heading_does_not_use_next_heading_as_an_area(self):
+        child = self.subissue(body="Context: parser\nFiles:\nApproach: expenses/parse/\nDeadline: submit")
+        self.vertical_fixture([child], detail="Context: area\nFiles:\nApproach: expenses/parse/\nDeadline: submit")
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.tasks()), 1)
+        self.assertIn("is outside", r.stdout)
+
+    def test_github_form_files_and_deadline_import(self):
+        area = "### Context\n\narea\n\n### Files\n\nreceipts/parse\n\n### Deadline\n\nsubmit"
+        body = "### Context\n\nparser\n\n### Files\n\nreceipts/parse/x.py\n\n### Deadline\n\nsubmit"
+        self.vertical_fixture([self.subissue(body=body, milestone=None)], detail=area)
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.tasks()["T-002"]["issue_milestone"], "submit")
+
+    def test_multiline_form_files_rejects_outside_path(self):
+        body = "### Files\n\nreceipts/parse/\nreceipts/model.py\n\n### Deadline\n\nsubmit"
+        self.vertical_fixture([self.subissue(body=body)], detail="### Files\n\nreceipts/parse/")
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.tasks()), 1)
+        self.assertIn("is outside", r.stdout)
+
+    def test_empty_optional_form_deadline_uses_code_freeze(self):
+        body = "### Files\n\nreceipts/parse/x.py\n\n### Deadline\n\n_No response_"
+        self.vertical_fixture([self.subissue(body=body, milestone=None)],
+                              detail="### Files\n\nreceipts/parse/")
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.tasks()["T-002"]["issue_milestone"], "code freeze")
+
+    def test_markdown_file_paths_import(self):
+        children = [self.subissue(number=2, body="Files: `receipts/parse/csv.py`"),
+                    self.subissue(number=3, body="### Files\n\n- receipts/parse/x.py"),
+                    self.subissue(number=4, body="### Files\n\n* `receipts/parse/y.py`")]
+        self.vertical_fixture(children, detail="### Files\n\n- `receipts/parse/`")
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual({t.get("issue") for t in self.tasks().values()}, {1, 2, 3, 4})
+
+    def test_area_without_trailing_slash_admits_descendant(self):
+        self.vertical_fixture([self.subissue(body="Files: receipts/parse/x.py")],
+                              detail="Files: receipts/parse")
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.tasks()["T-002"]["issue"], 2)
+
+    def test_subissue_files_inside_normalized_comma_areas_import(self):
+        child = self.subissue(body="Context: parser\nFiles: expenses/parse/lexer.py, tests/parse/ \nDeadline: submit")
+        self.vertical_fixture([child], detail="Context: area\nFiles: expenses/parse/ , tests/parse/  \nDeadline: submit")
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.tasks()["T-002"]["issue"], 2)
+
+    def test_subissue_maps_known_dep_and_warns_once_for_unknown_dep(self):
+        child = self.subissue(body="Context: parser\nFiles: expenses/parse/\nDeadline: submit\nDepends on: #3, #99, #99")
+        self.vertical_fixture([child])
+        data = json.loads((self.hub / "board.json").read_text())
+        data["tasks"].append({"id": "T-003", "title": "precondition", "detail": "Context: pre\nDeadline: submit",
+                              "status": "done", "owner": "Sam", "deps": [], "project": "hk", "notes": [], "issue": 3})
+        data["next_id"] = 4
+        (self.hub / "board.json").write_text(json.dumps(data))
+        issues = json.loads((self.stub / "issues.json").read_text())
+        issues.append({"number": 3, "title": "precondition", "state": "CLOSED", "stateReason": "COMPLETED",
+                       "assignees": [], "labels": [{"name": "task"}], "body": "Context: pre", "url": "u3"})
+        (self.stub / "issues.json").write_text(json.dumps(issues))
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.tasks()["T-004"]["deps"], ["T-003"])
+        self.assertEqual(r.stdout.count("Depends on: #99 is not on the hub"), 1)
+
+    def test_imported_subissue_keeps_agent_and_owner_edit_flow(self):
+        child = self.subissue(labels=("task", "agent:hermes"))
+        self.vertical_fixture([child])
+        self.assertEqual(self.sync().returncode, 0)
+        t = self.tasks()["T-002"]
+        self.assertEqual((t["owner"], t["agent"], t["issue_agent"]), ("Sam", "Hermes", "hermes"))
+        issues = json.loads((self.stub / "issues.json").read_text())
+        issues[1]["body"] = "Context: better parser\nFiles: expenses/parse/, tests/parse/\nDeadline: submit"
+        (self.stub / "issues.json").write_text(json.dumps(issues))
+        self.editor("sam-gh")
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.tasks()["T-002"]["detail"], issues[1]["body"])
+        self.assertFalse(any(c[:3] == ["issue", "edit", "2"] for c in self.calls()))
+
+    def test_replanned_imported_subissue_updates_body_without_hub_marker(self):
+        self.vertical_fixture([self.subissue()])
+        self.assertEqual(self.sync().returncode, 0)
+        data = json.loads((self.hub / "board.json").read_text())
+        data["tasks"][1]["detail"] = "Context: revised\nFiles: expenses/parse/\nDeadline: submit"
+        (self.hub / "board.json").write_text(json.dumps(data))
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(any(c[:3] == ["issue", "edit", "2"] for c in self.calls()))
+        bodies = [json.loads(line) for line in (self.stub / "bodies.jsonl").read_text().splitlines()]
+        revised = [body for body in bodies if body.startswith("Context: revised")]
+        self.assertEqual(len(revised), 1)
+        self.assertNotIn("<!-- hub-task:", revised[0])
+
     def test_push_creates_issue_and_records_it(self):
         self.add_task("T-001")
         r = self.sync()
@@ -151,6 +416,19 @@ class GhSyncTest(unittest.TestCase):
         self.assertEqual(t["issue"], 1)
         self.assertEqual(t["issue_assignee"], "sam-gh")
         self.assertEqual(len(t["issue_hash"]), 64)
+
+    def test_vertical_issue_has_vertical_label(self):
+        self.add_task("T-001", kind="vertical")
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [create] = self.calls(["issue", "create"])
+        self.assertIn("vertical", create[create.index("--label") + 1].split(","))
+
+    def test_init_creates_vertical_and_draft_labels(self):
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        labels = {c[2] for c in self.calls(["label", "create"])}
+        self.assertTrue({"vertical", "draft"} <= labels)
 
     def test_rerun_is_noop(self):
         self.add_task("T-001")
@@ -182,8 +460,8 @@ class GhSyncTest(unittest.TestCase):
         self.assertIn("#1", r.stdout)
         self.assertIn("not overwriting", r.stdout)
 
-    def test_agent_owner_goes_to_lead_with_label(self):
-        self.add_task("T-001", owner="Prometheus")
+    def test_human_owner_with_agent_goes_to_human_with_label(self):
+        self.add_task("T-001", owner="Alex", agent="Prometheus")
         self.sync()
         [create] = self.calls(["issue", "create"])
         self.assertIn("lead-gh", create)
@@ -303,6 +581,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertEqual(json.loads(bodies[0]), body.rstrip() + "\n\n<!-- hub-task: T-001 -->")
 
     def test_init_creates_everything(self):
+        self.use_agents()
         self.env["GH_REPO_MISSING"] = "1"
         r = self.sync("--init")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -407,11 +686,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertEqual(self.writes(), [c for c in self.writes() if c[:2] == ["repo", "view"]])
 
     def test_init_sets_commit_identity_on_the_clone(self):
-        home = self.hub / "home"
-        clone = home / "code" / "hk"               # what `gh repo create --clone` leaves behind
-        clone.mkdir(parents=True)
-        subprocess.run(["git", "init", "-q", str(clone)], check=True)
-        self.env["HOME"] = str(home)
+        clone, _ = self.event_clone()
         r = self.sync("--init")
         self.assertEqual(r.returncode, 0, r.stderr)
         email = subprocess.run(["git", "-C", str(clone), "config", "user.email"],
@@ -429,6 +704,146 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
 
     def write_cfg(self, **changes):
         (self.hub / "projects" / "hk" / "hackathon.json").write_text(json.dumps({**CFG, **changes}))
+
+    def event_clone(self, idea=None):
+        home = self.hub / "home"
+        home.mkdir(exist_ok=True)
+        remote = self.hub / "remote.git"
+        clone = home / "code" / "hk"
+        subprocess.run(["git", "init", "--bare", "-q", "--initial-branch=main", str(remote)], check=True)
+        clone.parent.mkdir()
+        subprocess.run(["git", "clone", "-q", str(remote), str(clone)], check=True,
+                       stderr=subprocess.DEVNULL)
+        for key, value in (("user.name", "Test"), ("user.email", "test@example.com")):
+            subprocess.run(["git", "-C", str(clone), "config", key, value], check=True)
+        (clone / "README.md").write_text(
+            "# <Project name>\n\n<One paragraph: what we're building and who it's for.>\n"
+            "1. `gh repo clone <this repo>`\n\n## Architecture\n\n"
+            "<!-- the lead adds the C4 diagrams here -->\n")
+        (clone / "HACKATHON.md").write_text("# <Event name>\n")
+        table = ("# The idea\n\n## Areas and owners\n\n"
+                 "| Area | Directories | Owner | Issues |\n|---|---|---|---|\n"
+                 "| web | `web/` | — | — |\n| pool | `samples/` | — | — |\n")
+        (clone / "IDEA.md").write_text(idea or table)
+        (self.hub / "projects" / "hk" / "IDEA.md").write_text(idea or table)
+        subprocess.run(["git", "-C", str(clone), "add", "README.md", "HACKATHON.md", "IDEA.md"], check=True)
+        subprocess.run(["git", "-C", str(clone), "commit", "-qm", "template"], check=True)
+        subprocess.run(["git", "-C", str(clone), "push", "-q", "origin", "main", "main:integration"], check=True)
+        self.env["HOME"] = str(home)
+        self.write_cfg(board={"number": 9, "url": "https://github.com/users/lead-gh/projects/9", "id": "P9"})
+        return clone, remote
+
+    def test_init_fills_and_pushes_event_docs(self):
+        clone, remote = self.event_clone()
+        self.write_cfg(board={"number": 9, "url": "https://github.com/users/lead-gh/projects/9", "id": "P9"},
+                       roster=[{**CFG["roster"][0], "strengths": "architecture", "agents": [{"name": "Zeus"}]},
+                               {**CFG["roster"][1], "strengths": "web design", "designer": True, "tool": "Codex"}])
+        (self.hub / "projects" / "hk" / "c4_context.png").write_bytes(b"PNG")
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        def show(branch, path):
+            return subprocess.run(["git", "--git-dir", str(remote), "show", f"{branch}:{path}"],
+                                  check=True, capture_output=True, text=True).stdout
+        hackathon = show("integration", "HACKATHON.md")
+        self.assertIn("# Hack Day", hackathon)
+        self.assertIn("| code freeze | 2026-10-04T14:00+01:00 | 2026-10-04T13:00Z |", hackathon)
+        self.assertIn("| Alex | @lead-gh | lead, architecture |", hackathon)
+        self.assertIn("| Sam | @sam-gh | designer, web design |", hackathon)
+        self.assertIn("The lead's agents: Zeus.", hackathon)
+        self.assertIn("Board: https://github.com/users/lead-gh/projects/9", hackathon)
+        readme = show("integration", "README.md")
+        self.assertIn("# Sample App", readme)
+        self.assertIn("gh repo clone o/hk", readme)
+        self.assertIn("docs/architecture/c4_context.png", readme)
+        self.assertEqual(show("integration", "IDEA.md"), (self.hub / "projects" / "hk" / "IDEA.md").read_text())
+        self.assertEqual(show("main", "README.md"), readme)
+        self.assertEqual(subprocess.run(["git", "--git-dir", str(remote), "show", "integration:docs/architecture/c4_context.png"],
+                                        check=True, capture_output=True).stdout, b"PNG")
+
+    def test_init_retry_finishes_main_push_after_docs_commit(self):
+        clone, remote = self.event_clone()
+        self.assertEqual(self.sync("--init").returncode, 0)
+        subprocess.run(["git", "-C", str(clone), "push", "-q", "--force", "origin", "main:main"], check=True)
+        before = subprocess.run(["git", "--git-dir", str(remote), "show", "main:HACKATHON.md"],
+                                check=True, capture_output=True, text=True).stdout
+        self.assertIn("<Event name>", before)
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        after = subprocess.run(["git", "--git-dir", str(remote), "show", "main:HACKATHON.md"],
+                               check=True, capture_output=True, text=True).stdout
+        self.assertIn("# Hack Day", after)
+
+    def test_init_placeholder_stops_before_push(self):
+        idea = "# The idea\n\n<feature>\n"
+        _, remote = self.event_clone(idea)
+        before = subprocess.run(["git", "--git-dir", str(remote), "rev-parse", "main"],
+                                check=True, capture_output=True, text=True).stdout
+        r = self.sync("--init")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("IDEA.md", r.stderr)
+        self.assertIn("<feature>", r.stderr)
+        after = subprocess.run(["git", "--git-dir", str(remote), "rev-parse", "main"],
+                               check=True, capture_output=True, text=True).stdout
+        self.assertEqual(before, after)
+
+    def test_init_broken_c4_link_stops_before_push(self):
+        clone, remote = self.event_clone()
+        readme = clone / "README.md"
+        readme.write_text(readme.read_text() + "\n![Missing](docs/architecture/c4_missing.png)\n")
+        subprocess.run(["git", "-C", str(clone), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(clone), "commit", "-qm", "broken link"], check=True)
+        subprocess.run(["git", "-C", str(clone), "push", "-q", "origin", "main:integration"], check=True)
+        before = subprocess.run(["git", "--git-dir", str(remote), "rev-parse", "integration"],
+                                check=True, capture_output=True, text=True).stdout
+        r = self.sync("--init")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("c4_missing.png", r.stderr)
+        after = subprocess.run(["git", "--git-dir", str(remote), "rev-parse", "integration"],
+                               check=True, capture_output=True, text=True).stdout
+        self.assertEqual(before, after)
+
+    def test_dry_run_init_describes_docs_without_writing(self):
+        clone, remote = self.event_clone()
+        before = subprocess.run(["git", "--git-dir", str(remote), "rev-parse", "integration"],
+                                check=True, capture_output=True, text=True).stdout
+        r = self.sync("--init", "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("would fill IDEA.md, HACKATHON.md, README.md", r.stdout)
+        self.assertIn("would commit docs: fill in the event and push integration and main", r.stdout)
+        self.assertIn("<Project name>", (clone / "README.md").read_text())
+        after = subprocess.run(["git", "--git-dir", str(remote), "rev-parse", "integration"],
+                               check=True, capture_output=True, text=True).stdout
+        self.assertEqual(before, after)
+
+    def test_sync_updates_idea_owners_table_only_when_changed(self):
+        _, remote = self.event_clone()
+        self.add_task("T-001", owner="Alex", agent="Zeus", detail="Files: web/\nDeadline: submit")
+        self.add_task("T-002", owner="Sam", detail="Files: web/page.html\nDeadline: submit")
+        self.add_task("T-003", owner="Pool", detail="Files: samples/\nDeadline: submit")
+        self.add_task("T-004", owner="Sam", detail="Files: misc/\nDeadline: submit")
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("IDEA.md owners table updated", r.stdout)
+        self.assertIn("warning: #4", r.stdout)
+        idea = subprocess.run(["git", "--git-dir", str(remote), "show", "integration:IDEA.md"],
+                              check=True, capture_output=True, text=True).stdout
+        self.assertIn("| web | `web/` | @lead-gh [Zeus], @sam-gh | #1, #2 |", idea)
+        self.assertIn("| pool | `samples/` | pool | #3 |", idea)
+        main_idea = subprocess.run(["git", "--git-dir", str(remote), "show", "main:IDEA.md"],
+                                   check=True, capture_output=True, text=True).stdout
+        self.assertIn("| web | `web/` | — | — |", main_idea)
+        commits = subprocess.run(["git", "--git-dir", str(remote), "rev-list", "--count", "integration"],
+                                 check=True, capture_output=True, text=True).stdout
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("IDEA.md owners table updated", r.stdout)
+        again = subprocess.run(["git", "--git-dir", str(remote), "rev-list", "--count", "integration"],
+                               check=True, capture_output=True, text=True).stdout
+        self.assertEqual(commits, again)
+        self.assertEqual(self.sync("--init").returncode, 0)
+        main_after = subprocess.run(["git", "--git-dir", str(remote), "show", "main:IDEA.md"],
+                                    check=True, capture_output=True, text=True).stdout
+        self.assertEqual(main_idea, main_after)
 
     def test_pool_owner_as_the_hub_stores_it(self):
         self.add_task("T-001", owner="Pool")            # `hub assign T-1 pool` stores "Pool"
@@ -576,6 +991,64 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
                 self.assertNotIn("Traceback", r.stderr)
                 self.assertIn("hackathon.json", r.stderr)
 
+    def test_two_designers_are_refused_and_named(self):
+        self.write_cfg(roster=[{**CFG["roster"][0], "designer": True},
+                               {**CFG["roster"][1], "designer": True}])
+        r = self.sync("--pull-only")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("designer", r.stderr)
+        self.assertIn("Alex", r.stderr)
+        self.assertIn("Sam", r.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_init_requires_event_fields_before_github(self):
+        for field in ("event", "title", "summary", "smoke"):
+            with self.subTest(field=field):
+                cfg = {**CFG}
+                del cfg[field]
+                (self.hub / "projects" / "hk" / "hackathon.json").write_text(json.dumps(cfg))
+                (self.stub / "calls.jsonl").unlink(missing_ok=True)
+                r = self.sync("--init")
+                self.assertEqual(r.returncode, 1)
+                self.assertIn(field, r.stderr)
+                self.assertEqual(self.calls(), [])
+                self.assertEqual(self.sync("--pull-only").returncode, 0)
+        self.write_cfg(event="", title="", summary="", smoke="")
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 1)
+        for field in ("event", "title", "summary", "smoke"):
+            self.assertEqual(sum(line.startswith(field + " ") for line in r.stderr.splitlines()), 1)
+
+    def test_designer_without_tool_is_refused_and_named(self):
+        for tool in (None, "", "  "):
+            with self.subTest(tool=tool):
+                designer = {**CFG["roster"][1], "designer": True}
+                if tool is not None:
+                    designer["tool"] = tool
+                self.write_cfg(roster=[CFG["roster"][0], designer])
+                r = self.sync("--pull-only")
+                self.assertEqual(r.returncode, 1)
+                self.assertIn("designer 'Sam' has no AI tool", r.stderr)
+                self.assertEqual(self.calls(), [])
+
+    def test_non_boolean_designer_is_refused_and_named(self):
+        for value in ("true", 1, None):
+            with self.subTest(value=value):
+                self.write_cfg(roster=[CFG["roster"][0], {**CFG["roster"][1], "designer": value}])
+                r = self.sync("--pull-only")
+                self.assertEqual(r.returncode, 1)
+                self.assertIn("designer", r.stderr)
+                self.assertIn("Sam", r.stderr)
+                self.assertEqual(self.calls(), [])
+
+    def test_zero_or_one_designer_is_valid(self):
+        for roster in (CFG["roster"], [CFG["roster"][0], {**CFG["roster"][1], "designer": True, "tool": "Codex"}],
+                       [CFG["roster"][0], {**CFG["roster"][1], "designer": False}]):
+            with self.subTest(roster=roster):
+                self.write_cfg(roster=roster)
+                r = self.sync("--pull-only")
+                self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_unknown_deadline_names_the_choices(self):
         self.add_task("T-001", detail="Context: x\nDeadline: freeze")
         r = self.sync()
@@ -588,7 +1061,8 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.add_task("T-001", status="done", issue=1, issue_hash="stale", issue_assignee="old-gh")
         r = self.sync()
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.writes(), [])
+        # The one write is the project-level FREEZE_AT a first sync pushes; no task is touched.
+        self.assertEqual([w for w in self.writes() if w[:2] != ["variable", "set"]], [])
         self.assertEqual(self.calls(["issue", "view"]), [])
         self.assertNotIn("warning", r.stdout)
 
@@ -604,7 +1078,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertEqual(self.writes(), [])           # no issue, no invite, no protection
 
     def test_repo_name_must_match_the_project(self):
-        self.write_cfg(repo="o/refinery")
+        self.write_cfg(repo="o/webapp")
         r = self.sync("--init")
         self.assertEqual(r.returncode, 1)
         self.assertIn("project", r.stderr)
@@ -704,7 +1178,8 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
 
     def test_labels_follow_the_owner(self):
         # a task moved to the pool must carry `pool`, or `label:pool no:assignee` never finds it
-        self.add_task("T-001", owner="Zeus", issue=1, issue_hash="h", issue_assignee="lead-gh",
+        self.add_task("T-001", owner="Alex", issue=1, issue_hash="h", issue_assignee="lead-gh",
+                      issue_agent="Zeus",
                       detail="Context: x\nDeadline: submit")
         data = json.loads((self.hub / "board.json").read_text())
         data["tasks"][0]["issue_hash"] = __import__("hashlib").sha256(b"Context: x\nDeadline: submit").hexdigest()
@@ -748,16 +1223,13 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
 
     def test_roster_comes_from_the_environment(self):
         self.env.update(HUB_LEAD="Lead", HUB_CLAUDE_AGENTS="Lead Builder", HUB_CODEX_AGENTS="")
-        self.add_task("T-001", owner="Builder")
+        self.add_task("T-001", owner="Alex", agent="Builder")    # owners are humans; agents are delegates
         r = self.sync()
         self.assertEqual(r.returncode, 0, r.stderr)
         [create] = self.calls(["issue", "create"])
         self.assertIn("task,agent:builder", create)
         self.assertIn("lead-gh", create)                 # hub agents work as the lead's hands
-        self.add_task("T-002", owner="Prometheus")       # not on this roster
-        r = self.sync()
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("T-002", r.stderr)
+        # an unknown delegate is refused earlier, by `hub delegate` (board.py agents_of)
 
     def test_init_creates_the_code_dir_on_a_fresh_machine(self):
         home = self.hub / "fresh-home"                  # no ~/code yet
@@ -767,6 +1239,439 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         r = self.sync("--init")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue((home / "code").is_dir())
+
+    def issue(self, n, body, title=None, assignee="sam-gh"):
+        return {"number": n, "title": title or f"title T-00{n}", "state": "OPEN",
+                "stateReason": "", "assignees": [{"login": assignee}] if assignee else [],
+                "labels": [{"name": "task"}], "url": "u", "body": body}
+
+    def test_github_edit_warns_every_sync_without_a_hub_change(self):
+        self.add_task("T-001")
+        self.sync()
+        (self.stub / "issues.json").write_text(json.dumps(
+            [self.issue(1, "teammate rewrote this\n\n<!-- hub-task: T-001 -->")]))
+        for _ in range(2):
+            r = self.sync()
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("#1 was edited on GitHub; not overwriting", r.stdout)
+            self.assertIn("hub edit 1 --take-github", r.stdout)
+        self.assertEqual(self.calls(["issue", "edit"]), [])
+
+    def test_warning_counts_a_removed_markdown_rule(self):
+        self.add_task("T-001", detail="Context: x\n---\nDeadline: submit")
+        self.sync()
+        (self.stub / "issues.json").write_text(json.dumps(
+            [self.issue(1, "Context: x\nDeadline: submit\n\n<!-- hub-task: T-001 -->")]))
+        r = self.sync()
+        self.assertIn("+0/-1 lines", r.stdout)
+        self.assertIn("    ----", r.stdout)
+
+    def test_taking_the_github_brief_adopts_it_with_one_notice(self):
+        self.add_task("T-001")
+        self.sync()
+        (self.stub / "issues.json").write_text(json.dumps(
+            [self.issue(1, "Context: teammate rewrote this\nDeadline: submit\n\n<!-- hub-task: T-001 -->")]))
+        data = json.loads((self.hub / "board.json").read_text())
+        data["tasks"][0]["detail"] = "Context: teammate rewrote this\nDeadline: submit"
+        (self.hub / "board.json").write_text(json.dumps(data))
+        r = self.sync()
+        self.assertNotIn("was edited on GitHub", r.stdout)
+        self.assertEqual(len(self.calls(["issue", "comment"])), 1)
+        self.assertEqual(self.calls(["issue", "edit"]), [])
+
+    def test_keeping_the_hub_brief_overwrites_github_with_one_notice(self):
+        import hashlib
+        self.add_task("T-001")
+        self.sync()
+        (self.stub / "issues.json").write_text(json.dumps(
+            [self.issue(1, "teammate rewrote this\n\n<!-- hub-task: T-001 -->")]))
+        data = json.loads((self.hub / "board.json").read_text())
+        data["tasks"][0]["issue_hash"] = hashlib.sha256(b"teammate rewrote this").hexdigest()
+        (self.hub / "board.json").write_text(json.dumps(data))
+        r = self.sync()
+        self.assertNotIn("was edited on GitHub", r.stdout)
+        self.assertEqual(len(self.calls(["issue", "edit"])), 1)
+        self.assertEqual(len(self.calls(["issue", "comment"])), 1)
+
+    def test_crlf_or_trailing_spaces_are_not_an_edit(self):
+        self.add_task("T-001")
+        self.sync()
+        body = json.loads((self.stub / "bodies.jsonl").read_text().splitlines()[0])
+        (self.stub / "issues.json").write_text(json.dumps(
+            [self.issue(1, body.replace("\n", "  \r\n"))]))
+        self.assertNotIn("was edited on GitHub", self.sync().stdout)
+
+    def test_deleting_only_the_marker_is_not_an_edit(self):
+        self.add_task("T-001")
+        self.sync()
+        body = json.loads((self.stub / "bodies.jsonl").read_text().splitlines()[0])
+        (self.stub / "issues.json").write_text(json.dumps(
+            [self.issue(1, body.replace("<!-- hub-task: T-001 -->", ""))]))
+        self.assertNotIn("was edited on GitHub", self.sync().stdout)
+
+    def test_pull_asks_for_bodies(self):
+        self.sync()
+        fields = [c[c.index("--json") + 1].split(",") for c in self.calls(["issue", "list"])
+                  if "--json" in c]
+        self.assertTrue(any("body" in f for f in fields), fields)
+
+    def test_owner_list_after_creating_issues(self):
+        self.add_task("T-001", owner="Sam")
+        self.add_task("T-002", owner="Alex", agent="Zeus")
+        self.add_task("T-003", owner="")
+        r = self.sync()
+        self.assertIn("owners (for IDEA.md):", r.stdout)
+        self.assertIn("Sam (@sam-gh): #1 title T-001", r.stdout)
+        self.assertIn("Alex (@lead-gh): #2 title T-002 [Zeus]", r.stdout)
+        self.assertIn("pool: #3 title T-003", r.stdout)
+
+    def test_no_owner_list_on_a_quiet_sync(self):
+        self.add_task("T-001")
+        self.sync()
+        self.assertNotIn("owners (for IDEA.md):", self.sync().stdout)
+
+    def test_owner_list_after_a_pool_pickup(self):
+        self.add_task("T-001", owner="", issue=4, issue_hash="h", issue_assignee=None)
+        (self.stub / "issues.json").write_text(json.dumps([
+            {"number": 4, "title": "t", "state": "OPEN", "stateReason": "",
+             "assignees": [{"login": "sam-gh"}], "labels": [{"name": "pool"}], "url": "u"}]))
+        r = self.sync("--pull-only")
+        self.assertIn("Sam (@sam-gh): #4", r.stdout)
+
+    def use_agents(self, cfg=AGENT_CFG):
+        (self.hub / "projects" / "hk" / "hackathon.json").write_text(json.dumps(cfg))
+        self.env["GH_COLLABORATORS"] = "lead-gh,sam-gh,bot-gh"
+
+    def editor(self, login, older="lead-gh", oldest_first=False):
+        # GitHub doesn't document userContentEdits' order, so the code picks the latest editedAt.
+        nodes = [{"editedAt": "2026-09-29T11:40:41Z", "editor": {"login": login}},
+                 {"editedAt": "2026-09-29T11:27:41Z", "editor": {"login": older}}]
+        if oldest_first:
+            nodes.reverse()
+        (self.stub / "graphql.json").write_text(json.dumps({"data": {"repository": {"issue": {
+            "userContentEdits": {"nodes": nodes}}}}}))
+
+    def edited(self, body, labels=("task",), assignee="lead-gh"):
+        (self.stub / "issues.json").write_text(json.dumps([{
+            "number": 1, "title": "title T-001", "state": "OPEN", "stateReason": "",
+            "assignees": [{"login": assignee}], "labels": [{"name": l} for l in labels],
+            "url": "u", "body": body}]))
+
+    def test_config_rejects_bad_agents(self):
+        for roster, needle in [
+            ([{"name": "Alex", "github": "lead-gh", "lead": True, "agents": [{"name": "robin"}]},
+              {"name": "Robin", "github": "mx-gh"}], "Robin"),
+            ([{"name": "Alex", "github": "lead-gh", "lead": True,
+               "agents": [{"name": "Prometheus", "github": "mx-gh"}]},
+              {"name": "Robin", "github": "mx-gh"}], "mx-gh"),
+            ([{"name": "Alex", "github": "lead-gh", "lead": True, "agents": [{"name": "Zeus"}]},
+              {"name": "Robin", "github": "mx-gh", "agents": [{"name": "zeus"}]}], "Zeus")]:
+            self.use_agents({**CFG, "roster": roster})
+            r = self.sync()
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(needle, r.stderr + r.stdout)
+
+    def test_owner_is_assignee_agent_is_label(self):
+        self.use_agents()
+        self.add_task("T-001", owner="Alex", agent="Prometheus")
+        self.sync()
+        create = self.calls(["issue", "create"])[0]
+        self.assertEqual(create[create.index("--assignee") + 1], "lead-gh")
+        self.assertIn("agent:prometheus", create[create.index("--label") + 1])
+
+    def test_agent_label_added_on_github_is_pulled(self):
+        self.use_agents()
+        self.add_task("T-001", owner="Alex")
+        self.sync()
+        body = json.loads((self.stub / "bodies.jsonl").read_text().splitlines()[0])
+        self.edited(body, labels=("task", "agent:zeus"))
+        self.sync()
+        self.assertEqual(self.tasks()["T-001"]["agent"], "Zeus")
+
+    def test_hub_delegate_adds_agent_label(self):
+        self.use_agents()
+        self.add_task("T-001", owner="Alex")
+        self.sync()
+        body = json.loads((self.stub / "bodies.jsonl").read_text().splitlines()[0])
+        self.edited(body)
+        data = json.loads((self.hub / "board.json").read_text())
+        data["tasks"][0]["agent"] = "Zeus"
+        (self.hub / "board.json").write_text(json.dumps(data))
+        self.sync()
+        edits = self.calls(["issue", "edit"])
+        self.assertTrue(any("agent:zeus" in c for c in edits), edits)
+        self.assertEqual(self.tasks()["T-001"]["issue_agent"], "Zeus")
+
+    def test_new_agent_label_is_created_once_before_use(self):
+        cfg = {**AGENT_CFG, "roster": [{**AGENT_CFG["roster"][0],
+                                        "agents": [*AGENT_CFG["roster"][0]["agents"],
+                                                   {"name": "Cursor"}]}, AGENT_CFG["roster"][1]]}
+        self.use_agents(cfg)
+        self.add_task("T-001", owner="Alex", agent="Cursor")
+        self.add_task("T-002", owner="Alex", agent="Cursor")
+        self.sync()
+        calls = self.calls()
+        creates = [i for i, c in enumerate(calls) if c[:3] == ["label", "create", "agent:cursor"]]
+        issues = [i for i, c in enumerate(calls) if c[:2] == ["issue", "create"]]
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(len(issues), 2)
+        self.assertLess(creates[0], issues[0])
+
+    def test_pool_claim_by_agent_account_goes_to_its_human(self):
+        self.use_agents()
+        self.add_task("T-001", owner="", issue=4, issue_hash="h", issue_assignee=None)
+        (self.stub / "issues.json").write_text(json.dumps([{
+            "number": 4, "title": "t", "state": "OPEN", "stateReason": "",
+            "assignees": [{"login": "bot-gh"}, {"login": "lead-gh"}],
+            "labels": [{"name": "pool"}], "url": "u"}]))
+        self.sync("--pull-only")
+        t = self.tasks()["T-001"]
+        self.assertEqual((t["owner"], t["agent"]), ("Alex", "Prometheus"))
+        self.sync("--pull-only")
+        self.assertEqual(self.tasks()["T-001"]["agent"], "Prometheus")
+
+    def test_pool_pickup_removes_agent_account_assignee(self):
+        self.use_agents()
+        self.add_task("T-001", owner="")
+        self.sync()
+        body = json.loads((self.stub / "bodies.jsonl").read_text().splitlines()[0])
+        (self.stub / "issues.json").write_text(json.dumps([{
+            "number": 1, "title": "title T-001", "state": "OPEN", "stateReason": "",
+            "assignees": [{"login": "lead-gh"}, {"login": "bot-gh"}],
+            "labels": [{"name": "task"}, {"name": "pool"}], "url": "u", "body": body}]))
+        self.sync()
+        edits = self.calls(["issue", "edit"])
+        self.assertTrue(any(c[c.index("--remove-assignee") + 1] == "bot-gh"
+                            for c in edits if "--remove-assignee" in c), edits)
+
+    def test_owner_edit_is_adopted_and_lead_told(self):
+        self.use_agents()
+        self.add_task("T-001", owner="Sam", detail="Context: x\nFiles: a/\nDeadline: submit")
+        self.sync()
+        self.edited("Context: better\nFiles: a/\nDeadline: submit\n\n<!-- hub-task: T-001 -->",
+                    assignee="sam-gh")
+        self.editor("sam-gh")
+        r = self.sync()
+        self.assertNotIn("was edited on GitHub", r.stdout)
+        self.assertEqual(self.tasks()["T-001"]["detail"], "Context: better\nFiles: a/\nDeadline: submit")
+        self.assertEqual(self.calls(["issue", "comment"]), [])
+        self.assertIn("Sam edited #1", (self.hub / "inbox" / "Zeus.jsonl").read_text())
+
+    def test_owner_edit_is_adopted_whatever_order_github_lists_edits(self):
+        self.use_agents()
+        self.add_task("T-001", owner="Sam", detail="Context: x\nFiles: a/\nDeadline: submit")
+        self.sync()
+        self.edited("Context: better\nFiles: a/\nDeadline: submit", assignee="sam-gh")
+        self.editor("sam-gh", oldest_first=True)
+        self.assertNotIn("was edited on GitHub", self.sync().stdout)
+
+    def test_agent_account_edit_is_adopted(self):
+        self.use_agents()
+        self.add_task("T-001", owner="Alex", agent="Prometheus",
+                      detail="Context: x\nFiles: a/\nDeadline: submit")
+        self.sync()
+        self.edited("Context: y\nFiles: a/\nDeadline: submit", labels=("task", "agent:prometheus"))
+        self.editor("bot-gh")
+        self.sync()
+        self.assertEqual(self.tasks()["T-001"]["detail"], "Context: y\nFiles: a/\nDeadline: submit")
+
+    def test_files_change_by_owner_warns(self):
+        self.use_agents()
+        self.add_task("T-001", owner="Sam", detail="Context: x\nFiles: a/\nDeadline: submit")
+        self.sync()
+        self.edited("Context: x\nFiles: a/, b/\nDeadline: submit", assignee="sam-gh")
+        self.editor("sam-gh")
+        r = self.sync()
+        self.assertIn("the Files: line changed", r.stdout)
+        self.assertEqual(self.tasks()["T-001"]["detail"], "Context: x\nFiles: a/\nDeadline: submit")
+
+    def test_stranger_edit_or_graphql_failure_warns(self):
+        self.use_agents()
+        self.add_task("T-001", owner="Sam", detail="Context: x\nFiles: a/\nDeadline: submit")
+        self.sync()
+        self.edited("Context: z\nFiles: a/\nDeadline: submit", assignee="sam-gh")
+        self.editor("lead-gh")
+        self.assertIn("was edited on GitHub", self.sync().stdout)
+        (self.stub / "graphql.json").unlink()
+        self.assertIn("was edited on GitHub", self.sync().stdout)
+
+    def test_owner_edit_while_hub_also_changed_warns(self):
+        self.use_agents()
+        self.add_task("T-001", owner="Sam", detail="Context: x\nFiles: a/\nDeadline: submit")
+        self.sync()
+        data = json.loads((self.hub / "board.json").read_text())
+        data["tasks"][0]["detail"] = "Context: lead replanned\nFiles: a/\nDeadline: submit"
+        (self.hub / "board.json").write_text(json.dumps(data))
+        self.edited("Context: sam\nFiles: a/\nDeadline: submit", assignee="sam-gh")
+        self.editor("sam-gh")
+        self.assertIn("was edited on GitHub", self.sync().stdout)
+
+    def test_init_invites_agent_accounts(self):
+        self.use_agents()
+        self.env["GH_REPO_MISSING"] = "1"
+        self.sync("--init")
+        invited = [c for c in self.calls() if c[:1] == ["api"] and "collaborators/bot-gh" in c[-1]]
+        self.assertTrue(invited)
+    def test_dry_run_writes_no_lock_and_says_so(self):
+        self.add_task("T-001")
+        r = self.sync("--dry-run")
+        self.assertFalse((self.hub / "projects" / "hk" / ".gh-sync.lock").exists())
+        self.assertIn("dry run: nothing changed", r.stdout)
+
+    def test_dry_run_init_says_nothing_changed(self):
+        self.env["GH_REPO_MISSING"] = "1"
+        r = self.sync("--init", "--dry-run")
+        self.assertIn("dry run: nothing changed", r.stdout)
+        self.assertNotIn("provisioned", r.stdout)
+        self.assertFalse((self.hub / "projects" / "hk" / ".gh-sync.lock").exists())
+
+    def test_dry_run_prints_freeze_writes_it_would_make(self):
+        self.env["GH_REPO_MISSING"] = "1"
+        r = self.sync("--init", "--dry-run")
+        self.assertIn("would run: gh variable set FREEZE_AT", r.stdout)
+        self.assertIn("would run: gh label create fix", r.stdout)
+        self.assertEqual([c for c in self.calls() if c[:2] == ["variable", "set"]], [])
+
+    def test_init_sets_freeze_variable_label_and_required_check(self):
+        self.env["GH_REPO_MISSING"] = "1"
+        self.sync("--init")
+        var = [c for c in self.calls() if c[:2] == ["variable", "set"]]
+        self.assertEqual(var[0][2], "FREEZE_AT")
+        self.assertIn("2026-10-04T13:00:00Z", var[0])            # CFG's 14:00+01:00 in UTC
+        self.assertTrue(any(c[:3] == ["label", "create", "fix"] for c in self.calls()))
+        integration = json.loads((self.stub / "protection-integration.json").read_text())
+        main = json.loads((self.stub / "protection-main.json").read_text())
+        self.assertEqual(integration["required_status_checks"],
+                         {"strict": False, "contexts": ["freeze-gate"]})
+        self.assertIsNone(main["required_status_checks"])
+        cfg = json.loads((self.hub / "projects" / "hk" / "hackathon.json").read_text())
+        self.assertEqual(cfg["freeze_at_pushed"], "2026-10-04T13:00:00Z")
+
+    def test_moved_freeze_is_pushed_once(self):
+        self.add_task("T-001")
+        cfg = json.loads((self.hub / "projects" / "hk" / "hackathon.json").read_text())
+        cfg["freeze_at_pushed"] = "2026-10-04T13:00:00Z"
+        cfg["deadlines"][0]["at"] = "2026-10-04T15:00:00+01:00"
+        (self.hub / "projects" / "hk" / "hackathon.json").write_text(json.dumps(cfg))
+        self.sync()
+        self.sync()
+        var = [c for c in self.calls() if c[:2] == ["variable", "set"]]
+        self.assertEqual(len(var), 1)
+        self.assertIn("2026-10-04T14:00:00Z", var[0])
+
+    def test_freeze_tags_once_and_reruns_stale_gates(self):
+        (self.stub / "prs.json").write_text(json.dumps([{"number": 7, "headRefName": "3-x"}]))
+        (self.stub / "runs.json").write_text(json.dumps([{"databaseId": 55, "status": "completed"}]))
+        r = self.sync("--freeze")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("tagged freeze at abc123", r.stdout)
+        def posts():
+            return [c for c in self.calls() if c[:1] == ["api"] and "POST" in c
+                    and "repos/o/hk/git/refs" in c]
+        self.assertEqual(len(posts()), 1)
+        self.assertTrue(any(x == "ref=refs/tags/freeze" for x in posts()[0]))
+        self.assertIn(["run", "rerun", "55", "-R", "o/hk"], self.calls())
+        (self.stub / "tag-exists").write_text("")
+        r = self.sync("--freeze")
+        self.assertIn("freeze tag already set; keeping it", r.stdout)
+        self.assertEqual(len(posts()), 1)                        # the first tag is kept
+
+    def test_freeze_does_not_retag_when_the_tag_lookup_fails(self):
+        self.env["GH_TAG_ERROR"] = "gh: Bad Gateway (HTTP 502)"
+        r = self.sync("--freeze")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("502", r.stderr + r.stdout)
+        self.assertEqual([c for c in self.calls() if "POST" in c and "repos/o/hk/git/refs" in c], [])
+
+    def test_freeze_waits_for_a_running_gate_then_reruns_it(self):
+        (self.stub / "prs.json").write_text(json.dumps([{"number": 7, "headRefName": "3-x"}]))
+        (self.stub / "runs.json").write_text(json.dumps([{"databaseId": 55, "status": "in_progress"}]))
+        (self.stub / "run-views.json").write_text(json.dumps(["in_progress", "completed"]))
+        self.env["FREEZE_RERUN_WAIT"] = "5"
+        self.env["FREEZE_RERUN_POLL"] = "0"
+        r = self.sync("--freeze")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(["run", "rerun", "55", "-R", "o/hk"], self.calls())
+
+    def test_freeze_fails_when_a_gate_is_not_refreshed_but_does_the_other_prs(self):
+        (self.stub / "prs.json").write_text(json.dumps([{"number": 7, "headRefName": "3-x"},
+                                                        {"number": 8, "headRefName": "4-y"}]))
+        (self.stub / "runs-3-x.json").write_text(json.dumps([{"databaseId": 55, "status": "in_progress"}]))
+        (self.stub / "runs-4-y.json").write_text(json.dumps([{"databaseId": 66, "status": "completed"}]))
+        self.env["FREEZE_RERUN_WAIT"] = "0"
+        r = self.sync("--freeze")
+        self.assertNotEqual(r.returncode, 0)                       # not a false success
+        self.assertIn("#7", r.stderr + r.stdout)
+        self.assertIn("still running and may have read the old", r.stdout)
+        self.assertIn("run hub gh-sync --freeze again", r.stdout)
+        self.assertEqual([c for c in self.calls() if c[:2] == ["run", "rerun"]],
+                         [["run", "rerun", "66", "-R", "o/hk"]])  # PR #8 still re-run
+        listing = next(c for c in self.calls() if c[:2] == ["run", "list"])
+        self.assertIn("databaseId,status", listing)
+
+    def test_freeze_waits_on_one_shared_deadline(self):
+        prs = [{"number": n, "headRefName": f"{n}-x"} for n in range(1, 6)]
+        (self.stub / "prs.json").write_text(json.dumps(prs))
+        (self.stub / "runs.json").write_text(json.dumps([{"databaseId": 55, "status": "in_progress"}]))
+        self.env["FREEZE_RERUN_WAIT"] = "3"
+        self.env["FREEZE_RERUN_POLL"] = "1"
+        r = self.sync("--freeze")
+        self.assertNotEqual(r.returncode, 0)
+        views = [c for c in self.calls() if c[:2] == ["run", "view"]]
+        self.assertLessEqual(len(views), 4, "each PR waited its own 3 s instead of sharing one budget")
+
+    def test_freeze_with_no_prs_or_no_runs_is_fine(self):
+        self.assertEqual(self.sync("--freeze").returncode, 0)
+        (self.stub / "prs.json").write_text(json.dumps([{"number": 7, "headRefName": "3-x"}]))
+        self.assertEqual(self.sync("--freeze").returncode, 0)
+
+    def test_init_makes_the_board_from_the_template(self):
+        self.env["GH_REPO_MISSING"] = "1"
+        (self.stub / "projects.json").write_text(json.dumps({"projects": [
+            {"number": 2, "title": "Hackathon board (template)"}]}))
+        r = self.sync("--init")
+        self.assertIn("board: https://github.com/users/lead-gh/projects/9", r.stdout)
+        cfg = json.loads((self.hub / "projects" / "hk" / "hackathon.json").read_text())
+        self.assertEqual(cfg["board"]["number"], 9)
+        self.assertTrue(any(c[:2] == ["project", "edit"] and "PUBLIC" in c for c in self.calls()))
+
+    def test_sync_updates_the_board_and_a_board_error_only_warns(self):
+        cfg = json.loads((self.hub / "projects" / "hk" / "hackathon.json").read_text())
+        cfg["board"] = {"number": 9, "url": "https://github.com/users/lead-gh/projects/9", "id": "P9"}
+        (self.hub / "projects" / "hk" / "hackathon.json").write_text(json.dumps(cfg))
+        self.add_task("T-001")
+        r = self.sync()                                   # the stub has no project field-list
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: board not updated", r.stdout)
+        self.assertIn("would update board", self.sync("--dry-run").stdout)
+
+    def test_board_gets_issues_created_in_the_same_sync(self):
+        cfg = json.loads((self.hub / "projects" / "hk" / "hackathon.json").read_text())
+        cfg["board"] = {"number": 9, "url": "https://github.com/users/lead-gh/projects/9", "id": "P9"}
+        (self.hub / "projects" / "hk" / "hackathon.json").write_text(json.dumps(cfg))
+        (self.stub / "fields.json").write_text(json.dumps({"fields": [
+            {"id": "S", "name": "Status", "options": [{"id": "t", "name": "Todo"}, {"id": "p", "name": "In progress"},
+                                                      {"id": "r", "name": "In review"}, {"id": "d", "name": "Done"}]},
+            {"id": "A", "name": "Agent"}, {"id": "D", "name": "Deadline"}]}))
+        self.env["GH_LIST_CREATED"] = "1"
+        self.add_task("T-001")
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        adds = [c for c in self.calls() if c[:2] == ["project", "item-add"]]
+        self.assertEqual(len(adds), 1, r.stdout)
+        self.assertIn("https://github.com/o/hk/issues/1", adds[0])
+
+    def test_freeze_pushes_a_moved_freeze_time_first(self):
+        cfg = json.loads((self.hub / "projects" / "hk" / "hackathon.json").read_text())
+        cfg["freeze_at_pushed"] = "2026-10-04T13:00:00Z"
+        cfg["deadlines"][0]["at"] = "2026-10-04T15:00:00+01:00"
+        (self.hub / "projects" / "hk" / "hackathon.json").write_text(json.dumps(cfg))
+        self.assertEqual(self.sync("--freeze").returncode, 0)
+        calls = self.calls()
+        var = [i for i, c in enumerate(calls) if c[:2] == ["variable", "set"]]
+        tag = [i for i, c in enumerate(calls) if "POST" in c and "repos/o/hk/git/refs" in c]
+        self.assertTrue(var and tag and var[0] < tag[0], calls)
+        self.assertIn("2026-10-04T14:00:00Z", calls[var[0]])
 
 
 if __name__ == "__main__":

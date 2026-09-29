@@ -70,6 +70,10 @@ MODAL_MARKERS=(
     "what to do differently"
     "Do you want to"
     "Do you trust"
+    # Codex's "Agent command center" task list: not a dialog, but text typed there is lost
+    # (dry run #4: a wake landed in it and the task never started). Defer until it's closed.
+    "Agent command center"
+    "enter open"
 )
 
 pane_shows_modal() {
@@ -270,6 +274,21 @@ deliver_request() {
     if [ -e "$DELIVERED_DIR/$id" ]; then
         rm -f "$file"
         log "deduplicated id=$id session=$sess"
+        return 0
+    fi
+    # Already read with `hub receive`, or too old to still be worth a keystroke: drop the
+    # wake only. The message itself stays in the durable inbox. (Dry runs #3 and #4: dozens
+    # of wakes from earlier days were replayed into a live session, one into a question box.)
+    local agent="${sess#hub-}"; agent="${agent^}"
+    if [ -e "$HUB_DIR/inbox/.received/$agent/$id" ]; then
+        rm -f "$file" "$DEFERRED_DIR/$id"; : > "$DELIVERED_DIR/$id"
+        log "dropped id=$id session=$sess (already received)"
+        return 0
+    fi
+    local born="${id%%-*}"
+    if [[ "$born" =~ ^[0-9]{19}$ ]] && (( $(date +%s) - born / 1000000000 > ${HUB_WAKE_MAX_AGE:-21600} )); then
+        rm -f "$file" "$DEFERRED_DIR/$id"; : > "$DELIVERED_DIR/$id"
+        log "dropped id=$id session=$sess (older than ${HUB_WAKE_MAX_AGE:-21600}s; message stays in the inbox)"
         return 0
     fi
     if ! tmux has-session -t "$sess" 2>/dev/null; then

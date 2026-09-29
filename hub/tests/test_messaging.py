@@ -214,6 +214,46 @@ def test_dedup(b):
           f"delivered {got.count('dedup payload')} times")
 
 
+def test_stale_wakes_are_dropped(b):
+    """Dry runs #3 and #4: dozens of wakes from earlier days, whose messages had long been
+    read, were replayed into a live session and one landed in a question box. A wake whose
+    message was already received, or that is hours old, is dropped; the inbox keeps the
+    message either way."""
+    wake = os.path.join(b.dir, "wake"); os.makedirs(wake, exist_ok=True)
+
+    def deliver(sess, rid):
+        p = os.path.join(wake, f"{rid}.wake")
+        with open(p, "w") as f:
+            f.write(f"{sess}\n[hub:{rid}] stale payload {rid}\nversion=1\nid={rid}\nattempts=0\n")
+        return sh([HUBWAKED, "--deliver", p], env=b.env)
+
+    sess, out = b.target("t12r")
+    rid = f"{time.time_ns()}-1-1"
+    agent = sess[len("hub-"):].capitalize()
+    receipts = os.path.join(b.dir, "inbox", ".received", agent)
+    os.makedirs(receipts, exist_ok=True)
+    open(os.path.join(receipts, rid), "w").close()
+    deliver(sess, rid)
+    time.sleep(2)
+    got = open(out).read() if os.path.exists(out) else ""
+    check("a wake for an already-received message is not typed", rid not in got, got[-200:])
+
+    sess2, out2 = b.target("t12o")
+    old = f"{time.time_ns() - 7 * 3600 * 10**9}-1-2"
+    deliver(sess2, old)
+    time.sleep(2)
+    got2 = open(out2).read() if os.path.exists(out2) else ""
+    check("a wake older than 6 hours is not typed", old not in got2, got2[-200:])
+    logf = os.path.join(b.dir, "wake", "hubwaked.log")
+    text = open(logf).read() if os.path.exists(logf) else ""
+    check("both drops are logged", "already received" in text and "older than" in text, text[-300:])
+
+    sess3, out3 = b.target("t12f")
+    fresh = f"{time.time_ns()}-1-3"
+    deliver(sess3, fresh)
+    check("a fresh, unread wake is still delivered", fresh in wait_for(out3), "")
+
+
 def test_relay_health_and_recovery(b):
     """T-009. A relay that dies silently turns every wake into a lost message, so the
     health signal has to be trustworthy and queued work has to survive a restart."""
@@ -392,6 +432,32 @@ def test_modal_dialog_is_never_confirmed_by_a_wake(b):
         daemon.wait(timeout=10)
 
 
+def test_codex_menu_defers_the_wake(b):
+    """Dry run #4: Prometheus's Codex sat on its "Agent command center" task list; a wake typed
+    there moved the cursor (so it looked delivered) and was lost. It must wait instead."""
+    sess = f"hub-menu{b.tag}"
+    typed = os.path.join(b.dir, "menu-typed.txt")
+    script = os.path.join(b.dir, "menu.sh")
+    with open(script, "w") as f:
+        f.write('echo "  Agent command center  Group: Project"\n'
+                'echo "  ? help  esc back  up/down move  enter open  n new"\n'
+                f'read -r l && echo "$l" > {typed}\n'
+                'sleep 120\n')
+    sh(["tmux", "new-session", "-d", "-s", sess, "-c", b.dir, "bash", script])
+    b.sessions.append(sess)
+    time.sleep(1)
+    daemon = subprocess.Popen([HUBWAKED], env=b.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        sh([HUBMSG, f"Menu{b.tag}", "wake arriving on a menu"], env=b.env)
+        time.sleep(6)
+        check("a wake is not typed into Codex's command-center menu", not os.path.exists(typed), "")
+        logf = os.path.join(b.dir, "wake", "hubwaked.log")
+        text = open(logf).read() if os.path.exists(logf) else ""
+        check("the menu wake is deferred", "deferred" in text, text[-300:])
+    finally:
+        daemon.terminate()
+
+
 def main():
     b = Bed()
     print(f"bed: {b.dir}\n")
@@ -399,11 +465,12 @@ def main():
         for t in (test_content_integrity, test_newline_folding, test_cold_target,
                   test_asleep_vs_relay, test_relay_rejects_bad_targets,
                   test_hyphenated_agent_name_is_woken, test_asleep_request_returns_to_queue,
-                  test_dedup,
+                  test_dedup, test_stale_wakes_are_dropped,
                   test_relay_health_and_recovery, test_stale_code_and_resolved_error_status,
                   test_attached_pane_defers_without_collision,
                   test_single_delivery_with_daemon_running,
-                  test_modal_dialog_is_never_confirmed_by_a_wake):
+                  test_modal_dialog_is_never_confirmed_by_a_wake,
+                  test_codex_menu_defers_the_wake):
             print(f"{t.__name__}:")
             try:
                 t(b)

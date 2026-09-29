@@ -226,6 +226,12 @@ hub block T-003 "why it's stuck"        # flag a blocker
 hub note T-003 "progress update"        # leave a note
 hub release T-003                       # put it back
 hub notify Hermes "text" --task T-003   # queue a durable message
+hub assign T-003 <owner|pool>           # hand a task to a person (or the pool)
+hub delegate T-003 <agent>              # ...and to one of that person's agents
+hub review --name approval-1 --title "Idea + C4" c4_*.png IDEA.md   # approval window built from files
+hub gh-sync --project <p> [--init|--freeze|--dry-run]   # hackathon: board ↔ GitHub Issues
+hub live --project <p> [--once]         # hackathon: the mechanical Live loop (run it in tmux)
+hub live --project <p> --merge-now|--hold-merges|--resume-merges   # the reviewer sets the merge pace
 hub brief                               # where you stand: inbox, your work, what peers hold
 hub inbox [--clear]                     # read messages queued for you
 hub receive <message-id>                # reveal one wake payload once
@@ -359,7 +365,13 @@ From `~/hub`:
 ```bash
 python3 tests/test_board.py
 python3 tests/test_messaging.py
+python3 tests/test_gh_sync.py       # the hackathon sync
+python3 tests/test_gh_board.py
+python3 tests/test_live.py          # hub live
+python3 tests/test_live_merge.py
+python3 tests/test_review.py
 ```
 
-Both suites are dependency-free and use temporary boards. The messaging suite creates
+Run them with `HUB_DIR` and `HUB_AGENT` unset, so nothing touches your live hub. The suites are
+dependency-free and use temporary boards. The messaging suite creates
 isolated scratch tmux sessions and never types into a real agent pane.

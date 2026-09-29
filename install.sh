@@ -110,6 +110,7 @@ step "hub -> $HUB_DIR"
 run mkdir -p "$HUB_DIR/tests" "$HUB_DIR/runbooks"
 for f in board.py hubmsg hubwaked hubctl; do put "$REPO/hub/$f" "$HUB_DIR/$f" 755 owned; done
 put "$REPO/hub/gh_sync.py" "$HUB_DIR/gh_sync.py" 644 owned   # imported by board.py: missing = hub crashes
+for f in gh_board.py live.py live_merge.py review.py; do put "$REPO/hub/$f" "$HUB_DIR/$f" 644 owned; done   # imported by board.py / gh_sync.py
 put "$REPO/hub/shell.sh" "$HUB_DIR/shell.sh" 644 owned
 put "$REPO/hub/.gitignore" "$HUB_DIR/.gitignore" 644 owned
 # Docs and the Codex protocol are yours to edit (docs/customizing.md tells you to rename
@@ -172,6 +173,12 @@ if [ "$DO_CLAUDE" = 1 ]; then
         fi
         run cp -R "$skill" "$dst"
         say "  skill: $name"
+    done
+
+    # Agent definitions: the hackathon lead starts its builder sub-agents from agents/builder.md.
+    run mkdir -p "$CLAUDE_DIR/agents"
+    for agent in "$REPO"/claude/agents/*.md; do
+        put_text "$agent" "$CLAUDE_DIR/agents/$(basename "$agent")"
     done
 
     if [ ! -f "$CLAUDE_DIR/settings.json" ]; then

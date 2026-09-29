@@ -7,6 +7,7 @@
 #   HUB_HOME_PROJECT   repo a bare agent name lands in from outside any repo (default: none,
 #                      so the agent starts in the current directory)
 #   HUB_LEAD           the planning agent; runs on the default ~/.claude account (default Zeus)
+#   HUB_REVIEWER       the hackathon reviewer agent `hub live` sends PRs to  (default Hermes)
 #   HUB_CLAUDE_AGENTS  Claude Code agents, space-separated     (default "Zeus Apollo Hermes Athena")
 #   HUB_CODEX_AGENTS   Codex agents, space-separated           (default "Prometheus")
 #   HUB_RELAY_SESSION  tmux session name of the wake relay     (default hub-relay)
