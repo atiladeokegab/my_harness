@@ -20,3 +20,6 @@ lesson in each generalises.
 | [`portal-page-couldnt-load-stale-chunks.md`](portal-page-couldnt-load-stale-chunks.md) | A Next.js app shows "This page couldn't load" or renders with no CSS — stale build chunks. |
 | [`tailwind-layer-order.md`](tailwind-layer-order.md) | A Tailwind utility silently loses to a component class. |
 | [`screenshot-colour-p3-shift.md`](screenshot-colour-p3-shift.md) | A brand colour sampled from a screenshot looks "changed" while every grey matches. |
+| [`install-factory-timers.md`](install-factory-timers.md) | Switching on the factory: factory.json, the dispatcher/watch/snapshot/weekly timers, the snapshot bucket and the heartbeat hooks. |
+| [`restore-hub.md`](restore-hub.md) | The board is lost or corrupt, or you are moving the hub to a new machine: restore it from the snapshot bucket. |
+| [`worktree-hooks-leak-git-dir.md`](worktree-hooks-leak-git-dir.md) | History in the main repo changes after a commit in a linked worktree: hooks get an absolute `GIT_DIR`. |
