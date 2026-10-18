@@ -370,8 +370,40 @@ python3 tests/test_gh_board.py
 python3 tests/test_live.py          # hub live
 python3 tests/test_live_merge.py
 python3 tests/test_review.py
+python3 tests/test_gh_sync_factory.py   # the factory poll
+python3 tests/test_dispatch.py      # the dispatcher
+python3 tests/test_watchdog.py      # health watch, heartbeat hook, snapshots
+python3 tests/test_run.py           # hubrun
+python3 tests/test_inbox_gc.py
 ```
 
 Run them with `HUB_DIR` and `HUB_AGENT` unset, so nothing touches your live hub. The suites are
 dependency-free and use temporary boards. The messaging suite creates
 isolated scratch tmux sessions and never types into a real agent pane.
+
+## The factory
+
+Optional, off until you switch it on (`runbooks/install-factory-timers.md`; how it works:
+`OVERVIEW.md`). The commands you use by hand:
+
+```bash
+hub pause "reason"            # kill switch: no claims, wakes, polls, headless runs or merges
+hub resume
+hub edit T-012 --tag headless # the dispatcher runs it unattended with hubrun
+hub edit T-012 --untag untrusted   # only $HUB_LEAD clears untrusted (after reading the issue)
+hubrun T-012                  # one headless run now; the result lands as a task note
+python3 ~/hub/dispatch.py tick --dry-run    # who would be woken, for what
+python3 ~/hub/dispatch.py watch --dry-run   # each live pane's health
+```
+
+`hub done` runs the task's `verify:` command (default `make check` in the task's checkout) and
+refuses on failure; at two failed attempts the task blocks and the lead is told. A task tagged
+`standing` (a watch duty, a review rota) never makes its owner look busy to the dispatcher.
+
+## Known limit: identity is self-declared
+
+Board commands take the acting agent from `--as` or `HUB_AGENT`. Rules that depend on who acts (only
+`$HUB_LEAD` clears `untrusted`; a builder's LGTM never counts) stop a naive injected instruction or an honest
+mistake, not a determined one. Closing that needs signed identities; it is logged with the signed-LGTM
+shortcut in `live_merge.py`. Likewise any agent can `hub edit --tag headless`, which hands the task to an
+unattended `run.py` (`hubrun`) on the next dispatch tick: the same power as calling `hubrun` directly.

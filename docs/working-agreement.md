@@ -13,6 +13,33 @@ actually went wrong.
 3. **Then execute.** Workers claim, do the work and report back. A worker who finds itself
    redesigning the approach mid-task stops and messages the lead rather than improvising.
 
+## Planning rules learned running the factory
+
+Five rules from turning the hub into a factory, each adopted after it would have prevented a
+real problem:
+
+- **F1. A README stub comes with the first working code.** The first task that makes the repo run
+  also writes a README stub: what it is, how to run it, and its status. Nobody opening the repo
+  mid-cycle should find nothing.
+- **F2. Docs merge on their evidence; code is reviewed first.** A diff of only docs, READMEs and
+  media (no code, test, config or dependency file) commits on its pasted evidence and is
+  reviewed after. Everything else, including files that run as hooks, timers or launchers, is
+  reviewed before it lands. `hub live` enforces this for PRs.
+- **F3. A new repo starts with a spine.** For a repo with no code yet, the first task is the
+  spine: one agent in one session builds the thinnest version that runs end to end, with one
+  test, and every other task `--dep`s it. Parallel tasks then build on running code, not on a
+  spec. Existing repos keep the normal split.
+- **F4. Repeated mistakes become rules.** Whenever a review repeats a point already made earlier,
+  the reviewer writes one `rule candidate:` line (date, commit, the rule, where it was said
+  before). The weekly task promotes the ones that would have prevented a real defect into
+  AGENTS.md, CLAUDE.md, a skill or a runbook. The closing task of every board also moves the
+  rules agents broke twice this cycle into the repo's AGENTS.md, with the incident in the commit
+  body.
+- **F6. Known limitations are written as failures.** The closing task of any board that deploys
+  or ships an artefact writes the README's `Known limitations` from a grep of `shortcut:` and
+  `ponytail:` comments plus one run against the real target. Anything not tried is "not tested",
+  and a failure is listed as a failure.
+
 ## One file, one owner
 
 Two agents editing the same file at the same time lose work, and they lose it quietly: the

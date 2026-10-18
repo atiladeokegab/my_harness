@@ -48,7 +48,7 @@ acceptance criterion in a skill.
 | Path | What it is |
 |---|---|
 | [`install.sh`](install.sh) | Idempotent installer. Backs up anything it replaces and never touches board data. Re-run it after `git pull` to upgrade. |
-| [`hub/`](hub/) | The multi-agent hub: `board.py` (the `hub` CLI), `gh_sync.py` (`hub gh-sync`), `hubmsg`, `hubwaked`, `shell.sh`, and three test suites. [`HUB.md`](hub/HUB.md) is the operating manual. |
+| [`hub/`](hub/) | The multi-agent hub: `board.py` (the `hub` CLI), `gh_sync.py` (`hub gh-sync`), `live.py` (`hub live`), `hubmsg`, `hubwaked`, `shell.sh`, the optional factory (`dispatch.py`, `run.py`, `systemd/`, `factory.example.json`), and their test suites. [`HUB.md`](hub/HUB.md) is the operating manual. |
 | [`claude/CLAUDE.md`](claude/CLAUDE.md) | Global instructions for every session: the hub protocol, how I like to work, and engineering defaults (uv, testing, deploys). |
 | [`claude/settings.json`](claude/settings.json) | Settings template with agent teams on and an auto-mode skeleton. |
 | [`claude/skills/hackathon/`](claude/skills/hackathon/) | The lead agent's script for a team hackathon: deadlines first, plan, assign, publish to GitHub Issues, review and merge. See the [hackathon kit](docs/hackathon-kit.md). |
@@ -57,6 +57,26 @@ acceptance criterion in a skill.
 | [`runbooks/`](runbooks/) | Problems that already cost real time, each with the symptom, how to confirm it, and the fix. |
 | [`templates/`](templates/) | Starting points for a project `CLAUDE.md` and `AGENTS.md`, project settings, runbooks and hub tasks. |
 | [`docs/`](docs/) | The guides below. |
+
+## The factory (optional)
+
+The hub can also run as a small AI code factory, so work moves without you relaying it:
+
+1. An issue labelled `agent`, or a red CI run on `main`, in a repo listed in `factory.json` becomes
+   a board task. Issues from people without write access arrive wrapped as untrusted data, and
+   only the lead can clear them.
+2. Every 2 minutes a dispatcher offers the next task to an idle agent, or runs it headless.
+3. `hub done` runs the task's check (default `make check`) and refuses on failure; two failures
+   block the task and tell the lead.
+4. `hub live` opens the PR, holds it without an Evidence block, flags files outside the task's
+   scope, never counts a builder's own approval, merges one PR at a time, smokes, promotes or
+   reverts, and turns red CI into a fix request.
+5. A health watch spots dialogs, rate limits, logins and stuck agents; snapshots copy the board
+   to a bucket; a weekly task turns repeated review findings into rules.
+
+`hub pause "reason"` stops all of it. It is off until you write `factory.json` and switch on the
+systemd timers: [`runbooks/install-factory-timers.md`](runbooks/install-factory-timers.md). How it
+works: the factory section of [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
 
 ## Docs
 
@@ -89,6 +109,8 @@ acceptance criterion in a skill.
 - [Claude Code](https://claude.com/claude-code) for the Claude agents.
 - Optional: [Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`) for
   the Codex worker, [uv](https://docs.astral.sh/uv/) for Python work, and `gh`.
+- For the optional factory: Linux with systemd user units, `gh`, and `gcloud` if you want
+  bucket snapshots.
 - One account per agent if you want independent rate limits. You can start with a single
   account and run only `zeus`.
 
@@ -99,9 +121,12 @@ cd hub
 python3 tests/test_board.py       # the board: state machine, locking, crash recovery
 python3 tests/test_messaging.py   # the transport: wakes, relay, dedup, dialog guards
 python3 tests/test_gh_sync.py     # hub gh-sync against a stub gh: guards, sync, crash safety
+python3 tests/test_live.py        # hub live; also test_live_merge, test_gh_board, test_review
+python3 tests/test_dispatch.py    # the factory; also test_watchdog, test_run, test_gh_sync_factory, test_inbox_gc
 ```
 
-All three suites are dependency-free and run against throwaway boards and scratch tmux sessions.
+Run them with every `HUB_*` variable unset (`env -u HUB_DIR -u HUB_AGENT ...`), so nothing touches
+your live hub. All suites are dependency-free and run against throwaway boards and scratch tmux sessions.
 They never type into a real agent's pane.
 
 ## Status and honesty

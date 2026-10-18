@@ -86,6 +86,98 @@ into the hub directory, and a small relay daemon outside the sandbox performs th
 
 ---
 
+## The factory (optional)
+
+On top of the board, the hub can run as a small AI code factory: work arrives from GitHub on its
+own, timers hand it to idle agents, `hub done` will not accept work whose check fails, and
+`hub live` enforces review, evidence and scope before anything merges. All of it is off until you
+write `factory.json` and switch on the timers (`runbooks/install-factory-timers.md`). The timers
+are systemd user units, so this part is Linux only.
+
+### The loop
+
+1. Work arrives: you plan it with the lead, or a factory repo gets an issue labelled `agent` or a
+   red CI run on `main`, which the factory poll turns into a board task.
+2. Every 2 minutes the dispatcher offers the next open task to an idle agent with `hubmsg`; a task
+   tagged `headless` runs unattended through `run.py` (`hubrun`) instead.
+3. The agent claims it and builds on a branch.
+4. `hub done` runs the task's `verify:` command (default `make check`) and refuses on failure; two
+   failures block the task and tell the lead.
+5. In a factory repo the agent posts `DONE:` with its evidence and `hub live` opens the PR; a PR
+   without an `## Evidence` block is held, and files outside the task's scope are flagged.
+6. The reviewer (`$HUB_REVIEWER`) reviews code; a builder never approves its own PR; docs-only PRs
+   merge on their evidence.
+7. `hub live` merges one PR at a time at the reviewed commit, smokes it, promotes `main` or
+   reverts and reopens the task, then deploys.
+8. A red CI run becomes a fix request, and every Monday a timer gives the lead a cleanup task and
+   a rule-promotion task.
+
+### The pieces
+
+| Unit (in `systemd/`) | When | Runs |
+|---|---|---|
+| `hub-dispatch.timer` | every 2 min | `dispatch.py tick`, and the factory poll every `poll_seconds` |
+| `hub-watch.timer` | every minute | `dispatch.py watch` |
+| `hub-snapshot-quick.timer` | every 15 min | `snapshot.sh quick` |
+| `hub-nightly.timer` | 02:30 UTC | `inbox_gc.py`, then `snapshot.sh full` |
+| `hub-weekly.timer` | Monday 07:00 UTC | `dispatch.py weekly` |
+
+**The dispatcher** (`dispatch.py tick`). For each agent in `factory.json` with `dispatch: true`,
+it checks the agent holds no claimed task (a task tagged `standing` does not count), is not rate
+limited, and its pane shows no dialog, error or "esc to interrupt". An idle agent is offered one
+task from the `projects` list, its own tasks first, then unowned ones, in `hub next`'s order. Tasks
+tagged `untrusted` are never offered. An offer with no claim in 30 minutes expires and goes to
+another agent, never back. State: `state/dispatch.json`.
+
+**The factory poll** (`gh_sync.poll_factory_repos`). For each repo in `factory.json`, open issues
+labelled `agent` become board tasks (`kind: factory`, carrying the issue number and a fixed "How to
+ship" block), and the latest failed run of each workflow on `main` becomes one fix task with its
+log tail. An issue from an author without write access is wrapped in `<untrusted-data>` and tagged
+`untrusted`, so only the lead can clear it. Poll-created tasks never carry a `verify:` command,
+because `verify` runs in a shell and the text came from GitHub.
+
+**The health watch** (`dispatch.py watch`). Reads the bottom of each live pane and classifies it:
+permission prompt, rate limited, logged out, or stuck. It matches the CLIs' own chrome, never
+prose, so an agent quoting an error is not flagged. Stuck means a claimed task and no heartbeat for
+30 minutes; `heartbeat.sh`, a Claude `PostToolUse` and `Stop` hook, writes `state/<agent>.json`.
+Codex has no such hook, so for a Codex agent stuck means the pane has not changed for 30 minutes.
+A rate limit trips a breaker until the reset time shown, and the dispatcher wakes nobody behind it.
+Changes go to `watchdog.log` and to the lead agent; the human hears of a limit once per reset window
+through the optional `lead_alert` command. It never kills or relaunches a session.
+
+**Weekly** (`dispatch.py weekly`). Two tasks for the lead: a cleanup of stale tasks, branches and
+worktrees, and a promotion of the week's `rule candidate:` lines from the reviewer into rules,
+skills or runbooks.
+
+**`hub live` in a factory repo.** `projects/<p>/hackathon.json` sets `factory: true`; the same loop
+runs hackathons, and `hub gh-sync` skips factory projects. Before review it holds a PR with no
+`## Evidence` block, and tells the reviewer about files outside the task's `Files:` line (re-read
+from the issue, except for untrusted tasks) and diffs over 800 lines. The reviewer's LGTM never
+counts on a PR the reviewer built; an LGTM may cite the head commit by the 12-character prefix
+`hub live` shows. A diff of only docs, READMEs and media merges on its evidence alone. A red
+required check on an open PR posts the log tail to the builder as a fix request and counts an
+attempt. Builders are labelled `agent:<name>` on their issues. A PR someone merges by hand is
+recorded like any other merge; a revert reopens the factory task. The roll call stays quiet while
+nothing has changed.
+
+**Headless runs** (`run.py`, `hubrun`). Runs one task unattended with `claude -p --output-format
+json` or `codex exec --json`, capped by turns (30), a wall timeout and, for Claude, a dollar budget
+($2). It strips API key variables so it bills the subscription seat, holds `run/<task>.lock`, stops
+cleanly on `PAUSE`, backs off when the CLI reports a rate limit, and records the session, turns
+and cost as a note on the task. It never changes the task's state: someone decides on the result.
+
+**The kill switch.** `hub pause "reason"` writes `$HUB_DIR/PAUSE`; `hub resume` removes it. While it
+exists `hub next` and `hub claim` refuse, the dispatcher wakes no one, the poll and weekly tasks
+stop, `run.py` will not start, and `hub live` skips its passes and merges. The health watch keeps
+reporting.
+
+**State off the disk.** `snapshot.sh quick` copies `board.json` and `events.jsonl` to the
+`snapshot_bucket` in `factory.json` every 15 minutes; `snapshot.sh full` writes a nightly tarball of
+the board, ledger, inboxes and `projects/`, keeping 30. Restore: `runbooks/restore-hub.md`.
+`inbox_gc.py` archives inbox lines older than seven days each night.
+
+---
+
 ## Decisions worth arguing about
 
 Listed because they are the places a reviewer should push.
@@ -138,6 +230,10 @@ Two lessons are worth repeating to anyone extending this:
   live bug because it never ran `hubmsg` while the relay daemon was up — the only
   configuration that exists in production.
 
+The factory pieces have their own suites: `test_dispatch.py`, `test_watchdog.py`,
+`test_gh_sync_factory.py`, `test_run.py` and `test_inbox_gc.py`, all against stub `tmux`, `gh`,
+`gcloud`, `systemd-run` and agent CLIs.
+
 ---
 
 ## Known limitations
@@ -155,6 +251,14 @@ Stated plainly, because a reviewer's time is wasted rediscovering them.
    rather than an end-to-end acknowledgement.
 3. **Wakes fail closed** — an ambiguous wake is dedup-guarded and never redelivered, so the
    durable inbox is the backstop rather than automatic retry.
+4. **Identity is self-declared.** Factory rules that depend on who acts (only the lead clears
+   `untrusted`; a builder's LGTM never counts) stop mistakes and naive injected instructions, not
+   a determined actor. See `HUB.md`.
+5. **One host.** Board, ledger and inboxes live on one disk. Snapshots make a restore possible,
+   not a failover; two live copies of the hub would fork the board.
+6. **The factory timers are Linux only.** They are systemd user units. On macOS the board, agents
+   and messaging work, but you would schedule `dispatch.py tick` yourself, and headless runs
+   started by the dispatcher need `systemd-run`.
 
 Fixed since the first draft of this document, listed because an earlier reviewer flagged
 them: crash recovery now replays a write-ahead log automatically rather than by hand; a
@@ -178,6 +282,10 @@ no longer confirm a dialog it happens to land on.
 | `ARCHITECTURE.md` | 252 | What it is and what is verified versus assumed |
 | `AGENTS-codex.md` | 107 | Protocol for the Codex agent (it reads `AGENTS.md`, never `CLAUDE.md`) |
 | `runbooks/` | — | Problems that already cost real time once, with symptom and fix |
+| `dispatch.py` | — | Factory dispatcher, health watch and weekly tasks |
+| `run.py` (`hubrun`) | — | Headless runner for one task |
+| `heartbeat.sh`, `snapshot.sh`, `inbox_gc.py` | — | Heartbeat hook, bucket snapshots, nightly inbox archive |
+| `factory.example.json`, `systemd/` | — | Factory config template and the timer units |
 
 ---
 
