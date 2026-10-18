@@ -417,6 +417,22 @@ class GhSyncTest(unittest.TestCase):
         self.assertEqual(t["issue_assignee"], "sam-gh")
         self.assertEqual(len(t["issue_hash"]), 64)
 
+    def test_factory_tasks_are_skipped_entirely(self):
+        """The factory poll owns a factory task's link to GitHub: gh-sync never creates an issue for
+        a CI fix task, never pushes a brief over an agent issue, and never closes either."""
+        self.add_task("T-001", owner=None, kind="factory", issue=4, detail="Return the sha.\n\nIssue: u4",
+                      source="https://github.com/o/hk/issues/4")
+        self.add_task("T-002", owner=None, kind="factory", detail="Run 9 failed on main.",
+                      source="https://github.com/o/hk/actions/runs/9")
+        (self.stub / "issues.json").write_text(json.dumps([
+            {"number": 4, "title": "add /version", "state": "CLOSED", "stateReason": "COMPLETED",
+             "assignees": [], "labels": [{"name": "agent"}], "url": "u4", "body": "Return the sha."}]))
+        before = self.tasks()
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([c for c in self.writes() if c[:1] == ["issue"]], [])
+        self.assertEqual(self.tasks(), before)
+
     def test_vertical_issue_has_vertical_label(self):
         self.add_task("T-001", kind="vertical")
         r = self.sync()
