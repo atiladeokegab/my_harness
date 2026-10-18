@@ -66,6 +66,7 @@ hub gh-sync --project <event> --init             # repo from template, invites, 
                                                  # and fills IDEA.md, HACKATHON.md, README, then pushes
 hub gh-sync --project <event>                    # every task becomes an issue; rerun any time
 tmux new -d -s hub-live-<event> "hub live --project <event>"   # the live crew's mechanical half
+systemctl --user enable --now hub-live@<event>   # ...or as a unit that restarts on a crash (Linux)
 ```
 
 `--init` publishes the approved event docs itself (it refuses to while a placeholder is left), and

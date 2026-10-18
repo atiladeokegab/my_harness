@@ -49,10 +49,19 @@ Two mechanisms, because two vendors:
 | Path | Mechanism | Works across vendors |
 |---|---|---|
 | Claude → Claude | `SendMessage`, a Claude-private Unix socket | No |
-| Anyone → anyone | `hubmsg`, a keystroke into the target's tmux pane | Yes |
+| Anyone → anyone | `hubmsg`, handed over by the target's Stop hook, else a keystroke into its idle tmux pane | Yes |
 
 Every agent lives in a tmux session named `hub-<agent>`, so typing into that pane is a wake
 mechanism that works regardless of which vendor's CLI is on the other end.
+
+`hubmsg` queues the payload in `inbox/<Agent>.jsonl` and one wake request per agent,
+`wake/<Agent>.wake`; more messages only extend its id list. The wake asks for `hub receive --pending`,
+which reveals every unreceived message once, so a repeated wake cannot repeat the work. Delivery
+prefers the hook: when an agent's turn ends, the optional `stop-deliver` hook hands it its pending
+messages as a Stop block, on both CLIs, with no keystroke. `hubwaked` types the receive line only into
+an idle pane: never while it is busy (`esc to interrupt`, or a mid-turn heartbeat), a person is
+attached, or a dialog is up, where an Enter would grant a permission. The lead is exempt from the Stop
+hook; the `inbox-surface` hook shows it unseen inbox lines on every prompt and tool call instead.
 
 The rule throughout is **queue *and* ping**: a durable inbox message (survives restarts,
 passive) plus a live wake (gets attention now, ephemeral). `hubmsg` does both in one call.
@@ -100,7 +109,8 @@ are systemd user units, so this part is Linux only.
    red CI run on `main`, which the factory poll turns into a board task.
 2. Every 2 minutes the dispatcher offers the next open task to an idle agent with `hubmsg`; a task
    tagged `headless` runs unattended through `run.py` (`hubrun`) instead.
-3. The agent claims it and builds on a branch.
+3. The agent claims it, which makes a fresh worktree for the task (`workspace.py`), and builds on a
+   branch there.
 4. `hub done` runs the task's `verify:` command (default `make check`) and refuses on failure; two
    failures block the task and tell the lead.
 5. In a factory repo the agent posts `DONE:` with its evidence and `hub live` opens the PR; a PR
@@ -116,18 +126,27 @@ are systemd user units, so this part is Linux only.
 
 | Unit (in `systemd/`) | When | Runs |
 |---|---|---|
-| `hub-dispatch.timer` | every 2 min | `dispatch.py tick`, and the factory poll every `poll_seconds` |
+| `hub-dispatch.path` | on a kick | `dispatch.py tick` when `state/dispatch.kick` changes: a task created, done, released, unblocked, assigned, delegated or reopened, or an agent other than the lead stopping a turn |
+| `hub-dispatch.timer` | every 2 min | `dispatch.py tick`, the fallback for a missed kick, and the factory poll every `poll_seconds` |
 | `hub-watch.timer` | every minute | `dispatch.py watch` |
 | `hub-snapshot-quick.timer` | every 15 min | `snapshot.sh quick` |
-| `hub-nightly.timer` | 02:30 UTC | `inbox_gc.py`, then `snapshot.sh full` |
-| `hub-weekly.timer` | Monday 07:00 UTC | `dispatch.py weekly` |
+| `hub-nightly.timer` | 02:30 UTC | `inbox_gc.py` (inbox lines and `logs/sh` over 7 days), `hub ws gc`, then `snapshot.sh full` |
+| `hub-weekly.timer` | Monday 07:00 UTC | `dispatch.py weekly`, then `hub spec converge` |
+| `hub-live@<p>.service` | always, one per project | `hub live --project <p>`, restarted 30 s after a crash; output to `projects/<p>/live.out` |
 
 **The dispatcher** (`dispatch.py tick`). For each agent in `factory.json` with `dispatch: true`,
 it checks the agent holds no claimed task (a task tagged `standing` does not count), is not rate
 limited, and its pane shows no dialog, error or "esc to interrupt". An idle agent is offered one
 task from the `projects` list, its own tasks first, then unowned ones, in `hub next`'s order. Tasks
-tagged `untrusted` are never offered. An offer with no claim in 30 minutes expires and goes to
-another agent, never back. State: `state/dispatch.json`.
+tagged `untrusted` or `stale` are never offered. An offer with no claim in 30 minutes expires and goes
+to another agent, never back. A tick within 5 s of the last waits out the gap; a kick during a tick runs
+it again, at most twice. State: `state/dispatch.json`.
+
+An agent with `"reset": "per-task"` in `factory.json` that holds no claimed or blocked task and whose
+last heartbeat is `Stop` gets a reset offer instead: `hubwaked` types `/clear` or `/new` first, so the
+task starts in a fresh session, and downgrades to a plain wake if any guard fails (`HUB.md`, "Fresh
+context per task"). The lead is never reset, and `hub done` refuses a reset agent a handoff note under
+20 characters, because only the board, inbox, git and memory survive the reset.
 
 **The factory poll** (`gh_sync.poll_factory_repos`). For each repo in `factory.json`, open issues
 labelled `agent` become board tasks (`kind: factory`, carrying the issue number and a fixed "How to
@@ -139,15 +158,18 @@ because `verify` runs in a shell and the text came from GitHub.
 **The health watch** (`dispatch.py watch`). Reads the bottom of each live pane and classifies it:
 permission prompt, rate limited, logged out, or stuck. It matches the CLIs' own chrome, never
 prose, so an agent quoting an error is not flagged. Stuck means a claimed task and no heartbeat for
-30 minutes; `heartbeat.sh`, a Claude `PostToolUse` and `Stop` hook, writes `state/<agent>.json`.
-Codex has no such hook, so for a Codex agent stuck means the pane has not changed for 30 minutes.
+30 minutes; `heartbeat.sh`, a `UserPromptSubmit`, `PostToolUse` and `Stop` hook, writes
+`state/<agent>.json`. Claude seats run it from `settings.json`, a Codex seat from `~/.codex/hooks.json`
+with `--agent <Name>`. Without a Codex heartbeat, stuck for a Codex agent means the pane has not changed
+for 30 minutes.
 A rate limit trips a breaker until the reset time shown, and the dispatcher wakes nobody behind it.
 Changes go to `watchdog.log` and to the lead agent; the human hears of a limit once per reset window
 through the optional `lead_alert` command. It never kills or relaunches a session.
 
 **Weekly** (`dispatch.py weekly`). Two tasks for the lead: a cleanup of stale tasks, branches and
 worktrees, and a promotion of the week's `rule candidate:` lines from the reviewer into rules,
-skills or runbooks.
+skills or runbooks. Then `hub spec converge` checks each spec project's live line against its PRD and
+opens one task per drift.
 
 **`hub live` in a factory repo.** `projects/<p>/hackathon.json` sets `factory: true`; the same loop
 runs hackathons, and `hub gh-sync` skips factory projects. Before review it holds a PR with no
@@ -158,7 +180,20 @@ counts on a PR the reviewer built; an LGTM may cite the head commit by the 12-ch
 required check on an open PR posts the log tail to the builder as a fix request and counts an
 attempt. Builders are labelled `agent:<name>` on their issues. A PR someone merges by hand is
 recorded like any other merge; a revert reopens the factory task. The roll call stays quiet while
-nothing has changed.
+nothing has changed. A finished gate or deploy, or a `hub done`, touches `projects/<p>/.tick-now`, and
+the loop runs a merge-and-deploy pass within 10 s instead of waiting for the next 5-minute tick. On
+Linux it runs as the systemd unit `hub-live@<p>` (or in tmux, as before).
+
+**Spec Tree** (`spec.py`, `hub spec`). In a project with a PRD (`projects/<p>/spec/requirements.json`),
+the PRD sits above the board: tasks are generated from its numbered acceptance lines, never written by
+hand, and every PR cites the lines it builds as `Req: A-3.2@2`. A change of intent is a delta file you
+approve through a `hub review` receipt. `hub spec apply` then writes PRD v+1, reverts the done work the
+change collides with onto `change/C-NNN`, and regenerates the whole tree: untouched done work carries
+over, everything unfinished is replaced. The radius is deterministic (trace links, entangled commits, a
+check run on the rewound tree), with no LLM in it. `hub live` adds three rules for spec projects: hold a
+PR whose `Req:` is missing or stale, send any PR touching `spec/` or `tests/acceptance/` to the lead,
+and merge a change branch into `integration` only after a detached gate runs every acceptance check, the
+smoke and `make check` on its head. Commands and roles: `HUB.md`, "Spec Tree".
 
 **Headless runs** (`run.py`, `hubrun`). Runs one task unattended with `claude -p --output-format
 json` or `codex exec --json`, capped by turns (30), a wall timeout and, for Claude, a dollar budget
@@ -173,7 +208,8 @@ reporting.
 
 **State off the disk.** `snapshot.sh quick` copies `board.json` and `events.jsonl` to the
 `snapshot_bucket` in `factory.json` every 15 minutes; `snapshot.sh full` writes a nightly tarball of
-the board, ledger, inboxes and `projects/`, keeping 30. Restore: `runbooks/restore-hub.md`.
+the board, ledger, inboxes, `projects/`, `artifacts/` and `hub.bundle` (a `git bundle --all` of the
+hub, the only off-disk copy of its history), keeping 30. Restore: `runbooks/restore-hub.md`.
 `inbox_gc.py` archives inbox lines older than seven days each night.
 
 ---
@@ -231,8 +267,10 @@ Two lessons are worth repeating to anyone extending this:
   configuration that exists in production.
 
 The factory pieces have their own suites: `test_dispatch.py`, `test_watchdog.py`,
-`test_gh_sync_factory.py`, `test_run.py` and `test_inbox_gc.py`, all against stub `tmux`, `gh`,
-`gcloud`, `systemd-run` and agent CLIs.
+`test_gh_sync_factory.py`, `test_run.py`, `test_inbox_gc.py`, `test_snapshot.py`,
+`test_workspace.py`, `test_spec.py` and `test_inbox_surface.py`, all against stub `tmux`, `gh`,
+`gcloud`, `systemd-run` and agent CLIs. `make check` runs every suite with the hub environment
+unexported, and is what `hub done` runs for a hub task.
 
 ---
 
@@ -256,7 +294,14 @@ Stated plainly, because a reviewer's time is wasted rediscovering them.
    a determined actor. See `HUB.md`.
 5. **One host.** Board, ledger and inboxes live on one disk. Snapshots make a restore possible,
    not a failover; two live copies of the hub would fork the board.
-6. **The factory timers are Linux only.** They are systemd user units. On macOS the board, agents
+6. **Spec Tree: a superseded builder is only told.** `apply` messages the holder of a stale task;
+   nothing stops its session or deletes its branch. A PR from it is still refused for its stale `Req:`.
+7. **Spec Tree: gaps in v1.** Files reached only by the commit cascade appear in no task's `Files:`, and
+   two requirements sharing files can put two builders on one file.
+8. **Wakes need the Codex hooks file.** Codex runs hooks in a shared daemon whose environment is whoever
+   started it, so a Codex agent's heartbeat and Stop-hook delivery depend on `~/.codex/hooks.json`
+   naming it explicitly. Without that file its messages wait for the relay to find its pane idle.
+9. **The factory timers are Linux only.** They are systemd user units. On macOS the board, agents
    and messaging work, but you would schedule `dispatch.py tick` yourself, and headless runs
    started by the dispatcher need `systemd-run`.
 
@@ -284,7 +329,11 @@ no longer confirm a dialog it happens to land on.
 | `runbooks/` | — | Problems that already cost real time once, with symptom and fix |
 | `dispatch.py` | — | Factory dispatcher, health watch and weekly tasks |
 | `run.py` (`hubrun`) | — | Headless runner for one task |
-| `heartbeat.sh`, `snapshot.sh`, `inbox_gc.py` | — | Heartbeat hook, bucket snapshots, nightly inbox archive |
+| `heartbeat.sh`, `snapshot.sh`, `inbox_gc.py` | — | Heartbeat hook and dispatch kick, bucket snapshots, nightly inbox and log prune |
+| `workspace.py` (`hub ws`) | — | A worktree per claim, and its gc |
+| `spec.py` (`hub spec`) | — | The PRD tree: check, impact, rewind, apply, converge |
+| `hooks/` | — | Optional Claude/Codex hooks: `stop-deliver.js`, `inbox-surface.js` |
+| `Makefile` | — | `make check`: every hub suite |
 | `factory.example.json`, `systemd/` | — | Factory config template and the timer units |
 
 ---

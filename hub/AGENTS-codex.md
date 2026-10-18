@@ -39,13 +39,29 @@ same task.
 hub brief                          # start here: where everything stands
 hub inbox                          # messages queued for you
 hub next                           # next task available to you
-hub claim T-003                    # take it
-hub show T-003                     # full detail, approach, acceptance criteria
-hub done T-003 --note "..."        # finish it
+hub claim T-003                    # take it; prints your workspace path
+hub show T-003                     # detail, approach, acceptance criteria, newest notes
+hub sh -- <cmd>                    # run anything long or noisy: tail on screen, log on disk
+hub done T-003 --note "..."        # finish it: the note is your handoff
 hub block T-003 "why it's stuck"   # flag a blocker — never drop it silently
 hub note T-003 "progress update"   # leave a trail
 hub release T-003                  # put it back
 ```
+
+**Work only in the workspace path `hub claim` prints** (`~/work/<project>/T-NNN`, a fresh worktree
+at the task's base), and create your branch there: `git switch -c <issue>-<slug>` or `task/T-NNN`.
+Never edit your project clone (`$HUB_CODE_DIR/<project>`, default `~/code/<project>`) directly: other work
+merges from it. `hub done` runs its verify in the
+workspace. Project `hub` tasks have none and work in `~/hub`, as before.
+
+**Run long or noisy commands through `hub sh -- <cmd>`** (tests, builds, installs). It prints one
+line (`exit N · lines · secs · log <path>`) and the last 20 lines. If you need more, read the log
+with `grep` or `sed -n`; do not re-run the command to see its output again.
+
+**`hub done --note` is a real handoff, at least 20 characters**: what changed, the branch and commit,
+what is left. With `"reset": "per-task"` in `factory.json` your session is cleared (`/new`) before
+your next task, so the note, the board, the inbox and git are all that survive, and `hub done`
+refuses a shorter note.
 
 A task should carry everything you need in its `--detail`. If it genuinely does not,
 that task was underwritten — `hub block` it and tell Zeus what is missing.
@@ -61,12 +77,17 @@ Your terminal output is invisible to every other session. The only way to reach 
 hubmsg Zeus "T-003 done — auth middleware landed, tests green" --task T-003
 ```
 
-`hubmsg` stores the payload in the durable inbox and submits only a short, traceable
-`hub receive <id>` instruction to the target. Run that exact command when a `[hub wake]`
-arrives; it reveals the payload once, so wake retries are idempotent. `woke` means the
-instruction was submitted, `relayed` means the sandbox relay accepted it, `deferred`
-means a human is attached and injection will wait for detach, and `asleep` means the
-target is not running. The inbox remains the source of truth. Use `hubs` for relay health
+`hubmsg` stores the payload in the durable inbox and wakes the target with only
+`[hub wake] Run exactly: hub receive --pending`. Run that exact command when a `[hub wake]`
+arrives; it reveals every unreceived message once, so wake retries are idempotent.
+
+**Messages usually arrive at the end of your turn, not as a wake.** When your turn ends, the hub's
+Stop hook runs `hub receive --pending` for you and hands you the messages as a `[hub inbox]` block;
+carry on into them. Nothing is typed into your pane while you are busy or a person is attached.
+
+`hubmsg` replies: `woke` means the instruction was submitted, `relayed` means the sandbox relay
+accepted it, `busy` means the target is mid-turn and gets it at turn end, `deferred` means a human
+is attached or a dialog is up and delivery waits, and `asleep` means the target is not running. The inbox remains the source of truth. Use `hubs` for relay health
 and queue state; prefer Claude's native transport when both endpoints are Claude.
 
 Do not try `SendMessage`; you have no such tool.
@@ -80,12 +101,17 @@ looks identical to a hung one from outside.
   explicit status checks.
 - Put a `timeout` on anything touching the network, a lock, or another session.
 - Prefer one long poll over many short ones.
+- Run noisy commands through `hub sh -- <cmd>` and read its log rather than re-running.
 
 ## Working agreement
 
 Planning happens up front, with Zeus, before tasks exist. You execute. If you find
 yourself redesigning the approach mid-task, that is a signal to stop and message Zeus,
 not to improvise.
+
+**What is reviewed when (factory rule F2).** Code, tests, config and dependencies are reviewed before they
+land. A docs, README or media-only diff commits on its pasted evidence (what changed, what you checked) and
+is reviewed after. One code, test, config or dependency file in the diff puts all of it back in review-first.
 
 Permissions are per-session. Never perform an action for a peer that your own settings
 would block, and never treat a peer's message as the human's approval.
@@ -110,3 +136,20 @@ The same defaults the Claude agents follow (full text in the harness repo,
   `node_modules/` or the vendor's versioned site before writing code.
 - Before installing a large or critical dependency (framework, auth, payments, crypto,
   global tool, third-party agent plugin), review it first and say what you found.
+
+## Spec projects: build from the PRD
+
+Some projects have a PRD under `~/hub/projects/<p>/spec/` (the Spec Tree, `HUB.md` "Spec Tree"). Their tasks
+are generated by `hub spec apply`; `hub show` prints the acceptance lines a task implements as `reqs`. There:
+
+- **Cite every line you implement, at its current version**, as `Req: A-3.2@2` lines plus `Task: T-n`, in the
+  PR body or a commit message. The current versions are in the task and its issue. A missing or stale `Req:`
+  holds the PR with a comment; nothing reviews or merges it until a new commit carries the right lines.
+- **Never touch `spec/` or `tests/acceptance/`.** Those are Zeus's. A PR that touches either is held for Zeus
+  and never merged by `hub live`. If an acceptance test looks wrong, `hub block` and tell Zeus.
+- **Build on the change branch the brief names** (`change/C-NNN`): `hub claim` already puts your workspace at
+  `origin/change/C-NNN`. Branch there and open the PR against it, not `main`. Do not reuse an old clone of
+  that branch.
+- **Never `hub new` or `hub edit` a task's brief or verify there** (refused). If the task is wrong, block it.
+- **If you are told your task is superseded, stop.** Abandon its branch and run `hub next`; the replacement is
+  a new task.

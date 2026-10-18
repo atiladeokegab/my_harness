@@ -48,9 +48,13 @@ acceptance criterion in a skill.
 | Path | What it is |
 |---|---|
 | [`install.sh`](install.sh) | Idempotent installer. Backs up anything it replaces and never touches board data. Re-run it after `git pull` to upgrade. |
-| [`hub/`](hub/) | The multi-agent hub: `board.py` (the `hub` CLI), `gh_sync.py` (`hub gh-sync`), `live.py` (`hub live`), `hubmsg`, `hubwaked`, `shell.sh`, the optional factory (`dispatch.py`, `run.py`, `systemd/`, `factory.example.json`), and their test suites. [`HUB.md`](hub/HUB.md) is the operating manual. |
+| [`hub/`](hub/) | The multi-agent hub: `board.py` (the `hub` CLI), `gh_sync.py` (`hub gh-sync`), `live.py` (`hub live`), `spec.py` (`hub spec`, the PRD tree), `workspace.py` (`hub ws`, a worktree per claim), `hubmsg`, `hubwaked`, `shell.sh`, optional agent hooks (`hooks/`), the optional factory (`dispatch.py`, `run.py`, `systemd/`, `factory.example.json`), and their test suites (`make check`). [`HUB.md`](hub/HUB.md) is the operating manual. |
 | [`claude/CLAUDE.md`](claude/CLAUDE.md) | Global instructions for every session: the hub protocol, how I like to work, and engineering defaults (uv, testing, deploys). |
 | [`claude/settings.json`](claude/settings.json) | Settings template with agent teams on and an auto-mode skeleton. |
+| [`claude/skills/hub-planning/`](claude/skills/hub-planning/) | The lead's planning layer: where specs and plans go, grilling and C4 before approval, seeding the PRD, and turning an approved plan into board tasks with one owner per file. |
+| [`claude/skills/hackathon-reviewer/`](claude/skills/hackathon-reviewer/) | The reviewer's routine: gated PRs, after-merge digests, the release review, and rule candidates. |
+| [`claude/skills/intake/`](claude/skills/intake/) | Label pasted material (yours, an outside brief, or for later) before acting on it, so someone else's document never becomes your instructions. |
+| [`claude/skills/clean-repo/`](claude/skills/clean-repo/) | Keep plans, reviews and agent config out of repos other people work in. |
 | [`claude/skills/hackathon/`](claude/skills/hackathon/) | The lead agent's script for a team hackathon: deadlines first, plan, assign, publish to GitHub Issues, review and merge. See the [hackathon kit](docs/hackathon-kit.md). |
 | [`claude/skills/design-system/`](claude/skills/design-system/) | A skill for authoring and enforcing a binding design system, then verifying it in a real browser. Includes a WCAG contrast and Display-P3 colour tool. |
 | [`examples/refinery-design/`](examples/refinery-design/) | A real, filled-in design skill from a shipping product: the worked example. |
@@ -65,7 +69,9 @@ The hub can also run as a small AI code factory, so work moves without you relay
 1. An issue labelled `agent`, or a red CI run on `main`, in a repo listed in `factory.json` becomes
    a board task. Issues from people without write access arrive wrapped as untrusted data, and
    only the lead can clear them.
-2. Every 2 minutes a dispatcher offers the next task to an idle agent, or runs it headless.
+2. A board change (or, as a fallback, every 2 minutes) starts a dispatcher that offers the next task
+   to an idle agent, optionally on a fresh session, or runs it headless. `hub claim` gives the task
+   its own worktree.
 3. `hub done` runs the task's check (default `make check`) and refuses on failure; two failures
    block the task and tell the lead.
 4. `hub live` opens the PR, holds it without an Evidence block, flags files outside the task's
@@ -73,6 +79,8 @@ The hub can also run as a small AI code factory, so work moves without you relay
    reverts, and turns red CI into a fix request.
 5. A health watch spots dialogs, rate limits, logins and stuck agents; snapshots copy the board
    to a bucket; a weekly task turns repeated review findings into rules.
+6. Optionally, a project's PRD drives the board (`hub spec`): a change of intent is an approved
+   delta, and the task tree is regenerated from it, rewinding only the work it collides with.
 
 `hub pause "reason"` stops all of it. It is off until you write `factory.json` and switch on the
 systemd timers: [`runbooks/install-factory-timers.md`](runbooks/install-factory-timers.md). How it
@@ -108,7 +116,8 @@ works: the factory section of [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
   agent commands are installed as executables, so they work from the default zsh.
 - [Claude Code](https://claude.com/claude-code) for the Claude agents.
 - Optional: [Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`) for
-  the Codex worker, [uv](https://docs.astral.sh/uv/) for Python work, and `gh`.
+  the Codex worker, [uv](https://docs.astral.sh/uv/) for Python work, `gh`, `make`, and `node` for
+  the optional agent hooks (turn-end message delivery, inbox surfacing).
 - For the optional factory: Linux with systemd user units, `gh`, and `gcloud` if you want
   bucket snapshots.
 - One account per agent if you want independent rate limits. You can start with a single
@@ -118,15 +127,17 @@ works: the factory section of [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
 
 ```bash
 cd hub
-python3 tests/test_board.py       # the board: state machine, locking, crash recovery
-python3 tests/test_messaging.py   # the transport: wakes, relay, dedup, dialog guards
+make check                        # every suite, 4 at a time, with the hub environment unexported
+python3 tests/test_board.py       # or one: the board: state machine, locking, crash recovery
+python3 tests/test_messaging.py   # the transport: wakes, relay, dedup, dialog, busy and reset guards
 python3 tests/test_gh_sync.py     # hub gh-sync against a stub gh: guards, sync, crash safety
 python3 tests/test_live.py        # hub live; also test_live_merge, test_gh_board, test_review
-python3 tests/test_dispatch.py    # the factory; also test_watchdog, test_run, test_gh_sync_factory, test_inbox_gc
+python3 tests/test_dispatch.py    # the factory; also test_watchdog, test_run, test_gh_sync_factory, test_inbox_gc, test_snapshot
+python3 -m unittest tests.test_spec   # hub spec; also test_workspace, test_inbox_surface (needs node)
 ```
 
-Run them with every `HUB_*` variable unset (`env -u HUB_DIR -u HUB_AGENT ...`), so nothing touches
-your live hub. All suites are dependency-free and run against throwaway boards and scratch tmux sessions.
+Run single suites with every `HUB_*` variable unset (`env -u HUB_DIR -u HUB_AGENT ...`), so nothing
+touches your live hub. All suites are dependency-free and run against throwaway boards and scratch tmux sessions.
 They never type into a real agent's pane.
 
 ## Status and honesty
