@@ -20,7 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 BOARD_PY = ROOT / "board.py"
 
 
-class BoardCase(unittest.TestCase):
+class BoardHelpers(unittest.TestCase):
+    """Fixtures only, so a subclass does not re-run BoardCase's tests."""
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="hub-board-test-")
         self.root = Path(self.temp.name)
@@ -35,15 +37,17 @@ class BoardCase(unittest.TestCase):
     def read_board(self):
         return json.loads((self.root / "board.json").read_text())
 
-    def run_hub(self, *args, agent="Zeus", project=None, stdin=None):
+    def run_hub(self, *args, agent="Zeus", project=None, stdin=None, cwd=None, env_extra=None):
         env = {k: v for k, v in os.environ.items()
-               if k not in ("HUB_DIR", "HUB_AGENT", "HUB_PROJECT")}
-        env.update(HUB_DIR=str(self.root), HUB_AGENT=agent)
+               if not k.startswith("HUB_")}  # HUB_CODE_DIR, HUB_LEAD: the roster under test is the default one
+        # HOME too: hub done looks for the task's checkout under ~/code, and a real one
+        # with a `make check` target would run its suite inside these tests.
+        env.update(HUB_DIR=str(self.root), HUB_AGENT=agent, HOME=str(self.root), **(env_extra or {}))
         if project:
             env["HUB_PROJECT"] = project
         return subprocess.run(
             [str(BOARD_PY), *map(str, args)], env=env, text=True, capture_output=True,
-            input=stdin,
+            input=stdin, cwd=cwd,
         )
 
     def assert_ok(self, result):
@@ -64,6 +68,35 @@ class BoardCase(unittest.TestCase):
     def events(self):
         path = self.root / "events.jsonl"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+
+class BoardCase(BoardHelpers):
+    def test_missing_board_read_is_empty_without_creating_snapshot(self):
+        (self.root / "board.json").unlink()
+        result = self.run_hub("list")
+        self.assert_ok(result)
+        self.assertIn("board is empty", result.stdout.lower())
+        self.assertFalse((self.root / "board.json").exists())
+
+    def test_missing_board_write_creates_first_task(self):
+        (self.root / "board.json").unlink()
+        self.assert_ok(self.run_hub("new", "x", "--project", "p"))
+        self.assertEqual(self.read_board()["tasks"][0]["id"], "T-001")
+        self.assertEqual(self.read_board()["schema_version"], 1)
+
+    def test_first_delivery_creates_inbox(self):
+        (self.root / "board.json").unlink()
+        self.assert_ok(self.run_hub("new", "y", "--owner", "Prometheus", "--project", "p"))
+        self.assertIn("T-001 assigned to you", (self.root / "inbox" / "Prometheus.jsonl").read_text())
+
+    def test_missing_hub_dir_exits_without_traceback(self):
+        missing = self.root / "absent"
+        self.root = missing
+        result = self.run_hub("list")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("HUB_DIR", result.stdout + result.stderr)
+        self.assertNotIn("Traceback", result.stdout + result.stderr)
 
     def test_state_machine_ownership_force_and_double_done(self):
         self.assert_ok(self.run_hub("new", "assigned", "--owner", "Zeus"))
@@ -131,6 +164,76 @@ class BoardCase(unittest.TestCase):
         for n in (1, 2):
             self.assert_ok(self.run_hub("claim", n))
             self.assert_ok(self.run_hub("done", n))
+
+    def test_next_prefers_ready_child_but_offers_unbroken_vertical(self):
+        vertical = task("T-001", "p", owner="Prometheus")
+        vertical["kind"] = "vertical"
+        child = task("T-002", "p", owner="Prometheus")
+        child["parent"] = vertical["id"]
+        self.write_board({"next_id": 3, "tasks": [vertical]})
+        self.assertTrue(self.run_hub("next", agent="Prometheus", project="p").stdout.startswith("T-001"))
+        self.write_board({"next_id": 3, "tasks": [vertical, child]})
+        self.assertTrue(self.run_hub("next", agent="Prometheus", project="p").stdout.startswith("T-002"))
+
+    def test_next_skips_vertical_when_its_children_are_not_ready_for_agent(self):
+        vertical = task("T-001", "p", owner="Prometheus")
+        vertical["kind"] = "vertical"
+        blocked = task("T-002", "p", status="blocked", owner="Prometheus")
+        waiting = task("T-003", "p", owner="Prometheus", deps=["T-006"])
+        another_agent = task("T-004", "p", owner="Hermes")
+        done = task("T-005", "p", status="done", owner="Prometheus")
+        for child in (blocked, waiting, another_agent, done):
+            child["parent"] = vertical["id"]
+        other_work = task("T-006", "p", owner="Prometheus")
+        self.write_board({"next_id": 7, "tasks": [vertical, blocked, waiting,
+                                                   another_agent, done, other_work]})
+        result = self.run_hub("next", agent="Prometheus", project="p")
+        self.assert_ok(result)
+        self.assertTrue(result.stdout.startswith("T-006"), result.stdout)
+
+    def test_next_does_not_offer_child_delegated_to_another_agent_as_free(self):
+        vertical = task("T-001", "p", owner="Prometheus")
+        vertical["kind"] = "vertical"
+        child = task("T-002", "p", owner=None)
+        child.update(parent=vertical["id"], agent="Hermes")
+        self.write_board({"next_id": 3, "tasks": [vertical, child]})
+        result = self.run_hub("next", agent="Prometheus", project="p")
+        self.assert_ok(result)
+        self.assertIn("nothing available", result.stdout)
+
+    def test_next_candidates_lists_every_ready_child_in_order_for_dispatch(self):
+        vertical = task("T-001", "p", owner="Prometheus")
+        vertical["kind"] = "vertical"
+        first, second = task("T-002", "p", owner=None), task("T-003", "p", owner=None)
+        delegated = task("T-004", "p", owner=None)
+        delegated["agent"] = "Hermes"
+        for child in (first, second, delegated):
+            child["parent"] = vertical["id"]
+        free = task("T-005", "p", owner=None)
+        tasks = [vertical, first, second, delegated, free]
+        ids = [t["id"] for t in self.load_module().next_candidates(tasks, "Prometheus", "p")]
+        self.assertEqual(ids, ["T-002", "T-003", "T-005"])  # no vertical, no Hermes task, no repeats
+
+    def test_list_nests_same_status_children_counts_all_and_keeps_json_unchanged(self):
+        vertical = task("T-001", "p")
+        vertical["kind"] = "vertical"
+        ordinary = task("T-002", "p")
+        open_child = task("T-003", "p")
+        done_child = task("T-004", "p", status="done")
+        open_child["parent"] = done_child["parent"] = vertical["id"]
+        tasks = [vertical, ordinary, open_child, done_child]
+        self.write_board({"next_id": 5, "tasks": tasks})
+        listed = self.run_hub("list", "--all", project="p")
+        self.assert_ok(listed)
+        lines = listed.stdout.splitlines()
+        self.assertIn("1/2", lines[2])
+        self.assertIn("T-001", lines[2])
+        self.assertTrue(lines[3].startswith("    ○ T-003"), listed.stdout)
+        self.assertTrue(lines[4].startswith("  ○ T-002"), listed.stdout)
+        self.assertTrue(any(line.startswith("  ● T-004") for line in lines), listed.stdout)
+        as_json = self.run_hub("list", "--all", "--json", project="p")
+        self.assert_ok(as_json)
+        self.assertEqual(as_json.stdout, json.dumps(tasks, indent=2) + "\n")
 
     def test_cross_agent_note_is_deliberately_allowed(self):
         self.make_claimed("Zeus")
@@ -552,13 +655,49 @@ class TestOwnership(unittest.TestCase):
         t = self.t("T-007")
         self.assertEqual((t["owner"], t.get("agent"), t["status"]), ("Alex", None, "open"))
 
-    def test_delegate_can_block_and_finish(self):
-        self.assert_ok(self.run_hub("delegate", "5", "Zeus", project="hk"))
-        self.assert_ok(self.run_hub("claim", "5", agent="Zeus", project="hk"))
-        self.assert_ok(self.run_hub("block", "5", "waiting", agent="Zeus", project="hk"))
-        self.assert_ok(self.run_hub("claim", "5", agent="Zeus", project="hk"))
-        self.assert_ok(self.run_hub("done", "5", agent="Zeus", project="hk"))
+    def test_delegate_can_block_but_its_issue_closes_the_task(self):
+        """The hackathon skill: an agent never runs `hub done` on a task with an issue. gh-sync closes
+        it when the issue closes, so a smoke revert that reopens the issue reopens the task too."""
+        self.assert_ok(self.run_hub("delegate", "5", "Prometheus", project="hk"))
+        self.assert_ok(self.run_hub("claim", "5", agent="Prometheus", project="hk"))
+        self.assert_ok(self.run_hub("block", "5", "waiting", agent="Prometheus", project="hk"))
+        self.assert_ok(self.run_hub("claim", "5", agent="Prometheus", project="hk"))
+        refused = self.run_hub("done", "5", agent="Prometheus", project="hk")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("cannot done #5 as its agent: issue #5 closes it", refused.stderr)
+        self.assertIn("`Closes #5`", refused.stderr)
+        self.assertEqual(self.t("T-007")["status"], "claimed")
+        self.assert_ok(self.run_hub("done", "5", "--force", agent="Prometheus", project="hk"))
         self.assertEqual((self.t("T-007")["owner"], self.t("T-007")["status"]), ("Alex", "done"))
+        self.assertTrue(any(e["event"] == "override" and e.get("verb") == "done" for e in self.events()))
+
+    def test_factory_task_is_claimed_and_done_by_any_agent(self):
+        """A factory task (gh_sync's poll of an `agent` issue) has no roster owner, and no gh-sync
+        closes it: any agent claims it as owner and agent (live's builder()), and hub done is not held."""
+        data = self.read_board()
+        data["tasks"].append({**task("T-009", "hk", issue=7, owner=None), "kind": "factory"})
+        self.write_board(data)
+        self.assert_ok(self.run_hub("claim", "7", agent="Hermes", project="hk"))
+        t = self.t("T-009")
+        self.assertEqual((t["owner"], t["agent"], t["status"]), ("Hermes", "Hermes", "claimed"))
+        self.assert_ok(self.run_hub("release", "7", agent="Hermes", project="hk"))
+        t = self.t("T-009")
+        self.assertEqual((t["owner"], t.get("agent"), t["status"]), (None, None, "open"))
+        self.assert_ok(self.run_hub("claim", "7", agent="Prometheus", project="hk"))
+        self.assert_ok(self.run_hub("done", "7", agent="Prometheus", project="hk"))
+        t = self.t("T-009")
+        self.assertEqual((t["owner"], t["agent"], t["status"]), ("Prometheus", "Prometheus", "done"))
+        self.assertFalse(any(e["event"] == "override" for e in self.events()))
+
+    def test_dropping_an_issue_task_is_one_forced_done(self):
+        """The hackathon skill's drop, for an issue closed as not planned: the old
+        `hub claim --force` then `hub done` is now refused at the done, since the claim makes Zeus the agent."""
+        self.assert_ok(self.run_hub("delegate", "5", "Prometheus", project="hk"))
+        self.assert_ok(self.run_hub("claim", "5", agent="Prometheus", project="hk"))
+        self.assert_ok(self.run_hub("claim", "5", "--force", agent="Zeus", project="hk"))
+        self.assertIn("--force --note", self.run_hub("done", "5", agent="Zeus", project="hk").stderr)
+        self.assert_ok(self.run_hub("done", "5", "--force", "--note", "dropped: #5", agent="Zeus", project="hk"))
+        self.assertEqual(self.t("T-007")["status"], "done")
 
     def test_done_does_not_call_human_claimable(self):
         data = self.read_board()
@@ -699,6 +838,184 @@ class TestEdit(unittest.TestCase):
         self.assertEqual(self.read_board()["tasks"][0]["issue_hash"],
                          hashlib.sha256(b"teammate text").hexdigest())
         self.assertEqual(self.detail(), "Context: T-007\nDeadline:     code freeze")
+
+
+class TestFactoryGate(BoardHelpers):
+    """T-499: hub done's verify gate, the attempts counter, and the PAUSE kill switch."""
+
+    def repo(self, makefile=None):
+        repo = self.root / "code" / "p"
+        (repo / ".git").mkdir(parents=True, exist_ok=True)
+        if makefile is not None:
+            (repo / "Makefile").write_text(makefile)
+        return repo
+
+    def claimed(self, *flags):
+        self.assert_ok(self.run_hub("new", "work", "--owner", "Zeus", "--project", "p", *flags))
+        self.assert_ok(self.run_hub("claim", "1"))
+
+    def task(self):
+        return self.read_board()["tasks"][0]
+
+    def test_passing_verify_runs_in_repo_and_keeps_tail_in_done_note(self):
+        self.repo()
+        self.claimed("--verify", "pwd; seq 1 100")
+        self.assert_ok(self.run_hub("done", "1", "--note", "built it"))
+        t = self.task()
+        self.assertEqual(t["status"], "done")
+        note = t["notes"][-1]["text"]
+        self.assertIn("built it", note)
+        self.assertIn("verify passed: pwd; seq 1 100", note)
+        lines = note.splitlines()
+        self.assertEqual(lines[-30:], [str(n) for n in range(71, 101)])
+        self.assertNotIn(str(self.root / "code" / "p"), note)  # pwd scrolled out of the tail
+        self.assertEqual(self.events()[-2]["verify"], "passed")
+
+    def test_failed_verify_refuses_counts_attempt_then_blocks_and_tells_zeus(self):
+        self.repo()
+        self.claimed("--verify", "echo broken-output; exit 3")
+        first = self.run_hub("done", "1")
+        self.assertNotEqual(first.returncode, 0)
+        self.assertIn("broken-output", first.stderr)
+        self.assertEqual((self.task()["status"], self.task()["attempts"]), ("claimed", 1))
+        self.assertIn("broken-output", self.task()["notes"][-1]["text"])
+        zeus_inbox = self.root / "inbox" / "Zeus.jsonl"
+        self.assertNotIn("blocked", zeus_inbox.read_text() if zeus_inbox.exists() else "")
+
+        second = self.run_hub("done", "1")
+        self.assertNotEqual(second.returncode, 0)
+        self.assertEqual((self.task()["status"], self.task()["attempts"]), ("blocked", 2))
+        inbox = (self.root / "inbox" / "Zeus.jsonl").read_text()
+        self.assertIn("T-001 blocked: verify", inbox)
+        self.assertIn("notify", [e["event"] for e in self.events()])
+
+    def test_verify_timeout_is_a_failure(self):
+        self.repo()
+        self.claimed("--verify", "sleep 30")
+        r = self.run_hub("done", "1", env_extra={"HUB_VERIFY_TIMEOUT": "1"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("timed out after 1s", r.stderr)
+        self.assertEqual(self.task()["attempts"], 1)
+
+    def test_no_verify_skips_but_is_recorded(self):
+        self.repo()
+        self.claimed("--verify", "false")
+        self.assert_ok(self.run_hub("done", "1", "--no-verify"))
+        self.assertEqual(self.task()["status"], "done")
+        done = [e for e in self.events() if e["event"] == "done"][0]
+        self.assertEqual((done["verify"], done["cmd"]), ("skipped", "false"))
+
+    def test_default_is_make_check_when_repo_has_that_target(self):
+        self.repo("check:\n\t@echo make-check-ran; false\n")
+        self.claimed()
+        r = self.run_hub("done", "1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("make-check-ran", r.stderr)
+
+    def test_no_default_without_check_target_or_project_and_empty_verify_opts_out(self):
+        self.repo("build:\n\tfalse\n")
+        self.claimed()
+        self.assert_ok(self.run_hub("done", "1"))
+        # No project: a Makefile in the caller's cwd must not be mistaken for the task's repo.
+        cwd = self.root / "elsewhere"
+        cwd.mkdir()
+        (cwd / "Makefile").write_text("check:\n\tfalse\n")
+        self.assert_ok(self.run_hub("new", "loose", "--owner", "Zeus"))
+        self.assert_ok(self.run_hub("claim", "2"))
+        self.assert_ok(self.run_hub("done", "2", cwd=cwd))
+        # An explicit "" opts out of the default.
+        self.repo("check:\n\tfalse\n")
+        self.assert_ok(self.run_hub("new", "opt-out", "--owner", "Zeus", "--project", "p", "--verify", ""))
+        self.assert_ok(self.run_hub("claim", "3"))
+        self.assert_ok(self.run_hub("done", "3"))
+
+    def test_verify_runs_in_the_callers_linked_worktree_of_the_task_repo(self):
+        """Builders work in linked worktrees; verifying the main checkout tests the wrong tree."""
+        repo = self.repo("check:\n\t@echo main-ok\n")
+        (repo / ".git").rmdir()
+        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                        cwd=repo, check=True, capture_output=True)
+        git("init", "-q")
+        git("add", "Makefile")
+        git("commit", "-qm", "init")
+        wt = self.root / "wt"
+        git("worktree", "add", "-q", "-b", "feature", str(wt))
+        (wt / "Makefile").write_text("check:\n\t@echo worktree-broken; false\n")
+        self.claimed()
+        refused = self.run_hub("done", "1", cwd=wt)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("worktree-broken", refused.stderr)
+        self.assertIn(f"(in {wt.resolve()})", refused.stdout)
+        passed = self.run_hub("done", "1", cwd=repo)
+        self.assert_ok(passed)
+        self.assertIn(f"(in {repo})", passed.stdout)
+
+    def test_edit_sets_verify(self):
+        self.repo()
+        self.claimed("--detail", "the brief")
+        self.assert_ok(self.run_hub("edit", "1", "--verify", "exit 1", "--yes"))
+        self.assertEqual(self.task()["verify"], "exit 1")
+        self.assertNotEqual(self.run_hub("done", "1").returncode, 0)
+
+    def test_edit_tags_and_untags_and_logs_each_change(self):
+        self.claimed()
+        self.assert_ok(self.run_hub("edit", "1", "--tag", "standing", "--tag", "headless", "--yes"))
+        self.assertEqual(self.task()["tags"], ["standing", "headless"])
+        self.assert_ok(self.run_hub("edit", "1", "--untag", "headless", "--yes"))
+        self.assertEqual(self.task()["tags"], ["standing"])
+        self.assertNotEqual(self.run_hub("edit", "1", "--tag", "standing", "--yes").returncode, 0)  # nothing changed
+        edits = [(e["fields"], e.get("tagged"), e.get("untagged")) for e in self.events() if e["event"] == "edited"]
+        self.assertEqual(edits, [(["tags"], ["standing", "headless"], []), (["tags"], [], ["headless"])])
+        for bad in ("Standing", "a b", "x;rm", ""):
+            r = self.run_hub("edit", "1", "--tag", bad, "--yes")
+            self.assertNotEqual(r.returncode, 0, bad)
+            self.assertIn("[a-z0-9-]+", r.stderr)
+        self.assertEqual(self.task()["tags"], ["standing"])
+
+    def test_only_zeus_clears_untrusted_unless_forced(self):
+        self.claimed()
+        self.assert_ok(self.run_hub("edit", "1", "--tag", "untrusted", "--yes"))
+        r = self.run_hub("edit", "1", "--untag", "untrusted", "--yes", "--as", "Hermes")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("only Zeus clears 'untrusted'", r.stderr)
+        self.assertEqual(self.task()["tags"], ["untrusted"])
+        self.assert_ok(self.run_hub("edit", "1", "--untag", "untrusted", "--yes", "--as", "Zeus"))
+        self.assertEqual(self.task()["tags"], [])
+        self.assert_ok(self.run_hub("edit", "1", "--tag", "untrusted", "--yes"))
+        self.assert_ok(self.run_hub("edit", "1", "--untag", "untrusted", "--yes", "--force", "--as", "Hermes"))
+        self.assertTrue([e for e in self.events() if e["event"] == "edited" and e.get("forced")])
+        self.assertIn("tags: ", self.run_hub("edit", "1", "--tag", "standing", "--yes").stdout + self.run_hub("show", "1").stdout)
+
+    def test_bump_attempts_counts_on_the_task_and_ignores_a_missing_one(self):
+        self.claimed()
+        board = self.load_module()
+        self.assertEqual(board.bump_attempts("1", "hub-live", "CI smoke failed on PR #7", "E   assert 1 == 2"), 1)
+        self.assertEqual(board.bump_attempts("T-001", "hub-live", "CI smoke failed on PR #7", "again"), 2)
+        t = self.task()
+        self.assertEqual((t["attempts"], t["status"]), (2, "claimed"))  # counting only: hub live tells Zeus
+        self.assertEqual(t["notes"][-2]["text"], "CI smoke failed on PR #7 (attempt 1)\nE   assert 1 == 2")
+        self.assertEqual([e["attempts"] for e in self.events() if e["event"] == "attempt_failed"], [1, 2])
+        self.assertIsNone(board.bump_attempts("T-099", "hub-live", "x", "y"))
+
+    def test_pause_refuses_next_and_claim_and_leads_the_brief_until_resume(self):
+        self.assert_ok(self.run_hub("new", "work", "--owner", "Zeus"))
+        self.assert_ok(self.run_hub("pause", "deploy", "freeze"))
+        self.assertTrue((self.root / "PAUSE").exists())
+        self.assertIn("deploy freeze", self.load_module().paused())
+        for verb in ("next", "claim"):
+            r = self.run_hub(verb, *(["1"] if verb == "claim" else []))
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("deploy freeze", r.stderr)
+        brief = self.run_hub("brief")
+        self.assert_ok(brief)
+        self.assertTrue(brief.stdout.startswith("HUB PAUSED: deploy freeze"))
+        self.assert_ok(self.run_hub("resume"))
+        self.assertFalse((self.root / "PAUSE").exists())
+        self.assertIsNone(self.load_module().paused())
+        self.assert_ok(self.run_hub("claim", "1"))
+        self.assertEqual([e["event"] for e in self.events() if e["event"] in ("paused", "resumed")],
+                         ["paused", "resumed"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

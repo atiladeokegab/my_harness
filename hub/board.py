@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,7 @@ EVENTS = os.path.join(HUB_DIR, "events.jsonl")
 LOCK = os.path.join(HUB_DIR, ".board.lock")
 WAL = os.path.join(HUB_DIR, ".board.wal")
 INBOX_DIR = os.path.join(HUB_DIR, "inbox")
+PAUSE = os.path.join(HUB_DIR, "PAUSE")
 
 STATUSES = ("open", "claimed", "done", "blocked")
 
@@ -51,6 +53,11 @@ TO_STATE = {"claim": "claimed", "release": "open", "done": "done", "block": "blo
 OWNED_VERBS = ("release", "done", "block")
 ACTIVE = ("open", "claimed", "blocked")
 LOCK_TIMEOUT = 10.0
+
+# hub done's verify gate. A failed verify is an attempt; this many and the task blocks.
+MAX_ATTEMPTS = 2
+VERIFY_TIMEOUT = 1800   # seconds; HUB_VERIFY_TIMEOUT overrides it
+VERIFY_TAIL = 30        # lines of verify output kept on the task
 
 # Bumped when board.json's shape changes; migrate() upgrades older boards in place.
 # A board written before versioning existed has no field at all, which is version 1.
@@ -180,6 +187,10 @@ def canon(name):
     return name[:1].upper() + name[1:].lower()
 
 
+# The planning agent: hears about blocked tasks and alone clears 'untrusted'. shell.sh exports it.
+LEAD_AGENT = canon(os.environ.get("HUB_LEAD") or "Zeus")
+
+
 def valid_agent(name, what="agent"):
     """Canonical form, or exit. Rejects path separators, traversal and absolute paths."""
     c = canon(name)
@@ -275,12 +286,17 @@ def _acquire(fh):
 
 @contextmanager
 def board(write=False):
+    if not os.path.isdir(HUB_DIR):
+        sys.exit(f"HUB_DIR is not a directory: {HUB_DIR}")
     with open(LOCK, "a") as lk:
         _acquire(lk)
         try:
             _recover_wal()
-            with open(BOARD) as f:
-                data = json.load(f)
+            try:
+                with open(BOARD) as f:
+                    data = json.load(f)
+            except FileNotFoundError:  # a fresh hub, or a test's scratch one: an empty board
+                data = {"next_id": 1, "tasks": [], "schema_version": SCHEMA_VERSION}
             migrate(data)
             events = []
             yield data, events
@@ -333,6 +349,13 @@ def find(data, tid):
 def is_hackathon(project):
     return bool(project) and os.path.exists(
         os.path.join(HUB_DIR, "projects", project, "hackathon.json"))
+
+
+def roster_rules(t):
+    """Hackathon ownership (a roster human owns, an agent is delegated, gh-sync closes the issue's
+    task) for a task in a hackathon project. Not for a factory task: the poll made it from an
+    `agent` issue with no roster owner, and no gh-sync closes it (hub live runs factory repos too)."""
+    return is_hackathon(t.get("project")) and t.get("kind") != "factory"
 
 
 def label(t):
@@ -548,6 +571,10 @@ def notify_hint(targets):
 def fmt_row(t, data=None):
     mark = {"open": "○", "claimed": "◐", "done": "●", "blocked": "✗"}[t["status"]]
     kind = "▣ " if t.get("kind") == "vertical" else ""
+    progress = ""
+    if data and t.get("kind") == "vertical":
+        children = [x for x in data["tasks"] if x.get("parent") == t["id"]]
+        progress = f"  {sum(x['status'] == 'done' for x in children)}/{len(children)}"
     owner = (f" @{t['owner']}" if t.get("owner") else "") + (f"→{t['agent']}" if t.get("agent") else "")
     blocked = ""
     if data and t["status"] in ("open", "claimed"):
@@ -556,7 +583,151 @@ def fmt_row(t, data=None):
             by_id = {x["id"]: x for x in data["tasks"]}
             blocked = f"  ⇠ waits on {','.join(label(by_id[m]) if m in by_id else m for m in missing)}"
     tag = f" [{t['project']}]" if t.get("project") else ""
-    return f"  {mark} {kind}{label(t)}  {t['title']}{tag}{owner}{blocked}"
+    return f"  {mark} {kind}{label(t)}  {t['title']}{progress}{tag}{owner}{blocked}"
+
+
+def paused():
+    """The kill switch's reason, or None. dispatch.py, live.py and the watchdog read it too."""
+    try:
+        with open(PAUSE) as f:
+            return f.read().strip() or "no reason given"
+    except FileNotFoundError:
+        return None
+
+
+def refuse_if_paused(verb):
+    reason = paused()
+    if reason:
+        sys.exit(f"hub is paused, so {verb} is refused: {reason}\n`hub resume` lifts it.")
+
+
+def cmd_pause(a):
+    me = whoami(a.as_agent)
+    reason = " ".join(a.reason).strip() or "no reason given"
+    with board(write=True) as (_, events):
+        with open(PAUSE + ".tmp", "w") as f:
+            f.write(f"{reason} (by {me} at {now()})\n")
+        os.replace(PAUSE + ".tmp", PAUSE)
+        log(events, me, "paused", "-", reason=reason)
+    print(f"hub paused: {reason}\nhub next and hub claim refuse until `hub resume`.")
+
+
+def cmd_resume(a):
+    me = whoami(a.as_agent)
+    with board(write=True) as (_, events):
+        was = paused()
+        if was is None:
+            print("hub is not paused")
+            return
+        os.remove(PAUSE)
+        log(events, me, "resumed", "-", was=was)
+    print(f"hub resumed (was paused: {was})")
+
+
+def task_repo(t):
+    """The task's checkout, resolved the way shell.sh's _hub_project_dir does."""
+    p = t.get("project")
+    code = os.environ.get("HUB_CODE_DIR") or os.path.expanduser("~/code")
+    for d in ((os.path.join(code, p), os.path.expanduser(f"~/{p}")) if p else ()):
+        if os.path.isdir(os.path.join(d, ".git")):
+            return d
+    return None
+
+
+def verify_checkout(repo):
+    """The caller's worktree when it is a checkout of the task's repo, else the repo itself.
+
+    Builders work in linked worktrees on branches; verifying the main checkout would test
+    the wrong tree."""
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+
+    def rev_parse(d, flag):
+        r = subprocess.run(["git", "-C", d, "rev-parse", flag], env=env,
+                           capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    def common(d):
+        c = rev_parse(d, "--git-common-dir")
+        return c and os.path.realpath(os.path.join(d, c))
+
+    here = os.getcwd()
+    if repo and common(here) and common(here) == common(repo):
+        return rev_parse(here, "--show-toplevel") or repo
+    return repo
+
+
+def verify_command(t, repo):
+    """The task's own verify: line; unset means `make check` when the repo has that target."""
+    if "verify" in t:
+        return t["verify"] or None   # "" is an explicit "no verify"
+    if not repo:
+        return None
+    try:
+        with open(os.path.join(repo, "Makefile")) as f:
+            return "make check" if re.search(r"^check\s*:", f.read(), re.M) else None
+    except OSError:
+        return None
+
+
+def run_verify(cmd, cwd):
+    """(passed, last VERIFY_TAIL lines of output). Own session so a timeout kills the whole tree."""
+    timeout = int(os.environ.get("HUB_VERIFY_TIMEOUT") or VERIFY_TIMEOUT)
+    # A repo check is not a board operation: without this a hub test suite run as verify
+    # would inherit HUB_DIR and write to whichever board the caller is pointed at.
+    env = {k: v for k, v in os.environ.items() if k not in ("HUB_DIR", "HUB_AGENT")}
+    p = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         errors="replace", start_new_session=True)
+    try:
+        out, _ = p.communicate(timeout=timeout)
+        ok = p.returncode == 0
+        if not ok:
+            out += f"\n(exit {p.returncode})"
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL)
+        out, _ = p.communicate()
+        ok = False
+        out += f"\n(timed out after {timeout}s)"
+    return ok, "\n".join(out.rstrip("\n").splitlines()[-VERIFY_TAIL:])
+
+
+def bump_attempts(tid, me, why, tail):
+    """Count a failed attempt that is not hub done's verify (hub live: a red CI run on the task's
+    PR) and keep its tail on the task. Returns the new count, or None when there is no such task."""
+    with board(write=True) as (data, events):
+        t = next((x for x in data["tasks"] if x["id"] == norm_id(tid)), None)
+        if t is None:
+            return None
+        t["attempts"] = n = t.get("attempts", 0) + 1
+        t["notes"].append({"at": now(), "by": me, "text": f"{why} (attempt {n})\n{tail}"})
+        t["updated"] = now()
+        log(events, me, "attempt_failed", t["id"], why=why, attempts=n)
+    return n
+
+
+def verify_failed(tid, me, cmd, tail):
+    """Count the attempt, keep the tail on the task, block at MAX_ATTEMPTS and tell the lead."""
+    with board(write=True) as (data, events):
+        t = find(data, tid)
+        t["attempts"] = n = t.get("attempts", 0) + 1
+        t["notes"].append({"at": now(), "by": me,
+                           "text": f"verify failed (attempt {n}): {cmd}\n{tail}"})
+        t["updated"] = now()
+        log(events, me, "verify_failed", tid, cmd=cmd, attempts=n)
+        blocked = n >= MAX_ATTEMPTS
+        if blocked:
+            t["status"] = "blocked"
+            log(events, me, "blocked", tid, reason=f"verify failed {n} times")
+            alert = (f"{label(t)} blocked: verify `{cmd}` failed {n} times. "
+                     f"Output tail is on the task: hub show {label(t)}")
+            log(events, me, "notify", tid, to=LEAD_AGENT, text=alert)
+    if blocked:
+        mid = new_message_id()
+        deliver(LEAD_AGENT, f"{alert}  (from {me})", mid)
+        notify_hint([(LEAD_AGENT, alert, mid)])
+    sys.exit(f"{tail}\n\nverify failed: {cmd} (attempt {n} of {MAX_ATTEMPTS})\n"
+             + (f"{label(t)} is now blocked and {LEAD_AGENT} has been told." if blocked
+                else f"{label(t)} stays claimed: fix it and run hub done again."))
 
 
 def cmd_new(a):
@@ -582,6 +753,7 @@ def cmd_new(a):
             "notes": [],
             "project": project,
             **({"kind": "vertical"} if a.vertical else {}),
+            **({"verify": a.verify} if a.verify is not None else {}),
         })
         log(events, me, "created", nid, title=a.title, deps=deps, owner=a.owner,
             project=project)
@@ -616,8 +788,16 @@ def cmd_list(a):
             group = [t for t in tasks if t["status"] == status]
             if group:
                 print(f"\n{status.upper()} ({len(group)})")
+                nested = {t["id"]: [] for t in group if t.get("kind") == "vertical"}
                 for t in group:
+                    if t.get("parent") in nested:
+                        nested[t["parent"]].append(t)
+                for t in group:
+                    if t.get("parent") in nested:
+                        continue
                     print(fmt_row(t, data))
+                    for child in nested.get(t["id"], []):
+                        print("  " + fmt_row(child, data))
         print()
 
 
@@ -625,6 +805,8 @@ def cmd_show(a):
     with board() as (data, _):
         t = resolve(data, a.id, which_project(getattr(a, "project", None)))
         print(f"\n{'▣ ' if t.get('kind') == 'vertical' else ''}{label(t)}  [{t['status']}]  {t['title']}")
+        if t.get("tags"):
+            print(f"tags: {', '.join(t['tags'])}")
         print(f"owner: {t.get('owner') or '-'}   project: {t.get('project') or '-'}"
               f"   created by {t['created_by']} at {t['created']}"
               + (f"   key: {t['id']}" if label(t) != t["id"] else ""))
@@ -683,6 +865,19 @@ def cmd_edit(a):
         sys.exit("choose one of --take-github and --keep-hub")
     if (a.take_github or a.keep_hub) and a.detail_file:
         sys.exit("--take-github and --keep-hub don't combine with --detail-file")
+    bad = [x for x in a.tag + a.untag if not re.fullmatch(r"[a-z0-9-]+", x)]
+    if bad:
+        sys.exit(f"tag names must match [a-z0-9-]+: {', '.join(map(repr, bad))}")
+    if set(a.tag) & set(a.untag):
+        sys.exit("a tag can't be both added and removed")
+    old_tags = t.get("tags") or []
+    tagged = [x for x in dict.fromkeys(a.tag) if x not in old_tags]
+    untagged = [x for x in dict.fromkeys(a.untag) if x in old_tags]
+    # The dispatcher holds untrusted tasks for the lead; injected text would ask any reader to lift that.
+    # shortcut: identity is self-declared (--as / HUB_AGENT), so this stops a naive injection or a slip, not a
+    # determined one; upgrade with signed identities, together with signed LGTMs in live_merge.py.
+    if "untrusted" in untagged and me != LEAD_AGENT and not a.force:
+        sys.exit(f"only {LEAD_AGENT} clears 'untrusted' on {label(t)}; --force overrides (recorded)")
     old_detail = t.get("detail") or ""
     new_title, new_detail, extra = a.title or t["title"], old_detail, {}
     if a.take_github or a.keep_hub:
@@ -703,16 +898,19 @@ def cmd_edit(a):
     elif a.detail_file:
         with open(a.detail_file, encoding="utf-8") as f:
             new_detail = f.read()
-    elif not (a.title or a.deadline) and sys.stdin.isatty():
+    elif not (a.title or a.deadline or a.verify is not None or a.tag or a.untag) and sys.stdin.isatty():
         new_detail = edit_in_editor(old_detail)
     if a.deadline:
         new_detail = set_deadline(new_detail, a.deadline, t.get("project"))
     new_detail = new_detail.replace("\r\n", "\n").rstrip()
-    if not new_detail.strip():
+    if not new_detail.strip() and old_detail.strip():  # wiping a brief; a task that never had one may keep none
         sys.exit("refusing an empty brief")
     diff = []
     if new_title != t["title"]:
         diff += [f"-title: {t['title']}", f"+title: {new_title}"]
+    if a.verify is not None and a.verify != t.get("verify"):
+        diff += [f"-verify: {t.get('verify', '(default)')}", f"+verify: {a.verify or '(none)'}"]
+    diff += [f"+tag: {x}" for x in tagged] + [f"-tag: {x}" for x in untagged]
     diff += list(difflib.unified_diff(old_detail.splitlines(), new_detail.splitlines(),
                                      "brief (hub)", "brief (new)", lineterm=""))
     if not diff and not extra:
@@ -737,40 +935,71 @@ def cmd_edit(a):
         if new_detail != old_detail:
             cur["detail"] = new_detail
             fields.append("detail")
+        if a.verify is not None and a.verify != cur.get("verify"):
+            cur["verify"] = a.verify
+            fields.append("verify")
+        if tagged or untagged:
+            cur["tags"] = [x for x in cur.get("tags") or [] if x not in untagged] + \
+                          [x for x in tagged if x not in (cur.get("tags") or [])]
+            fields.append("tags")
         cur.update(extra)
         cur["updated"] = now()
-        log(events, me, "edited", cur["id"], fields=fields, keep_hub=bool(a.keep_hub))
+        log(events, me, "edited", cur["id"], fields=fields, keep_hub=bool(a.keep_hub),
+            **({"tagged": tagged, "untagged": untagged} if tagged or untagged else {}),
+            **({"forced": True} if a.force and "untrusted" in untagged else {}))
     print(f"{label(t)} saved" + ("; the next hub gh-sync pushes it" if is_hackathon(t.get("project")) else ""))
+
+
+def next_candidates(tasks, agent, project=None):
+    """Open tasks agent may pick up, in hub next's order: its own, then unassigned, then its own in
+    other projects. A vertical with children stands for its ready children. hub next takes the
+    first; dispatch.py walks on past the ones it skips. The one copy of this order."""
+    data, me = {"tasks": tasks}, agent.lower()
+    # Strict: an unscoped task is not this project's work either. Without this an agent that
+    # clears its own queue falls through to unrelated tasks, which is the whole reason project
+    # scoping exists.
+    pool = [t for t in tasks if t["status"] == "open"
+            and (not project or (t.get("project") or "") == project)]
+    # Scope keeps an agent out of unrelated FREE work; it must not hide work someone assigned to
+    # it by name. A project-scoped Prometheus was offered T-078 and never shown T-101..T-103,
+    # which Zeus had assigned it under project hub/testbed.
+    elsewhere = [t for t in tasks if t["status"] == "open" and project
+                 and (t.get("project") or "") != project and (actor(t) or "").lower() == me]
+    out = []
+    for group, scoped in (([t for t in pool if (actor(t) or "").lower() == me], True),
+                          ([t for t in pool if not actor(t)], True), (elsewhere, False)):
+        for t in group:
+            if unmet_deps(data, t):
+                continue
+            children = [x for x in tasks if x.get("parent") == t["id"]] if t.get("kind") == "vertical" else []
+            if not children:
+                out.append(t)  # an ordinary task, or a vertical that still needs its breakdown
+            for child in children:
+                who = actor(child)
+                if (child["status"] == "open" and child.get("project") == t.get("project")
+                        and (who or scoped) and (not who or who.lower() == me)
+                        and not unmet_deps(data, child)):
+                    out.append(child)
+    seen = set()
+    return [t for t in out if not (t["id"] in seen or seen.add(t["id"]))]
 
 
 def cmd_next(a):
     me = whoami(a.as_agent)
+    refuse_if_paused("hub next")
     project = which_project(getattr(a, "project", None))
     with board() as (data, _):
-        pool = data["tasks"]
-        if project:
-            # Strict: an unscoped task is not this project's work either. Without this
-            # an agent that clears its own queue falls through to unrelated tasks, which
-            # is the whole reason project scoping exists.
-            pool = [t for t in pool if (t.get("project") or "") == project]
-        mine = [t for t in pool
-                if t["status"] == "open" and (actor(t) or "").lower() == me.lower()]
-        free = [t for t in pool
-                if t["status"] == "open" and not t.get("owner") and not unmet_deps(data, t)]
-        # Scope keeps an agent out of unrelated FREE work; it must not hide work someone
-        # assigned to it by name. A project-scoped Prometheus was offered T-078 and never
-        # shown T-101..T-103, which Zeus had assigned it under project hub/testbed.
-        elsewhere = [t for t in data["tasks"] if t not in pool and t["status"] == "open"
-                     and (actor(t) or "").lower() == me.lower() and not unmet_deps(data, t)]
-        pick = (next((t for t in mine if not unmet_deps(data, t)), None)
-                or (free[0] if free else None) or (elsewhere[0] if elsewhere else None))
+        pick = next(iter(next_candidates(data["tasks"], me, project)), None)
+        elsewhere = [t for t in data["tasks"] if project and (t.get("project") or "") != project
+                     and t["status"] == "open" and (actor(t) or "").lower() == me.lower()
+                     and not unmet_deps(data, t)]
         if not pick:
             scope = f" in project {project}" if project else ""
             print(f"nothing available to pick up{scope}")
             return
         print(f"{label(pick)}  {pick['title']}\n")
         print(pick["detail"] or "(no detail)")
-        others = [t for t in elsewhere if t is not pick]
+        others = [t for t in elsewhere if t is not pick and t["id"] != pick.get("parent")]
         if others:
             print("\nalso assigned to you in other projects:")
             for t in others:
@@ -781,12 +1010,15 @@ def cmd_claim(a):
     # An owner must be addressable: a task owned by "Unknown" can never be released or
     # finished by a real agent without --force.
     me = addressable(whoami(a.as_agent), "claiming agent")
+    refuse_if_paused("hub claim")
     with board(write=True) as (data, events):
         t = resolve(data, a.id, which_project(getattr(a, "project", None)))
         missing = unmet_deps(data, t)
         if missing and not a.force:
-            sys.exit(f"{t['id']} waits on unmet deps: {','.join(missing)} (use --force to override)")
-        if is_hackathon(t.get("project")):
+            by_id = {x["id"]: x for x in data["tasks"]}
+            sys.exit(f"{label(t)} waits on unmet deps: "
+                     f"{','.join(label(by_id[d]) for d in missing)} (use --force to override)")
+        if roster_rules(t):
             if t.get("owner") in (None, "Pool"):
                 sys.exit(f"{label(t)} is pool work: hub assign {label(t).lstrip('#')} <person>, "
                          "then hub delegate ... <agent>")
@@ -800,6 +1032,8 @@ def cmd_claim(a):
         else:
             overridden = transition(t, "claim", me, a.force)
             t["owner"] = me
+            if t.get("kind") == "factory":
+                t["agent"] = me  # hub live's builder(): the agent that built the PR
         log(events, me, "claimed", t["id"], forced=bool(missing) or overridden)
     print(f"{label(t)} claimed by {me}")
 
@@ -808,12 +1042,14 @@ def cmd_release(a):
     me = whoami(a.as_agent)
     with board(write=True) as (data, events):
         t = resolve(data, a.id, which_project(getattr(a, "project", None)))
-        hackathon = is_hackathon(t.get("project"))
+        hackathon = roster_rules(t)
         overridden = transition(t, "release", me, a.force, who=actor(t) if hackathon else None)
         if hackathon:
             t["agent"] = None
         else:
             t["owner"] = None
+            if t.get("kind") == "factory":
+                t["agent"] = None
         log(events, me, "released", t["id"], forced=overridden)
     print(f"{label(t)} released back to open")
 
@@ -861,24 +1097,65 @@ def cmd_delegate(a):
         notify_hint([(agent, f"{message}. Run: hub show {t['id']}", mid)])
     print(f"{label(t)} " + (f"delegated to {agent}" if agent else "delegate cleared"))
 
+def done_guard(data, t, me, a):
+    """Every refusal hub done makes; returns whether the issue rule was overridden."""
+    if t.get("kind") == "vertical":
+        open_children = [label(x) for x in data["tasks"]
+                         if x.get("parent") == t["id"] and x["status"] != "done"]
+        if open_children:
+            sys.exit(f"{label(t)} still has open tasks: {', '.join(open_children)}")
+    # The hackathon skill's rule for Prometheus, true of every agent: gh-sync closes an issue's
+    # task when the issue closes, and reopens it only if it closed it, so a smoke revert
+    # would reopen the issue under a task already marked done.
+    issue_rule = bool(t.get("issue") and t.get("agent") == me and roster_rules(t))
+    if issue_rule and not a.force:
+        sys.exit(f"cannot done {label(t)} as its agent: issue #{t['issue']} closes it. Push, then open the PR "
+                 f"with `Closes #{t['issue']}` (or post DONE: on the issue): the merge closes the issue, the next "
+                 f"gh-sync closes this task, and a smoke revert reopens both. To drop it "
+                 f"instead: hub done {label(t)} --force --note \"dropped: <why>\"")
+    return issue_rule
+
+
 def cmd_done(a):
     me = whoami(a.as_agent)
     pings = []
+    project = which_project(getattr(a, "project", None))
+    # Every refusal first, on a copy and outside the write lock: verify can run for minutes,
+    # and holding the board that long would time out every other agent.
+    with board() as (data, _):
+        t = resolve(data, a.id, project)
+        done_guard(data, t, me, a)
+        transition(dict(t), "done", me, a.force,
+                   who=actor(t) if is_hackathon(t.get("project")) else None)
+        repo = verify_checkout(task_repo(t))
+        cmd = verify_command(t, repo)
+    verdict, tail = None, ""
+    if cmd and a.no_verify:
+        verdict = "skipped"
+    elif cmd:
+        if not repo:
+            sys.exit(f"{label(t)} has verify `{cmd}` but no checkout for project "
+                     f"{t.get('project') or '(none)'} (looked in $HUB_CODE_DIR/<project> and ~/<project>).\n"
+                     f"fix the project, or pass --no-verify (recorded in the ledger)")
+        print(f"verify: {cmd}  (in {repo})", flush=True)
+        ok, tail = run_verify(cmd, repo)
+        if not ok:
+            verify_failed(t["id"], me, cmd, tail)
+        verdict = "passed"
     with board(write=True) as (data, events):
-        t = resolve(data, a.id, which_project(getattr(a, "project", None)))
-        if t.get("kind") == "vertical":
-            open_children = [label(x) for x in data["tasks"]
-                             if x.get("parent") == t["id"] and x["status"] != "done"]
-            if open_children:
-                sys.exit(f"{label(t)} still has open tasks: {', '.join(open_children)}")
+        t = resolve(data, a.id, project)
+        issue_rule = done_guard(data, t, me, a)
         blocked_before = {x["id"] for x in data["tasks"] if unmet_deps(data, x)}
         overridden = transition(t, "done", me, a.force,
-                                who=actor(t) if is_hackathon(t.get("project")) else None)
+                                who=actor(t) if is_hackathon(t.get("project")) else None) or issue_rule
         if overridden:
             log(events, me, "override", t["id"], verb="done")
-        if a.note:
-            t["notes"].append({"at": now(), "by": me, "text": a.note})
-        log(events, me, "done", t["id"], note=a.note or "")
+        note = "\n".join(filter(None, [a.note, verdict == "passed" and f"verify passed: {cmd}\n{tail}",
+                                       verdict == "skipped" and f"verify skipped: {cmd} (--no-verify)"]))
+        if note:
+            t["notes"].append({"at": now(), "by": me, "text": note})
+        log(events, me, "done", t["id"], note=a.note or "",
+            **({"verify": verdict, "cmd": cmd} if verdict else {}))
 
         for x in data["tasks"]:
             if x["id"] in blocked_before and x["status"] == "open" and not unmet_deps(data, x):
@@ -942,8 +1219,11 @@ def cmd_brief(a):
     me = whoami(a.as_agent)
     project = which_project(getattr(a, "project", None))
     scope = f" · project {project}" if project else " · all projects"
-    out = [f"HUB BRIEFING — you are {me}{scope}.",
-           "Snapshot taken when this session started; re-run `hub brief` for current state."]
+    reason = paused()
+    out = ([f"HUB PAUSED: {reason}. hub next and hub claim refuse until `hub resume`.\n"]
+           if reason else [])
+    out += [f"HUB BRIEFING — you are {me}{scope}.",
+            "Snapshot taken when this session started; re-run `hub brief` for current state."]
 
     path = os.path.join(INBOX_DIR, f"{me}.jsonl")
     msgs = read_msgs(path) if os.path.exists(path) else []
@@ -1079,6 +1359,8 @@ def main():
     n.add_argument("--owner", help="assign to an agent up front")
     n.add_argument("--project", help="project this task belongs to (defaults to $HUB_PROJECT)")
     n.add_argument("--vertical", action="store_true", help="create an owner-area vertical")
+    n.add_argument("--verify", help="command hub done must pass in the task's repo "
+                   "(default: make check if the repo has that target; \"\" for none)")
     n.set_defaults(fn=cmd_new)
 
     l = sub.add_parser("list", help="list tasks")
@@ -1094,7 +1376,7 @@ def main():
     s.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
     s.set_defaults(fn=cmd_show)
 
-    ed = sub.add_parser("edit", help="change a task's title, brief or deadline")
+    ed = sub.add_parser("edit", help="change a task's title, brief, deadline or tags")
     ed.add_argument("id", help="T-id, or in a hackathon the issue number")
     ed.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
     ed.add_argument("--title")
@@ -1102,7 +1384,11 @@ def main():
     ed.add_argument("--detail-file", help="new brief from this file (for agents)")
     ed.add_argument("--take-github", action="store_true", help="adopt the issue's GitHub body")
     ed.add_argument("--keep-hub", action="store_true", help="next sync overwrites GitHub")
+    ed.add_argument("--verify", help="set the task's verify command (\"\" for none)")
+    ed.add_argument("--tag", action="append", default=[], help="add a tag, e.g. standing (repeatable)")
+    ed.add_argument("--untag", action="append", default=[], help="remove a tag (repeatable)")
     ed.add_argument("--yes", action="store_true", help="save without asking")
+    ed.add_argument("--force", action="store_true", help="let a non-lead clear 'untrusted' (recorded)")
     ed.set_defaults(fn=cmd_edit)
 
     nx = sub.add_parser("next", help="show the next task available to you")
@@ -1138,7 +1424,17 @@ def main():
     d.add_argument("--note")
     d.add_argument("--force", action="store_true",
                        help="override state/ownership rules (recorded in the ledger)")
+    d.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
+    d.add_argument("--no-verify", action="store_true",
+                   help="skip the task's verify command (recorded in the ledger)")
     d.set_defaults(fn=cmd_done)
+
+    pz = sub.add_parser("pause", help="kill switch: hub next and hub claim refuse until resume")
+    pz.add_argument("reason", nargs="*")
+    pz.set_defaults(fn=cmd_pause)
+
+    rs = sub.add_parser("resume", help="lift the kill switch")
+    rs.set_defaults(fn=cmd_resume)
 
     b = sub.add_parser("block", help="mark a task blocked")
     b.add_argument("id")
