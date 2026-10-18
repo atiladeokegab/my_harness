@@ -27,12 +27,22 @@ def read(name, default="[]"):
     p = os.path.join(d, name)
     return open(p).read() if os.path.exists(p) else default
 repo = a[a.index("-R") + 1].split("/")[1] if "-R" in a else ""
+if "--body-file" in a:
+    with open(os.path.join(d, "bodies.jsonl"), "a") as f:
+        f.write(json.dumps([a[:3], open(a[a.index("--body-file") + 1]).read()]) + "\n")
 if a[:2] == ["issue", "list"]:
     print(read(f"issues-{repo}.json"))
 elif a[:2] == ["run", "list"]:
     print(read(f"runs-{repo}.json"))
 elif a[:2] == ["run", "view"]:
     print(read(f"log-{a[2]}.txt", ""))
+elif a[:2] == ["issue", "view"]:
+    print(read(f"state-{a[2]}.json", '{"state": "OPEN"}'))
+elif a[:2] in (["issue", "close"], ["issue", "comment"], ["issue", "edit"]):
+    pass
+elif a[:2] == ["issue", "create"]:
+    n = 50 + sum(1 for l in open(os.path.join(d, "calls.jsonl")) if json.loads(l)[:2] == ["issue", "create"])
+    print(f"https://github.com/o/{repo}/issues/{n}")
 elif a[:1] == ["api"] and a[1].endswith("/permission"):
     user = a[1].split("/")[-2]
     if user == "flaky":
@@ -244,6 +254,168 @@ class FactoryPollTest(unittest.TestCase):
         self.stub_file("issues-app.json", [issue()])
         self.assertEqual(self.poll(), ["T-001"])
         self.assertIn("o/broken", self.out)
+
+    def stale_board(self, with_spec=True):
+        """T-517: hub spec apply tagged a factory task stale; its issue closes once with the change named."""
+        if with_spec:
+            (self.hub / "projects" / "app" / "spec").mkdir(parents=True)
+            (self.hub / "projects" / "app" / "spec" / "requirements.json").write_text('{"version": 2, "requirements": []}')
+        note = [{"at": "2026-10-18T02:00:00+00:00", "by": "Zeus", "text": "superseded by C-003"}]
+        base = {"project": "app", "kind": "factory", "tags": ["stale"], "notes": note, "deps": [], "owner": None}
+        (self.hub / "board.json").write_text(json.dumps({"next_id": 3, "tasks": [
+            {**base, "id": "T-001", "title": "app#7: a", "status": "claimed", "issue": 7,
+             "source": "https://github.com/o/app/issues/7"},
+            {**base, "id": "T-002", "title": "app#8: b", "status": "done", "issue": 8,
+             "source": "https://github.com/o/app/issues/8"}]}))
+        self.stub_file("state-8.json", {"state": "CLOSED"})
+
+    def test_stale_factory_task_gets_one_superseded_comment_and_its_issue_closed(self):
+        self.stale_board()
+        self.poll(dry_run=True)
+        self.assertIn("would run: gh issue close 7", self.out)
+        self.assertNotIn("issue_superseded", json.dumps(self.tasks()))
+        self.assertFalse([c for c in self.calls() if c[:2] in (["issue", "close"], ["issue", "comment"])])
+        self.poll()
+        writes = [c for c in self.calls() if c[:2] in (["issue", "close"], ["issue", "comment"])]
+        self.assertEqual([c[:3] for c in writes], [["issue", "close", "7"], ["issue", "comment", "8"]])
+        self.assertEqual(writes[0][writes[0].index("--reason") + 1], "not planned")
+        self.assertIn("Superseded by C-003", writes[0][writes[0].index("--comment") + 1])
+        self.assertEqual([t.get("issue_superseded") for t in self.tasks()], ["C-003", "C-003"])
+        self.assertEqual([t["status"] for t in self.tasks()], ["claimed", "done"])
+        self.poll()  # once
+        self.assertEqual(len([c for c in self.calls() if c[:2] in (["issue", "close"], ["issue", "comment"])]), 2)
+
+    def test_stale_tag_without_a_spec_closes_nothing(self):
+        self.stale_board(with_spec=False)
+        self.poll()
+        self.assertFalse([c for c in self.calls() if c[:2] in (["issue", "close"], ["issue", "comment"], ["issue", "view"])])
+        self.assertNotIn("issue_superseded", json.dumps(self.tasks()))
+
+    def spec_project(self):
+        (self.hub / "projects" / "app" / "spec").mkdir(parents=True)
+        (self.hub / "projects" / "app" / "spec" / "requirements.json").write_text(json.dumps(
+            {"version": 2, "requirements": [{"id": "R-1", "title": "Create link", "needs": [], "acceptance": [
+                {"id": "A-1.1", "v": 2, "text": "POST /links returns an 8-char code",
+                 "test": "tests/acceptance/test_A_1_1.py"}]}]}))
+
+    def generated_board(self):
+        head = "Generated from spec v2 by `hub spec apply C-002`. Do not edit this task: change the spec. Work on branch change/C-002.\n\n"
+        base = {"project": "app", "notes": [], "deps": [], "owner": None, "generated_from": "v2", "reqs": ["A-1.1@2"]}
+        (self.hub / "board.json").write_text(json.dumps({"next_id": 6, "tasks": [
+            {**base, "id": "T-001", "title": "R-1 Create link: A-1.1@2", "status": "open", "detail": head + "R-1 build it"},
+            {**base, "id": "T-002", "title": "R-1 seeded", "status": "claimed", "detail": "Generated from spec v1.\n\nR-1"},
+            {**base, "id": "T-003", "title": "old", "status": "open", "detail": "x", "tags": ["stale"]},
+            {**base, "id": "T-004", "title": "built", "status": "done", "detail": "x"},
+            {**base, "id": "T-005", "title": "published", "status": "open", "detail": "x", "issue": 9,
+             "issue_shipped": True}]}))
+
+    def bodies(self):
+        p = self.stub / "bodies.jsonl"
+        return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+
+    def test_each_unfinished_generated_task_gets_one_agent_issue_on_its_branch(self):
+        """T-520 (2): in a spec project nothing else gives a generated factory task its issue."""
+        self.spec_project()
+        self.generated_board()
+        self.poll(dry_run=True)
+        self.assertFalse([c for c in self.calls() if c[:2] in (["issue", "create"], ["issue", "edit"])])
+        self.poll()
+        creates = [c for c in self.calls() if c[:2] == ["issue", "create"]]
+        self.assertEqual([c[c.index("--title") + 1] for c in creates], ["R-1 Create link: A-1.1@2", "R-1 seeded"])
+        self.assertTrue(all(c[c.index("--label") + 1] == "agent" for c in creates))
+        tasks = {t["id"]: t for t in self.tasks()}
+        self.assertEqual((tasks["T-001"]["issue"], tasks["T-002"]["issue"]), (51, 52))
+        self.assertEqual(tasks["T-001"]["source"], "https://github.com/o/app/issues/51")
+        self.assertNotIn("issue", tasks["T-003"])
+        self.assertNotIn("issue", tasks["T-004"])
+        edits = {c[2]: body for c, body in self.bodies() if c[:2] == ["issue", "edit"]}
+        self.assertIn("- A-1.1@2 (R-1 Create link): POST /links returns an 8-char code", edits["51"])
+        self.assertIn("gh issue develop 51 --base change/C-002 --checkout", edits["51"])
+        self.assertIn("gh issue develop 52 --base integration --checkout", edits["52"])
+        self.assertIn("<!-- hub-task: T-001 -->", edits["51"])
+        # the new issues are listed as open agent issues now: they stay the tasks' own, nothing else happens
+        self.stub_file("issues-app.json", [issue(n=51), issue(n=52)])
+        calls = len(self.calls())
+        self.assertEqual(self.poll(), [])
+        self.assertFalse([c for c in self.calls()[calls:] if c[:2] in (["issue", "create"], ["issue", "edit"],
+                                                                       ["issue", "comment"])])
+
+    def test_a_lost_create_reply_is_found_by_its_marker_not_sent_twice(self):
+        self.spec_project()
+        self.generated_board()
+        board = json.loads((self.hub / "board.json").read_text())
+        board["tasks"] = [dict(board["tasks"][0], issue_pending=True)]
+        (self.hub / "board.json").write_text(json.dumps(board))
+        self.stub_file("issues-app.json", [issue(n=40, body="brief\n\n<!-- hub-task: T-001 -->")])
+        self.poll()
+        self.assertFalse([c for c in self.calls() if c[:2] == ["issue", "create"]])
+        self.assertEqual(self.tasks()[0]["issue"], 40)
+        # the hub's own issue is never treated as an outside proposal while its reply is lost
+        self.assertFalse([c for c in self.calls() if c[:2] == ["issue", "comment"] or "--remove-label" in c])
+
+    def test_without_a_spec_generated_tasks_get_no_issue(self):
+        self.generated_board()
+        self.poll()
+        self.assertFalse([c for c in self.calls() if c[:2] in (["issue", "create"], ["issue", "edit"])])
+
+    def test_in_a_spec_project_an_agent_issue_is_a_proposal_for_zeus_and_ci_fixes_are_tagged(self):
+        """T-520 (3): only hub spec apply makes work there; red CI still gets a fix task, tagged ci-fix."""
+        self.spec_project()
+        self.stub_file("issues-app.json", [issue(n=7)])
+        self.stub_file("runs-app.json", [run(30)])
+        self.poll()
+        [t] = self.tasks()
+        self.assertEqual(t["tags"], ["ci-fix"])
+        self.assertIn("actions/runs/30", t["source"])
+        writes = [c for c in self.calls() if c[:2] in (["issue", "edit"], ["issue", "comment"])]
+        self.assertEqual(writes[0], ["issue", "edit", "7", "-R", "o/app", "--remove-label", "agent"])
+        self.assertEqual(writes[1][:3], ["issue", "comment", "7"])
+        self.assertIn("this repo is spec-driven: Zeus turns this into a PRD change proposal", self.bodies()[-1][1])
+        inbox = (self.hub / "inbox" / "Zeus.jsonl").read_text()
+        self.assertIn("https://github.com/o/app/issues/7", inbox)
+        self.stub_file("issues-app.json", [])  # the label is gone, so GitHub no longer lists it
+        self.poll()
+        self.assertEqual(len([c for c in self.calls() if c[:2] == ["issue", "comment"]]), 1)
+
+    def test_without_a_spec_ci_fix_tasks_are_untagged(self):
+        self.stub_file("runs-app.json", [run(30)])
+        self.poll()
+        self.assertNotIn("tags", self.tasks()[0])
+
+    def test_spec_ci_fix_gets_its_own_issue_on_the_next_poll(self):
+        self.spec_project()
+        self.stub_file("runs-app.json", [run(30)])
+        self.poll()
+        self.assertFalse([c for c in self.calls() if c[:2] == ["issue", "create"]])
+        self.poll()
+        [t] = self.tasks()
+        self.assertEqual((t["issue"], t["issue_shipped"]), (51, True))
+        edits = [body for c, body in self.bodies() if c[:2] == ["issue", "edit"]]
+        self.assertIn("gh issue develop 51 --base integration --checkout", edits[0])
+
+    def test_published_ci_fix_keeps_the_failed_run_as_its_source(self):
+        self.spec_project()
+        self.stub_file("runs-app.json", [run(30)])
+        self.poll()
+        self.poll()
+        board = json.loads((self.hub / "board.json").read_text())
+        self.assertEqual(board["tasks"][0]["source"], run(30)["url"])
+        board["tasks"][0]["status"] = "done"
+        (self.hub / "board.json").write_text(json.dumps(board))
+        self.poll()
+        self.assertEqual(len(self.tasks()), 1)
+
+    def test_non_spec_ci_fix_and_stale_spec_ci_fix_get_no_issue(self):
+        self.stub_file("runs-app.json", [run(30)])
+        self.poll()
+        self.poll()
+        self.assertFalse([c for c in self.calls() if c[:2] == ["issue", "create"]])
+        self.spec_project()
+        board = json.loads((self.hub / "board.json").read_text())
+        board["tasks"][0]["tags"] = ["ci-fix", "stale"]
+        (self.hub / "board.json").write_text(json.dumps(board))
+        self.poll()
+        self.assertFalse([c for c in self.calls() if c[:2] == ["issue", "create"]])
 
 
 if __name__ == "__main__":

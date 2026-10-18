@@ -6,8 +6,14 @@
 # write to $HUB_DIR, so hubmsg drops the keystroke there as a request and this daemon --
 # which runs outside any sandbox -- performs it.
 #
-# Only agents that cannot reach tmux themselves use this path; Claude agents send their
-# own keystrokes directly and never touch the queue.
+# hubmsg queues every wake here and then tries `--deliver` itself, so the daemon only picks up
+# what a direct attempt left behind: sandboxed senders, busy or attached targets, retries.
+#
+# Request format v2 (agent OS §5.4): one wake/<Agent>.wake per agent, key=value lines
+#   version=2  agent=<Agent>  ids=<id>,<id>  [reset=1  kind=claude|codex]  created=<epoch>
+# typed as the single line "[hub wake] Run exactly: hub receive --pending". hubmsg and requeues
+# extend ids under a per-agent lock (`--enqueue`); the dispatcher's reset request replaces the file.
+# v1 (<message-id>.wake: session, line, version=1, id=) is still delivered for one release.
 set -uo pipefail
 
 # macOS: this script uses GNU coreutils flags (readlink -f, stat -c, date -Is, touch -d,
@@ -34,6 +40,15 @@ MAX_LOG_BYTES=$((256 * 1024))
 KEEP_LOG_BYTES=$((128 * 1024))
 STALE_AFTER_SECONDS=10
 RECEIPT_RETENTION_SECONDS=$((24 * 60 * 60))
+BUSY_RETRY_SECONDS=15
+# A mid-turn heartbeat older than this is a crashed or interrupted turn, not a busy one.
+BUSY_HEARTBEAT_MAX_SECONDS="${HUB_BUSY_HEARTBEAT_MAX:-600}"
+WAKE_LINE="[hub wake] Run exactly: hub receive --pending"
+# Spike T1: Codex takes an Enter that arrives with the typed /new as part of a paste, so pause first.
+RESET_ENTER_PAUSE=0.7
+RESET_SETTLE_SECONDS=3
+AGENT_RE='^[A-Za-z][A-Za-z0-9_-]{0,31}$'  # board.py's rule: hub-<name> sessions may carry _ and -
+ID_RE='^[A-Za-z0-9._-]+$'
 PRUNE_INTERVAL_SECONDS=300
 last_prune=0
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -63,6 +78,10 @@ log() {
 # Deferring is the safe direction: the message stays durable and is retried, whereas a
 # wrongly-approved permission cannot be taken back. So this matches known dialog shapes
 # from both vendors and defers on any of them.
+# Codex screens that swallow typed text: the first-run "Trust this folder?" prompt (a
+# wake's keys pick "2. Back to Agent Command Center") and the command center itself.
+LOST_WAKE_MARKERS=("Trust this folder" "Agent Command Center")
+
 MODAL_MARKERS=(
     "Press enter to confirm"
     "esc to cancel"
@@ -74,17 +93,98 @@ MODAL_MARKERS=(
     # (dry run #4: a wake landed in it and the task never started). Defer until it's closed.
     "Agent command center"
     "enter open"
+    # Codex launch dialogs (spike T1): "Update available" runs `npm install -g` on Enter, and
+    # "Hooks need review" trusts hooks. Footers: `enter continue · esc skip`, `enter confirm · esc skip`.
+    "esc skip"
+    "Hooks need review"
+    # Claude Code 2.1.302's select dialogs ("Teach auto mode about your environment?") capitalise
+    # it: `Enter to confirm · Esc to cancel`. Seen in the T8 live check; the lowercase marker missed it.
+    "Esc to cancel"
+    "${LOST_WAKE_MARKERS[@]}"
 )
 
-pane_shows_modal() {
-    local sess="$1" tail_text marker
-    # $(...) drops the pane's trailing blank rows first; tail-ing them directly would see
-    # only blanks on a pane taller than 25 rows (new detached sessions can open 46 rows tall).
+# pane_shows SESSION ROWS MARKER...: a marker in the bottom ROWS non-blank rows. Narrow on purpose:
+# transcript text that quotes a marker is not a status line or a dialog (Hermes, T-532 review).
+pane_shows() {
+    local sess="$1" rows="$2" tail_text marker; shift 2
     tail_text="$(tmux capture-pane -p -t "$sess" 2>/dev/null)" || return 1
-    tail_text="$(tail -25 <<< "$tail_text")"
-    for marker in "${MODAL_MARKERS[@]}"; do
+    tail_text="$(grep -v '^[[:space:]]*$' <<< "$tail_text" | tail -n "$rows")"
+    for marker in "$@"; do
         case "$tail_text" in *"$marker"*) return 0 ;; esac
     done
+    return 1
+}
+
+# Dialogs render at the bottom; 12 rows covers a permission prompt's question, options and footer.
+pane_shows_modal() { pane_shows "$1" 12 "${MODAL_MARKERS[@]}"; }
+
+# Agent OS §5.3: mid-turn means the status line (bottom 3 rows) shows `esc to interrupt` (both CLIs),
+# or the agent's last heartbeat is a fresh UserPromptSubmit/PostToolUse, i.e. newer than its last Stop.
+agent_busy() {
+    local sess="$1" beat="$HUB_DIR/state/$2.json"
+    pane_shows "$sess" 3 "esc to interrupt" && return 0
+    [ -f "$beat" ] || return 1
+    [ $(( $(date +%s) - $(stat -c %Y "$beat" 2>/dev/null || echo 0) )) -lt "$BUSY_HEARTBEAT_MAX_SECONDS" ] || return 1
+    grep -Eq '"event": *"(UserPromptSubmit|PostToolUse)"' "$beat"
+}
+
+# Checked again after Enter: the cursor moves on these screens too, so without this a wake
+# that went nowhere is reported confirmed (dry run 2026-10-12).
+# 25 rows: the command center's title sits at the top of its list.
+pane_lost_wake() { pane_shows "$1" 25 "${LOST_WAKE_MARKERS[@]}"; }
+
+# Agent OS §1 downgrade rule, past the attached/modal/busy guards: print why and succeed when the agent
+# did something since the dispatcher's offer (a heartbeat newer than created=) or now holds a claimed
+# or blocked task. An unreadable board counts as holding one: a downgrade is the safe direction.
+reset_veto() {
+    local agent="$1" created="$2" beat="$HUB_DIR/state/$1.json"
+    if [ -f "$beat" ] && [ "$(stat -c %Y "$beat" 2>/dev/null || echo 0)" -gt "${created:-0}" ]; then
+        echo "heartbeat newer than the offer"; return 0
+    fi
+    python3 -c '
+import json, sys
+try:
+    tasks = json.load(open(sys.argv[1]))["tasks"]
+except (OSError, ValueError, KeyError, TypeError):
+    print("board unreadable"); sys.exit(0)
+held = {t["status"] for t in tasks if t.get("status") in ("claimed", "blocked")
+        and (t.get("agent") or t.get("owner") or "").lower() == sys.argv[2].lower()}
+if held:
+    print(f"holds a {sorted(held)[0]} task")
+sys.exit(0 if held else 1)' "$HUB_DIR/board.json" "$agent"
+}
+
+# A row that is only the slash command, give or take a prompt glyph or box border: the composer still
+# holds it. Both CLIs clear the screen on /clear and /new (spike T1), so a left-over row means no submit.
+composer_shows() {
+    local text
+    text="$(tmux capture-pane -p -t "$1" 2>/dev/null)" || return 1
+    grep -v '^[[:space:]]*$' <<< "$text" | tail -n 12 \
+        | grep -Eq "^[[:space:]]*([^[:alnum:][:space:]/]+[[:space:]]*)?$2[[:space:]]*([^[:alnum:][:space:]]+)?[[:space:]]*\$"
+}
+
+# Type /clear (Claude) or /new (Codex), pause, Enter, and confirm the pane changed on Enter and the composer let go
+# of it. On failure print why, clear the input line and fail, so the caller sends a plain wake instead.
+type_reset() {
+    local sess="$1" cmd before attempt
+    case "$2" in claude) cmd=/clear ;; codex) cmd=/new ;; *) echo "no kind= for the reset"; return 1 ;; esac
+    # Empty the composer first: a leftover draft would turn this into the prompt "<draft>/clear" (Hermes,
+    # T-534 review). Never a person's draft: the attached guard has already ruled that out.
+    tmux send-keys -t "$sess" C-u
+    tmux send-keys -t "$sess" -l -- "$cmd"
+    sleep "$RESET_ENTER_PAUSE"
+    # The screen with the command typed: a fresh session can look exactly like the one before the reset.
+    before="$(tmux capture-pane -p -t "$sess" 2>/dev/null)"
+    tmux send-keys -t "$sess" Enter
+    for attempt in $(seq 1 12); do
+        sleep 0.25
+        if [ "$(tmux capture-pane -p -t "$sess" 2>/dev/null)" != "$before" ] && ! composer_shows "$sess" "$cmd"; then
+            return 0
+        fi
+    done
+    # A prompt typed onto a lingering /new can be lost (spike T1).
+    tmux send-keys -t "$sess" C-u
+    echo "$cmd not submitted (pane unchanged or the input line still shows it), input line cleared"
     return 1
 }
 
@@ -192,6 +292,30 @@ request_value() {
     printf '%s' "$value"
 }
 
+# Add message ids to wake/<Agent>.wake, creating it if needed, and print its path. Keeps a pending
+# request's reset/kind/created, so a message that joins a reset still gets the reset.
+enqueue() {
+    local agent="$1" new="$2" dest="$WAKE_DIR/$1.wake"
+    [[ "$agent" =~ $AGENT_RE ]] || return 1
+    (
+        flock -w 10 9 || exit 1
+        local ids="$new" extra="" created
+        created="$(date +%s)"
+        if [ -f "$dest" ]; then
+            ids="$(request_value ids "$dest"),$new"
+            created="$(request_value created "$dest" || date +%s)"
+            extra="$(grep -E '^(reset|kind)=' "$dest")"
+        fi
+        ids="$(tr ',' '\n' <<< "$ids" | awk 'NF && !seen[$0]++' | paste -sd, -)"
+        {
+            printf 'version=2\nagent=%s\nids=%s\n' "$agent" "$ids"
+            [ -z "$extra" ] || printf '%s\n' "$extra"
+            printf 'created=%s\n' "$created"
+        } > "$dest.tmp.$$" && mv "$dest.tmp.$$" "$dest"
+    ) 9> "$WAKE_DIR/.lock-$agent" || return 1
+    printf '%s\n' "$dest"
+}
+
 cursor_position() {
     local sess="$1"
     tmux display-message -p -t "$sess" '#{cursor_x}:#{cursor_y}' 2>/dev/null
@@ -208,7 +332,7 @@ recover_inflight() {
         kill -0 "$handler" 2>/dev/null && continue
         # The owning process died before recording an outcome. Return the durable request
         # to the queue; the delivered receipt still prevents duplication if it got far.
-        mv "$file" "$WAKE_DIR/$id.wake"
+        requeue_request "$file" "$id" 0
         log "recovered inflight id=$id from dead handler=$handler"
     done
 }
@@ -236,12 +360,19 @@ mark_failed() {
 
 requeue_request() {
     local file="$1" id="$2" delay="$3" queued="$WAKE_DIR/$id.wake"
-    mv "$file" "$queued"
+    # v2: merge into whatever hubmsg queued meanwhile rather than overwrite it. A guard failed, so
+    # this request's own reset/kind are dropped: a reset is never retried later (agent OS §1).
+    if [ "$(request_value version "$file")" = 2 ] && queued="$(enqueue "$id" "$(request_value ids "$file")")"; then
+        rm -f "$file"
+    else
+        queued="$WAKE_DIR/$id.wake"
+        mv "$file" "$queued"
+    fi
     touch -d "@$(( $(date +%s) + delay ))" "$queued"
 }
 
 deliver_request() {
-    local file="$1" version id sess line attempt before after pasted claimed
+    local file="$1" version id sess line attempt before after pasted claimed agent="" ids i left=0 why="" reset="" veto
     [ -f "$file" ] || { log "request vanished: $file"; return 1; }
     # A read can fail because another handler claimed (moved) the file after the -f check.
     # That is a lost race, not a bad request: report it as claimed-elsewhere (3).
@@ -251,9 +382,11 @@ deliver_request() {
         mv "$file" "$FAILED_DIR/invalid-$(basename "$file")"
         return 1
     }
-    id="$(request_value id "$file" 2>/dev/null)" || {
-        [ -f "$file" ] || return 3
-        log "bad request (no id), quarantined: $file"
+    # The claim key: the message id for v1, the agent for v2.
+    id="$(request_value "$([ "$version" = 2 ] && echo agent || echo id)" "$file" 2>/dev/null)" && [[ "$id" =~ $ID_RE ]] || {
+        [ -f "$file" ] || return 3  # a lost race: another handler claimed it
+        # Checked before the claim: the key names the inflight file, so it must not be a path.
+        log "bad request (no valid id or agent), quarantined: $file"
         mv "$file" "$FAILED_DIR/invalid-$(basename "$file")"
         return 1
     }
@@ -264,34 +397,45 @@ deliver_request() {
         if ! mv "$file" "$claimed" 2>/dev/null; then return 3; fi
         file="$claimed"
     fi
-    rm -f "$DEFERRED_DIR/$id"
-    sess="$(sed -n '1p' "$file")"
-    line="$(sed -n '2p' "$file")"
-    [ -n "$sess" ] || { mark_failed "$file" "$id" "missing-session"; return 1; }
-    [ -n "$line" ] || { mark_failed "$file" "$id" "missing-line"; return 1; }
-
-    if [ "$version" != 1 ] || [[ ! "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ ! "$sess" =~ ^hub-[a-z0-9_-]+$ ]]; then
+    if [ "$version" = 2 ]; then
+        agent="$id"
+        sess="hub-${agent,,}"
+        line="$WAKE_LINE"
+        ids="$(request_value ids "$file")"
+        # Checked whole before word-splitting, so no id can be a glob or a path.
+        [[ "$agent" =~ $AGENT_RE ]] && [[ "$ids" =~ ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$ ]] || {
+            mark_failed "$file" "${id//[^A-Za-z0-9._-]/_}" "invalid-request"; return 1; }
+        ids="${ids//,/ }"
+    else
+        sess="$(sed -n '1p' "$file")"
+        line="$(sed -n '2p' "$file")"
+        ids="$id"
+        [ -n "$sess" ] || { mark_failed "$file" "$id" "missing-session"; return 1; }
+        [ -n "$line" ] || { mark_failed "$file" "$id" "missing-line"; return 1; }
+        agent="${sess#hub-}"; agent="${agent^}"
+    fi
+    if [ "$version" != 1 ] && [ "$version" != 2 ] || [[ ! "$id" =~ $ID_RE ]] || [[ ! "$sess" =~ ^hub-[a-z0-9_-]+$ ]]; then
         mark_failed "$file" "${id//[^A-Za-z0-9._-]/_}" "invalid-request"
         return 1
     fi
-    if [ -e "$DELIVERED_DIR/$id" ]; then
+    for i in $ids; do rm -f "$DEFERRED_DIR/$i"; done
+    [ "$version" != 2 ] || [ "$(request_value reset "$file")" != 1 ] || reset=1
+
+    # Already woken for, already read with `hub receive`, or too old to still be worth a
+    # keystroke: drop the wake only. The message itself stays in the durable inbox. (Dry runs
+    # #3 and #4: dozens of wakes from earlier days were replayed into a live session, one into
+    # a question box.) A v2 request goes only when every id it lists is covered.
+    for i in $ids; do
+        if [ -e "$DELIVERED_DIR/$i" ]; then why+=";already delivered"
+        elif [ -e "$HUB_DIR/inbox/.received/$agent/$i" ]; then why+=";already received"
+        elif [[ "${i%%-*}" =~ ^[0-9]{19}$ ]] && (( $(date +%s) - ${i%%-*} / 1000000000 > ${HUB_WAKE_MAX_AGE:-21600} )); then
+            why+=";older than ${HUB_WAKE_MAX_AGE:-21600}s, message stays in the inbox"
+        else left=$((left + 1)); fi
+    done
+    if [ "$left" -eq 0 ]; then
         rm -f "$file"
-        log "deduplicated id=$id session=$sess"
-        return 0
-    fi
-    # Already read with `hub receive`, or too old to still be worth a keystroke: drop the
-    # wake only. The message itself stays in the durable inbox. (Dry runs #3 and #4: dozens
-    # of wakes from earlier days were replayed into a live session, one into a question box.)
-    local agent="${sess#hub-}"; agent="${agent^}"
-    if [ -e "$HUB_DIR/inbox/.received/$agent/$id" ]; then
-        rm -f "$file" "$DEFERRED_DIR/$id"; : > "$DELIVERED_DIR/$id"
-        log "dropped id=$id session=$sess (already received)"
-        return 0
-    fi
-    local born="${id%%-*}"
-    if [[ "$born" =~ ^[0-9]{19}$ ]] && (( $(date +%s) - born / 1000000000 > ${HUB_WAKE_MAX_AGE:-21600} )); then
-        rm -f "$file" "$DEFERRED_DIR/$id"; : > "$DELIVERED_DIR/$id"
-        log "dropped id=$id session=$sess (older than ${HUB_WAKE_MAX_AGE:-21600}s; message stays in the inbox)"
+        for i in $ids; do : > "$DELIVERED_DIR/$i"; done
+        log "dropped id=$id session=$sess ($(tr ';' '\n' <<< "$why" | awk 'NF && !seen[$0]++' | paste -sd, - | sed 's/,/, /g'))"
         return 0
     fi
     if ! tmux has-session -t "$sess" 2>/dev/null; then
@@ -304,24 +448,57 @@ deliver_request() {
     if [ "$(tmux display-message -p -t "$sess" '#{session_attached}' 2>/dev/null)" -gt 0 ]; then
         # Never inject keystrokes into a pane a person may be editing. Return the claimed
         # request to the durable queue; the daemon will retry after they detach.
-        : > "$DEFERRED_DIR/$id"
+        for i in $ids; do : > "$DEFERRED_DIR/$i"; done
         requeue_request "$file" "$id" 5
         # A deferred wake is otherwise invisible to the person at the keyboard. The status
         # line reaches them without touching the input they are typing.
         tmux display-message -t "$sess" "hub: message waiting - run 'hub inbox'" 2>/dev/null || true
+        [ -z "$reset" ] || log "reset downgraded: attached id=$id session=$sess"
         log "deferred id=$id session=$sess (attached)"
         return 4
     fi
     if pane_shows_modal "$sess"; then
         # Same treatment as an attached pane: requeue rather than risk confirming a dialog.
-        : > "$DEFERRED_DIR/$id"
+        for i in $ids; do : > "$DEFERRED_DIR/$i"; done
         requeue_request "$file" "$id" 5
+        [ -z "$reset" ] || log "reset downgraded: confirmation dialog id=$id session=$sess"
         log "deferred id=$id session=$sess (confirmation dialog on screen)"
         return 4
+    fi
+    if agent_busy "$sess" "$agent"; then
+        # Typing into a working TUI queues a draft that waits for the turn to end anyway (9 min
+        # once, 2026-10-18). The Stop hook usually hands the messages over first, and then the
+        # retry is dropped as already received.
+        for i in $ids; do : > "$DEFERRED_DIR/$i"; done
+        requeue_request "$file" "$id" "$BUSY_RETRY_SECONDS"
+        [ -z "$reset" ] || log "reset downgraded: busy id=$id session=$sess"
+        log "busy id=$id session=$sess (mid-turn; retry in ${BUSY_RETRY_SECONDS}s)"
+        return 6
+    fi
+    # Agent OS §1: the guards above already turned an attached, dialog or busy reset into a plain retry
+    # (requeue drops reset=). A reset is never retried: it is delivered now or downgraded.
+    if [ -n "$reset" ]; then
+        if veto="$(reset_veto "$agent" "$(request_value created "$file")")" \
+                || ! veto="$(type_reset "$sess" "$(request_value kind "$file")")"; then
+            log "reset downgraded: $veto id=$id session=$sess"
+        else
+            log "reset delivered id=$id session=$sess kind=$(request_value kind "$file")"
+            sleep "$RESET_SETTLE_SECONDS"
+            # Someone may have attached, or a dialog opened, in the fresh session: defer the line as usual.
+            if [ "$(tmux display-message -p -t "$sess" '#{session_attached}' 2>/dev/null)" != 0 ] || pane_shows_modal "$sess"; then
+                for i in $ids; do : > "$DEFERRED_DIR/$i"; done
+                requeue_request "$file" "$id" 5
+                log "deferred id=$id session=$sess (attached or dialog after the reset)"
+                return 4
+            fi
+        fi
     fi
 
     # Confirm that the literal paste moved the terminal cursor before sending Enter. This
     # works for wrapped and paste-collapsed input without interpreting pane history.
+    # Empty the composer first: leftover input (a relay killed mid-type left "[hub wake" in one) would
+    # make "<leftover>[hub wake] ..." one garbled prompt. Not attached and no dialog, so not a person's draft.
+    tmux send-keys -t "$sess" C-u
     before="$(cursor_position "$sess")"
     tmux send-keys -t "$sess" -l -- "$line"
     for attempt in 1 2 3 4 5; do
@@ -345,9 +522,14 @@ deliver_request() {
         # Submission clears/moves the input cursor. Exactly one atomic owner can paste,
         # so a second writer can no longer manufacture this state change.
         if [ "$after" != "$pasted" ]; then
-            : > "$DELIVERED_DIR/$id"
+            if pane_lost_wake "$sess"; then
+                requeue_request "$file" "$id" 2
+                log "retry queued id=$id reason=submit-landed-off-prompt"
+                return 5
+            fi
+            for i in $ids; do : > "$DELIVERED_DIR/$i"; done
             rm -f "$file"
-            log "delivered id=$id session=$sess confirm_poll=$attempt"
+            log "delivered id=$id$([ "$version" = 2 ] && echo " ids=${ids// /,}") session=$sess confirm_poll=$attempt"
             return 0
         fi
     done
@@ -358,7 +540,11 @@ deliver_request() {
     return 5
 }
 
-if [ "${1:-}" = "--deliver" ]; then
+if [ "${1:-}" = "--enqueue" ]; then
+    [ $# -eq 3 ] && [[ "$3" =~ $ID_RE ]] || { echo "usage: hubwaked --enqueue AGENT MESSAGE_ID" >&2; exit 2; }
+    enqueue "$2" "$3"
+    exit $?
+elif [ "${1:-}" = "--deliver" ]; then
     [ $# -eq 2 ] || { echo "usage: hubwaked --deliver REQUEST" >&2; exit 2; }
     deliver_request "$2"
     exit $?
@@ -371,7 +557,7 @@ elif [ "${1:-}" = "--wait" ]; then
     wait_for_outcome "$2"
     exit $?
 elif [ $# -gt 0 ]; then
-    echo "usage: hubwaked [--deliver REQUEST|--wait MESSAGE_ID|--status]" >&2
+    echo "usage: hubwaked [--enqueue AGENT MESSAGE_ID|--deliver REQUEST|--wait MESSAGE_ID|--status]" >&2
     exit 2
 fi
 

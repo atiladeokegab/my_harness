@@ -1,5 +1,5 @@
 [Unit]
-Description=Hub nightly: archive old inbox messages, then snapshot hub state to the bucket
+Description=Hub nightly: archive old inbox messages, gc finished task workspaces, then snapshot hub state to the bucket
 
 [Service]
 Type=oneshot
@@ -10,4 +10,5 @@ EnvironmentFile=-%h/.config/hub/env
 TimeoutStartSec=1h
 # A leading '-' lets the snapshot run even when the inbox archive fails.
 ExecStart=-/usr/bin/env python3 ${HUB_DIR}/inbox_gc.py
+ExecStart=-/usr/bin/env python3 ${HUB_DIR}/board.py ws gc
 ExecStart=-/bin/bash ${HUB_DIR}/snapshot.sh full

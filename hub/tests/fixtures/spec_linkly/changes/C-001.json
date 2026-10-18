@@ -1,0 +1,27 @@
+{
+  "id": "C-001",
+  "base_version": 4,
+  "added": [
+    {
+      "id": "A-3.3",
+      "req": "R-3",
+      "text": "a visitor counts once a day, by hashed IP and user agent"
+    }
+  ],
+  "modified": [
+    {
+      "id": "A-3.2",
+      "text": "stats returns {total, unique, by_day}"
+    },
+    {
+      "id": "A-5.1",
+      "text": "lists links with unique visitors today"
+    },
+    {
+      "id": "R-3",
+      "title": "visits"
+    }
+  ],
+  "removed": [],
+  "reason": "Raw clicks are useless: unique visitors per day, and the dashboard shows unique."
+}

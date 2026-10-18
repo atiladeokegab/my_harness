@@ -8,4 +8,6 @@ Environment=HUB_DIR=%h/hub
 # Your roster, HUB_DIR and HUB_CODE_DIR, if not the defaults (runbooks/install-factory-timers.md).
 EnvironmentFile=-%h/.config/hub/env
 Environment=HUB_AGENT=Dispatch
-ExecStart=/usr/bin/env python3 ${HUB_DIR}/dispatch.py weekly
+# A leading '-' lets converge run even when the weekly tasks fail.
+ExecStart=-/usr/bin/env python3 ${HUB_DIR}/dispatch.py weekly
+ExecStart=/usr/bin/env python3 ${HUB_DIR}/board.py spec converge

@@ -9,7 +9,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -140,6 +142,7 @@ class LiveTest(unittest.TestCase):
         self.tasks({"issue": 4, "agent": "Prometheus", "owner": "Prometheus", "kind": "factory", "status": "done"},
                    {"issue": 4, "project": "other", "status": "done"})
         self.live.state["merge_events"] = [
+            {"at": "2026-10-01T12:00:00+00:00", "event": "change-merged", "branch": "change/C-001", "sha": "1" * 40},
             {"at": "2026-10-01T12:01:00+00:00", "pr": 9, "issue": 4, "event": "merged"},
             {"at": "2026-10-01T12:02:00+00:00", "pr": 9, "issue": 4, "event": "reverted", "why": "1 failed, 40 passed"}]
         self.live.tick(); self.live.tick()
@@ -158,6 +161,26 @@ class LiveTest(unittest.TestCase):
         self.config(factory=True)
         self.live.sync()
         self.assertFalse([c for c in self.fake.calls if c[:2] == ["hub", "gh-sync"]])
+
+    def test_each_merge_puts_its_squash_commit_on_the_task_it_closes_once(self):
+        """T-521 addition: merge_sha by the closed issue, then by the Task: trailer, for spec.py's history()."""
+        self.tasks({"issue": 4, "kind": "factory", "status": "done"}, {"status": "done"},
+                   {"issue": 4, "project": "other", "status": "done"})
+        self.live.state["merge_events"] = [
+            {"at": "2026-10-01T12:01:00+00:00", "pr": 9, "issue": 4, "event": "merged", "sha": "1" * 40, "task": None},
+            {"at": "2026-10-01T12:02:00+00:00", "pr": 10, "issue": 99, "event": "merged", "sha": "2" * 40, "task": "t-2"},
+            {"at": "2026-10-01T12:03:00+00:00", "pr": 8, "issue": 4, "event": "merged"}]  # before T-521: no sha
+        self.live.tick()  # also seeds the hand merges
+        self.fake.answers["gh pr list -R me/ev --state merged"] = done(json.dumps([
+            {"number": 11, "body": "Closes #98\n\nTask: T-002", "mergedAt": "2026-10-01T12:30:00Z",
+             "mergeCommit": {"oid": "3" * 40}}]))
+        self.live.tick(); self.live.tick()
+        self.assertEqual(self.board_task(1)["merge_sha"], "1" * 40)
+        self.assertEqual(self.board_task(2)["merge_sha"], ["2" * 40, "3" * 40])  # a list once there are two
+        self.assertNotIn("merge_sha", self.board_task(3))
+        events = [json.loads(l) for l in (Path(self.tmp) / "events.jsonl").read_text().splitlines()]
+        self.assertEqual([(e["task"], e["sha"][0]) for e in events if e["event"] == "merge_sha"],
+                         [("T-001", "1"), ("T-002", "2"), ("T-002", "3")])
 
     def test_revert_leaves_an_event_task_on_the_same_issue_alone(self):
         self.tasks({"issue": 4, "agent": "Prometheus", "owner": "Prometheus", "status": "done"})  # no kind: event task
@@ -237,10 +260,10 @@ class LiveTest(unittest.TestCase):
             {"number": 5, "body": "Closes #4\nVerified: x", "mergedAt": "2026-10-01T11:30:00Z"}]))
         self.live.tick(); self.live.tick()
         self.assertEqual(self.live.state["merge_events"][1:], [
-            {"at": "2026-10-01T11:30:00Z", "pr": 5, "issue": 4, "event": "merged", "by": "hand"}])
+            {"at": "2026-10-01T11:30:00Z", "pr": 5, "issue": 4, "event": "merged", "by": "hand", "sha": None, "task": None}])
         listed = [c for c in self.fake.calls if c[:5] == ["gh", "pr", "list", "-R", "me/ev"] and "merged" in c]
         self.assertEqual(listed[0][5:], ["--state", "merged", "--base", "integration", "--limit", "20",
-                                         "--json", "number,body,mergedAt"])
+                                         "--json", "number,body,mergedAt,mergeCommit"])
 
     def test_pr_without_evidence_is_held_with_one_comment_and_docs_only_skip_review(self):
         lead_pr = {"number": 7, "title": "t", "headRefOid": "7" * 40, "isDraft": False, "author": {"login": "lead"},
@@ -572,6 +595,34 @@ class LiveTest(unittest.TestCase):
         self.live_mod.cmd_live(ns(roll_call=True))
         self.assertTrue((d / ".roll-call-now").is_file())
 
+    def test_gate_exit_kick_starts_merge_and_deploy_in_one_inner_iteration(self):
+        sha = self.deploy_repo("true")
+        self.live.state.pop("promoted")
+        kick = self.live.dir / ".tick-now"
+        kick.touch()
+
+        def promote():
+            self.live.state["promoted"] = sha
+
+        args = types.SimpleNamespace(project="ev", once=False, interval=10, merge_now=False,
+                                     hold_merges=False, resume_merges=False, roll_call=False)
+        with mock.patch.object(self.live_mod, "Live", return_value=self.live), \
+             mock.patch.object(self.live, "tick", side_effect=[True, False]), \
+             mock.patch.object(self.live, "merge", side_effect=promote), \
+             mock.patch.object(self.live_mod.time, "sleep"):
+            self.live_mod.cmd_live(args)
+        self.assertFalse(kick.exists())
+        self.assertEqual(self.live.state["deploy"]["sha"], sha)
+        self.wait_deploy()
+
+    def test_merge_now_starts_deploy_after_promotion(self):
+        sha = self.deploy_repo("true")
+        self.live.state.pop("promoted")
+        with mock.patch.object(self.live, "merge", side_effect=lambda: self.live.state.update(promoted=sha)):
+            self.live.merge_now()
+        self.assertEqual(self.live.state["deploy"]["sha"], sha)
+        self.wait_deploy()
+
     def test_quick_poll_tells_hermes_about_a_new_pr(self):
         self.fake.answers["gh pr list"] = done(json.dumps([{"number": 4, "title": "t", "headRefOid": "f" * 40,
                                                             "isDraft": False, "author": {"login": "sam"},
@@ -707,6 +758,7 @@ class LiveTest(unittest.TestCase):
                 self.assertEqual(state["freeze_sha"], sha)
                 to_zeus = [t for a, t in self.fake.sent if a == "Zeus" and sha[:12] in t]
                 self.assertEqual(sum(sha in t and "Tell the lead" in t for t in to_zeus), 1)
+                self.assertEqual(sum("The runner scripts/run_cases.py is in it." in t for t in to_zeus), 1 - warned)
                 self.assertEqual(sum("not in the frozen commit" in t for t in to_zeus), warned)
                 self.assertEqual(sum("starter/core/store.py:12:# ponytail: global lock" in t for t in to_zeus), 1)
                 self.assertEqual(sum("app/agent.py:40:# shortcut: one retry" in t for t in to_zeus), 1)
@@ -939,6 +991,124 @@ class LiveTest(unittest.TestCase):
         r1.kill(); r1.wait(); r1.stdout.close()
         self.assertEqual(r2.returncode, 1)
         self.assertIn("already running", r2.stderr)
+
+
+SPEC = {"version": 2, "requirements": [{"id": "R-1", "title": "Create link", "needs": [], "acceptance": [
+    {"id": "A-1.1", "v": 2, "text": "POST /links returns an 8-char code", "test": "tests/acceptance/test_A_1_1.py"}]}]}
+
+
+class SpecLiveTest(unittest.TestCase):
+    """T-517: in a project with spec/requirements.json, hub live enforces Req: and protects the spec."""
+    make, tasks = LiveTest.make, LiveTest.tasks
+
+    def setUp(self):
+        env = mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        LiveTest.setUp(self)
+
+    def write_spec(self):
+        (Path(self.tmp) / "projects" / "ev" / "spec").mkdir()
+        (Path(self.tmp) / "projects" / "ev" / "spec" / "requirements.json").write_text(json.dumps(SPEC))
+
+    def pr(self, extra="", sha="a" * 40, path="app/x.py"):
+        return {"number": 7, "title": "web", "headRefOid": sha, "isDraft": False, "author": {"login": "sam"},
+                "body": "Closes #17\nVerified: make check: 3 passed" + extra, "files": [{"path": path}],
+                "changedFiles": 1, "comments": [], "reviews": []}
+
+    def reviews(self):
+        return [t for a, t in self.fake.sent if a == "Hermes" and "ready for review" in t]
+
+    def comments(self):
+        return [c for c in self.fake.calls if c[:4] == ["gh", "pr", "comment", "7"]]
+
+    def test_a_pr_without_a_current_req_gets_one_hold_comment_and_no_review(self):
+        self.fake.answers["gh pr list"] = done(json.dumps([self.pr()]))
+        self.fake.answers["gh pr view 7"] = done('{"commits": [{"messageHeadline": "x", "messageBody": ""}]}')
+        self.live.prs()  # no spec yet: reviewed as before
+        self.assertEqual(len(self.reviews()), 1)
+        self.write_spec()
+        self.live.prs(); self.live.prs()
+        [held] = self.comments()
+        self.assertIn("no `Req:` trailer", held[held.index("--body") + 1])
+        self.fake.answers["gh pr list"] = done(json.dumps([self.pr("\nReq: A-1.1@1", sha="b" * 40)]))
+        self.live.prs(); self.live.prs()
+        self.assertEqual(len(self.comments()), 2)
+        self.assertIn("A-1.1@1 (current: A-1.1@2)", self.comments()[1][-1])
+        self.assertEqual(len(self.reviews()), 1)
+        self.fake.answers["gh pr list"] = done(json.dumps([self.pr("\nReq: A-1.1@2", sha="c" * 40)]))
+        self.live.prs()
+        self.assertEqual(len(self.reviews()), 2)
+        self.assertEqual(len(self.comments()), 2)
+
+    def test_a_pr_touching_the_spec_or_acceptance_tests_goes_to_zeus_not_hermes(self):
+        self.write_spec()
+        for n, path in ((1, "tests/acceptance/test_A_1_1.py"), (2, "spec/requirements.json")):
+            self.fake.answers["gh pr list"] = done(json.dumps([self.pr("\nReq: A-1.1@2", sha=str(n) * 40, path=path)]))
+            self.live.prs(); self.live.prs()
+            self.assertEqual(sum(a == "Zeus" and "PR #7" in t and "protected" in t for a, t in self.fake.sent), n)
+        self.assertEqual(self.reviews(), [])
+
+    def test_req_ci_fix_is_accepted_only_from_a_ci_fix_task(self):
+        self.write_spec()
+        self.tasks({"tags": ["ci-fix"], "kind": "factory", "issue": 17}, {"kind": "factory"})
+        self.fake.answers["gh pr list"] = done(json.dumps([self.pr("\nReq: ci-fix\nTask: T-002")]))
+        self.live.prs()
+        self.assertIn("ci-fix", self.comments()[0][-1])
+        self.assertEqual(self.reviews(), [])
+        self.fake.answers["gh pr list"] = done(json.dumps([self.pr("\nReq: ci-fix\nTask: T-001", sha="b" * 40) | {"body": "Closes #8\nVerified: make check: 3 passed\nReq: ci-fix\nTask: T-001"}]))
+        self.live.prs()
+        self.assertEqual(self.reviews(), [])
+        self.assertIn("ci-fix", self.comments()[-1][-1])
+        self.fake.answers["gh pr list"] = done(json.dumps([self.pr("\nReq: ci-fix\nTask: T-001", sha="b" * 40)]))
+        self.live.prs()
+        self.assertEqual(len(self.reviews()), 1)
+
+    def test_req_ci_fix_without_an_issue_is_held(self):
+        self.write_spec()
+        self.tasks({"tags": ["ci-fix"], "kind": "factory"})
+        self.fake.answers["gh pr list"] = done(json.dumps([self.pr("\nReq: ci-fix\nTask: T-001")]))
+        self.live.prs()
+        self.assertEqual(self.reviews(), [])
+        self.assertIn("ci-fix", self.comments()[0][-1])
+
+    def test_done_opens_a_generated_tasks_pr_against_its_change_branch(self):
+        self.write_spec()
+        self.tasks({"issue": 12, "generated_from": "v2", "detail": "Generated from spec v2 by `hub spec apply C-002`. "
+                    "Do not edit this task: change the spec. Work on branch change/C-002.\n\nR-1"})
+        said = {"createdAt": "2026-10-01T12:30:00Z", "author": {"login": "sam"},
+                "body": "DONE: x\nVerified: uv run pytest -q: 4 passed\nReq: A-1.1@2"}
+        self.fake.answers["gh issue list -R me/ev --state open --limit 200 --json number,title,comments"] = \
+            done(json.dumps([{"number": 12, "title": "R-1", "comments": [said]}]))
+        self.fake.answers["gh api repos/me/ev/git/matching-refs/heads/12-"] = done('["refs/heads/12-r1"]')
+        self.live.done()
+        [c] = [c for c in self.fake.calls if c[:3] == ["gh", "pr", "create"]]
+        self.assertEqual(c[c.index("--base") + 1], "change/C-002")
+
+    def test_merge_gets_the_current_prd_and_the_unfinished_generated_tasks(self):
+        seen = []
+        sys.modules["live_merge"] = types.SimpleNamespace(merge_tick=lambda *a, **kw: seen.append(kw))
+        self.live.merge()
+        self.assertEqual(seen, [{}])  # no spec: called exactly as before
+        self.write_spec()
+        self.tasks({"generated_from": "v2", "status": "open", "issue": 7,
+                    "detail": "Work on branch change/C-002."},
+                   {"generated_from": "v2", "status": "done", "issue": 8,
+                    "detail": "Work on branch change/C-002."},
+                   {"generated_from": "v1", "tags": ["stale"]}, {"kind": "factory", "status": "open"},
+                   {"generated_from": "v2", "project": "other"})
+        self.live.merge()
+        self.assertEqual(seen[1], {"req_lines": {"A-1.1": 2}, "change_tasks": ["T-001"], "acceptance_timeout": 300,
+                                   "change_issues": {"change/C-002": [7, 8]},
+                                   "ci_fix_tasks": {}, "change_timeout": 1800, "gate_dir": self.live.dir,
+                                   "acceptance": [["uv", "run", "pytest", "-q", "tests/acceptance/test_A_1_1.py"]]})
+        (Path(self.tmp) / "factory.json").write_text(json.dumps({"repos": [
+            {"repo": "me/other"}, {"repo": "me/ev", "acceptance_cmd": "make accept T={test}", "acceptance_timeout": 60,
+                                   "change_timeout": 2400}]}))
+        self.live.merge()  # factory.json's acceptance command and timeout, as hub spec runs them
+        self.assertEqual((seen[2]["acceptance"], seen[2]["acceptance_timeout"]),
+                         ([["make", "accept", "T=tests/acceptance/test_A_1_1.py"]], 60))
+        self.assertEqual(seen[2]["change_timeout"], 2400)
 
 
 if __name__ == "__main__":

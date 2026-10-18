@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -42,7 +43,7 @@ class BoardHelpers(unittest.TestCase):
                if not k.startswith("HUB_")}  # HUB_CODE_DIR, HUB_LEAD: the roster under test is the default one
         # HOME too: hub done looks for the task's checkout under ~/code, and a real one
         # with a `make check` target would run its suite inside these tests.
-        env.update(HUB_DIR=str(self.root), HUB_AGENT=agent, HOME=str(self.root), **(env_extra or {}))
+        env.update({"HUB_DIR": str(self.root), "HUB_AGENT": agent, "HOME": str(self.root), **(env_extra or {})})
         if project:
             env["HUB_PROJECT"] = project
         return subprocess.run(
@@ -72,6 +73,91 @@ class BoardHelpers(unittest.TestCase):
 
 
 class BoardCase(BoardHelpers):
+    def test_spec_project_tasks_are_generated_and_immutable(self):
+        spec = self.root / "projects" / "p" / "spec"
+        spec.mkdir(parents=True)
+        (spec / "requirements.json").write_text('{"version": 5, "requirements": []}')
+        refused = self.run_hub("new", "manual", "--project", "p")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("tasks for p come from hub spec apply", refused.stderr)
+        self.assertEqual(self.read_board()["tasks"], [])
+        self.assert_ok(self.run_hub("new", "generated", "--project", "p", "--from-spec",
+                                    "--generated-from", "v5", "--req", "A-3.2@1",
+                                    "--req", "A-5.1@1", "--detail", "build it"))
+        t = self.read_board()["tasks"][0]
+        self.assertEqual(t["reqs"], ["A-3.2@1", "A-5.1@1"])
+        self.assertEqual(t["generated_from"], "v5")
+        shown = self.run_hub("show", "1", "--project", "p")
+        self.assertIn("reqs: A-3.2@1, A-5.1@1", shown.stdout)
+        self.assertIn("generated from: v5", shown.stdout)
+        detail = self.root / "brief.md"
+        detail.write_text("rewrite")
+        for args in (("--title", "rewrite"), ("--detail-file", str(detail))):
+            with self.subTest(args=args):
+                edited = self.run_hub("edit", "1", *args, "--yes", "--project", "p")
+                self.assertNotEqual(edited.returncode, 0)
+                self.assertIn("hub spec apply", edited.stderr)
+        self.assert_ok(self.run_hub("edit", "1", "--tag", "stale", "--yes", "--project", "p"))
+        self.assertEqual(self.read_board()["tasks"][0]["tags"], ["stale"])
+
+    def test_generated_task_verify_requires_lead_or_recorded_force(self):
+        spec = self.root / "projects" / "p" / "spec"
+        spec.mkdir(parents=True)
+        (spec / "requirements.json").write_text('{"version": 5, "requirements": []}')
+        self.assert_ok(self.run_hub("new", "generated", "--project", "p", "--from-spec",
+                                    "--generated-from", "v5", "--verify", "make check"))
+        refused = self.run_hub("edit", "1", "--verify", "true", "--yes", "--project", "p",
+                               agent="Prometheus")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("hub spec apply", refused.stderr)
+        self.assertEqual(self.read_board()["tasks"][0]["verify"], "make check")
+        self.assert_ok(self.run_hub("edit", "1", "--verify", "make stricter", "--yes",
+                                    "--project", "p", agent="Zeus"))
+        self.assert_ok(self.run_hub("edit", "1", "--verify", "make strictest", "--yes",
+                                    "--project", "p", "--force", agent="Prometheus"))
+        self.assertTrue([e for e in self.events() if e["event"] == "edited" and e.get("forced")])
+
+    def test_stale_task_cannot_be_claimed_or_untagged_by_worker(self):
+        self.assert_ok(self.run_hub("new", "work", "--owner", "Prometheus"))
+        self.assert_ok(self.run_hub("edit", "1", "--tag", "stale", "--yes"))
+        for flags in ((), ("--force",)):
+            claim = self.run_hub("claim", "1", *flags, agent="Prometheus")
+            self.assertNotEqual(claim.returncode, 0)
+            self.assertIn("superseded: hub spec regenerates it", claim.stderr)
+        self.assertEqual(self.read_board()["tasks"][0]["status"], "open")
+        refused = self.run_hub("edit", "1", "--untag", "stale", "--yes", agent="Prometheus")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("only Zeus clears 'stale'", refused.stderr)
+        self.assertEqual(self.read_board()["tasks"][0]["tags"], ["stale"])
+        self.assert_ok(self.run_hub("edit", "1", "--untag", "stale", "--yes", "--force",
+                                    agent="Prometheus"))
+        self.assertTrue([e for e in self.events() if e["event"] == "edited" and e.get("forced")])
+        self.assert_ok(self.run_hub("claim", "1", agent="Prometheus"))
+
+    def test_next_falls_through_stale_in_scope_and_elsewhere(self):
+        for title, project in (("stale here", "p"), ("ready here", "p"),
+                               ("stale there", "q"), ("ready there", "q")):
+            self.assert_ok(self.run_hub("new", title, "--project", project, "--owner", "Prometheus"))
+        for tid in ("1", "3"):
+            self.assert_ok(self.run_hub("edit", tid, "--tag", "stale", "--yes"))
+        here = self.run_hub("next", "--project", "p", agent="Prometheus")
+        self.assertTrue(here.stdout.startswith("T-002  ready here"), here.stdout)
+        self.assertNotIn("T-003", here.stdout)
+        self.assert_ok(self.run_hub("claim", "2", agent="Prometheus"))
+        there = self.run_hub("next", "--project", "p", agent="Prometheus")
+        self.assertTrue(there.stdout.startswith("T-004  ready there"), there.stdout)
+
+    def test_next_skips_stale_child_of_vertical(self):
+        vertical = task("T-001", "p", owner="Prometheus")
+        vertical["kind"] = "vertical"
+        stale = task("T-002", "p", owner="Prometheus")
+        stale.update(parent="T-001", tags=["stale"])
+        ready = task("T-003", "p", owner="Prometheus")
+        ready["parent"] = "T-001"
+        self.write_board({"next_id": 4, "tasks": [vertical, stale, ready]})
+        offered = self.run_hub("next", agent="Prometheus", project="p")
+        self.assertTrue(offered.stdout.startswith("T-003"), offered.stdout)
+
     def test_missing_board_read_is_empty_without_creating_snapshot(self):
         (self.root / "board.json").unlink()
         result = self.run_hub("list")
@@ -91,9 +177,9 @@ class BoardCase(BoardHelpers):
         self.assertIn("T-001 assigned to you", (self.root / "inbox" / "Prometheus.jsonl").read_text())
 
     def test_missing_hub_dir_exits_without_traceback(self):
-        missing = self.root / "absent"
-        self.root = missing
-        result = self.run_hub("list")
+        # HOME stays a real directory: uv, on a cold cache, installs Python under $HOME, and
+        # with HOME == HUB_DIR that created the "missing" HUB_DIR, so hub list exited 0.
+        result = self.run_hub("list", env_extra={"HUB_DIR": str(self.root / "absent")})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("HUB_DIR", result.stdout + result.stderr)
         self.assertNotIn("Traceback", result.stdout + result.stderr)
@@ -138,6 +224,26 @@ class BoardCase(BoardHelpers):
         self.assertNotIn("▣ T-002", listed.stdout)
         self.assertIn("▣ T-001  [open]", self.run_hub("show", "1").stdout)
         self.assertNotIn("▣", self.run_hub("show", "2").stdout)
+
+    def test_done_needs_a_handoff_note_from_a_per_task_reset_agent(self):
+        """Agent OS §1: a per-task reset agent loses its context next, so its done note is the handoff."""
+        (self.root / "factory.json").write_text(json.dumps({"agents": [
+            {"name": "Prometheus", "reset": "per-task"}, {"name": "Hermes", "reset": False}]}))
+        for n, agent in enumerate(("Prometheus", "Hermes", "Prometheus"), 1):
+            self.assert_ok(self.run_hub("new", f"work {n}", "--owner", agent))
+            self.assert_ok(self.run_hub("claim", str(n), agent=agent))
+        for note in ([], ["--note", "done, see log"]):
+            r = self.run_hub("done", "1", *note, agent="Prometheus")
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertIn("handoff note", r.stderr)
+        self.assertEqual(self.read_board()["tasks"][0]["status"], "claimed")
+        self.assert_ok(self.run_hub("done", "1", "--note", "fixed X on t-1 at abc1234; nothing left",
+                                    agent="Prometheus"))
+        self.assert_ok(self.run_hub("done", "2", agent="Hermes"))  # reset off: no note needed
+        self.assertFalse(any(e["event"] == "override" for e in self.events()))
+        self.assert_ok(self.run_hub("done", "3", "--force", agent="Prometheus"))
+        self.assertTrue(any(e["event"] == "override" and e.get("verb") == "done" and e["task"] == "T-003"
+                            for e in self.events()), self.events())
 
     def test_vertical_done_refuses_open_children_even_with_force(self):
         (self.root / "projects" / "hk").mkdir(parents=True)
@@ -322,6 +428,27 @@ class BoardCase(BoardHelpers):
         self.assert_ok(self.run_hub("inbox", "--clear", agent="Zeus"))
         self.assertFalse((self.root / "inbox" / ".received" / "Zeus" / mid).exists())
         self.assertNotEqual(self.run_hub("receive", mid, agent="Zeus").returncode, 0)
+
+    def test_receive_pending_reveals_each_unread_message_once(self):
+        """Agent OS §5.1: one call reveals every recent unreceived message and writes receipts."""
+        for mid, text in (("m-1", "first job"), ("m-2", "second job")):
+            self.assert_ok(self.run_hub("notify", "Zeus", text, "--message-id", mid, agent="Hermes"))
+        self.assert_ok(self.run_hub("receive", "m-2", agent="Zeus"))
+        self.assert_ok(self.run_hub("notify", "Zeus", "third job", "--message-id", "m-3", agent="Hermes"))
+        # Older than the wake horizon: hubwaked drops such wakes, so --pending leaves it in the inbox.
+        with open(self.root / "inbox" / "Zeus.jsonl", "a") as f:
+            f.write(json.dumps({"at": "2026-09-01T00:00:00+00:00", "text": "ancient", "id": "m-0"}) + "\n")
+        first = self.run_hub("receive", "--pending", agent="Zeus")
+        self.assert_ok(first)
+        self.assertIn("first job", first.stdout)
+        self.assertIn("third job", first.stdout)
+        self.assertNotIn("second job", first.stdout)
+        self.assertNotIn("ancient", first.stdout)
+        second = self.run_hub("receive", "--pending", agent="Zeus")
+        self.assert_ok(second)
+        self.assertEqual(second.stdout.strip(), "nothing pending")
+        self.assertIn("already received", self.run_hub("receive", "m-3", agent="Zeus").stdout)
+        self.assertNotEqual(self.run_hub("receive", agent="Zeus").returncode, 0)
 
     def test_atomic_consume_preserves_delivery_inside_read_window(self):
         board = self.load_module()
@@ -857,18 +984,21 @@ class TestFactoryGate(BoardHelpers):
     def task(self):
         return self.read_board()["tasks"][0]
 
-    def test_passing_verify_runs_in_repo_and_keeps_tail_in_done_note(self):
+    def test_passing_verify_runs_in_repo_and_notes_one_line_with_the_log(self):
         self.repo()
         self.claimed("--verify", "pwd; seq 1 100")
-        self.assert_ok(self.run_hub("done", "1", "--note", "built it"))
+        r = self.run_hub("done", "1", "--note", "built it")
+        self.assert_ok(r)
         t = self.task()
         self.assertEqual(t["status"], "done")
-        note = t["notes"][-1]["text"]
-        self.assertIn("built it", note)
-        self.assertIn("verify passed: pwd; seq 1 100", note)
-        lines = note.splitlines()
-        self.assertEqual(lines[-30:], [str(n) for n in range(71, 101)])
-        self.assertNotIn(str(self.root / "code" / "p"), note)  # pwd scrolled out of the tail
+        built, line = t["notes"][-1]["text"].splitlines()
+        self.assertEqual(built, "built it")
+        self.assertRegex(line, r"^verify passed: pwd; seq 1 100 \(101 lines, log (\S+)\)$")
+        self.assertIn(line, r.stdout)
+        log = Path(line.rsplit("log ", 1)[1][:-1])
+        self.assertEqual(log.parent, self.root / "logs" / "sh" / "Zeus")
+        self.assertEqual(log.read_text().splitlines(), [str(self.root / "code" / "p")]
+                         + [str(n) for n in range(1, 101)])
         self.assertEqual(self.events()[-2]["verify"], "passed")
 
     def test_failed_verify_refuses_counts_attempt_then_blocks_and_tells_zeus(self):
@@ -879,6 +1009,7 @@ class TestFactoryGate(BoardHelpers):
         self.assertIn("broken-output", first.stderr)
         self.assertEqual((self.task()["status"], self.task()["attempts"]), ("claimed", 1))
         self.assertIn("broken-output", self.task()["notes"][-1]["text"])
+        self.assertRegex(self.task()["notes"][-1]["text"], r"\(exit 3, log \S+\.log\)$")
         zeus_inbox = self.root / "inbox" / "Zeus.jsonl"
         self.assertNotIn("blocked", zeus_inbox.read_text() if zeus_inbox.exists() else "")
 
@@ -1015,6 +1146,178 @@ class TestFactoryGate(BoardHelpers):
         self.assert_ok(self.run_hub("claim", "1"))
         self.assertEqual([e["event"] for e in self.events() if e["event"] in ("paused", "resumed")],
                          ["paused", "resumed"])
+
+
+class TestKicks(BoardHelpers):
+    """T-527: board events that can make work claimable kick hub-dispatch.path."""
+
+    def kick(self):
+        return self.root / "state" / "dispatch.kick"
+
+    def test_new_kicks_the_dispatcher_and_note_does_not(self):
+        self.assert_ok(self.run_hub("new", "work", "--owner", "Zeus"))
+        self.assertTrue(self.kick().exists())
+        self.kick().unlink()
+        self.assert_ok(self.run_hub("note", "1", "a remark"))
+        self.assertFalse(self.kick().exists())
+
+    def test_done_ticks_the_projects_live_loop_only_when_its_directory_exists(self):
+        (self.root / "projects" / "p").mkdir(parents=True)
+        for project in ("p", "q"):
+            self.assert_ok(self.run_hub("new", "work", "--owner", "Zeus", "--project", project))
+        self.assert_ok(self.run_hub("claim", "1"))
+        self.assert_ok(self.run_hub("claim", "2"))
+        tick = self.root / "projects" / "p" / ".tick-now"
+        self.assertFalse(tick.exists())
+        self.assert_ok(self.run_hub("done", "1"))
+        self.assertTrue(tick.exists())
+        self.assert_ok(self.run_hub("done", "2"))
+        self.assertFalse((self.root / "projects" / "q").exists())
+
+    def test_stop_hook_kicks_for_every_agent_but_zeus(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("HUB_AGENT", "HUB_PROJECT", "CLAUDE_CODE_SESSION_NAME")}
+
+        def hook(event, agent):
+            r = subprocess.run([str(ROOT / "heartbeat.sh")], input=json.dumps({"hook_event_name": event}),
+                               env={**env, "HUB_DIR": str(self.root), "HUB_AGENT": agent},
+                               text=True, capture_output=True, timeout=20)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+        hook("Stop", "Zeus")
+        hook("PostToolUse", "Hermes")
+        self.assertFalse(self.kick().exists())
+        hook("Stop", "Hermes")
+        self.assertTrue(self.kick().exists())
+
+    def test_heartbeat_agent_flag_beats_the_environment(self):
+        """Codex hooks run in a shared daemon whose HUB_AGENT belongs to whoever started it."""
+        env = {k: v for k, v in os.environ.items() if k not in ("HUB_PROJECT", "CLAUDE_CODE_SESSION_NAME")}
+        r = subprocess.run([str(ROOT / "heartbeat.sh"), "--agent", "Prometheus"],
+                           input=json.dumps({"hook_event_name": "UserPromptSubmit", "turn_id": "t"}),
+                           env={**env, "HUB_DIR": str(self.root), "HUB_AGENT": "Hermes"},
+                           text=True, capture_output=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        state = self.root / "state"
+        self.assertEqual(json.loads((state / "Prometheus.json").read_text())["event"], "UserPromptSubmit")
+        self.assertFalse((state / "Hermes.json").exists())
+
+
+class TestSh(BoardHelpers):
+    """T-529: hub sh logs everything, prints a header and a tail, and keeps the exit code."""
+
+    def test_failure_keeps_its_code_prints_header_and_tail_and_logs_everything(self):
+        r = self.run_hub("sh", "--", "sh", "-c", "seq 100; exit 3")
+        self.assertEqual(r.returncode, 3, r.stderr)
+        header, *tail = r.stdout.splitlines()
+        m = re.fullmatch(r"exit 3 · 100 lines · [\d.]+s · log (\S+)", header)
+        self.assertTrue(m, header)
+        self.assertEqual(tail, [str(n) for n in range(81, 101)])
+        log = Path(m[1])
+        self.assertEqual(log.parent, self.root / "logs" / "sh" / "Zeus")
+        self.assertTrue(log.name.endswith("-sh.log"), log.name)
+        self.assertEqual(log.read_text().splitlines(), [str(n) for n in range(1, 101)])
+
+    def test_tail_name_one_string_command_and_hub_env_kept(self):
+        r = self.run_hub("sh", "--tail", "1", "--name", "env check", "--", "echo $HUB_DIR; echo $HUB_AGENT")
+        self.assert_ok(r)
+        header, last = r.stdout.splitlines()
+        self.assertTrue(header.startswith("exit 0 · 2 lines · "), header)
+        self.assertTrue(header.endswith("-env_check.log"), header)
+        self.assertEqual(last, "Zeus")
+        self.assertIn(str(self.root), Path(header.rsplit("log ", 1)[1]).read_text())
+
+
+class TestShowNotes(BoardHelpers):
+    def test_show_prints_the_five_newest_notes_cut_to_600_unless_full(self):
+        self.assert_ok(self.run_hub("new", "work"))
+        for n in range(7):
+            self.assert_ok(self.run_hub("note", "1", f"note-{n} " + "x" * 700 * (n == 6) + f" end-{n}"))
+        short = self.run_hub("show", "1").stdout
+        self.assertNotIn("note-1 ", short)
+        for n in range(2, 7):
+            self.assertIn(f"note-{n} ", short)
+            self.assertIn(f"end-{n}", short)
+        self.assertIn("2 earlier notes", short)
+        self.assertNotIn("x" * 300, short)
+        self.assertIn("x" * 290 + " …(--full)… " + "x" * 290, short)
+        full = self.run_hub("show", "1", "--full").stdout
+        for n in range(7):
+            self.assertIn(f"note-{n} ", full)
+        self.assertIn("x" * 700, full)
+
+
+class TestClaimWorkspace(BoardHelpers):
+    """T-531: a claim gets a fresh worktree under ~/work, done verifies there, release cleans it."""
+
+    def setUp(self):
+        super().setUp()
+        self.clone = self.root / "code" / "p"
+        self.clone.parent.mkdir()
+        self.git(self.root, "init", "-q", "--bare", str(self.root / "origin.git"))
+        self.git(self.root, "clone", "-q", str(self.root / "origin.git"), str(self.clone))
+        (self.clone / "README").write_text("base\n")
+        self.git(self.clone, "add", "README")
+        self.git(self.clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+        self.git(self.clone, "branch", "-M", "integration")
+        self.git(self.clone, "push", "-q", "origin", "integration")
+        self.ws = self.root / "work" / "p" / "T-001"
+
+    def git(self, cwd, *args):
+        env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+        r = subprocess.run(["git", "-C", str(cwd), *args], env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def claim(self, project="p"):
+        self.assert_ok(self.run_hub("new", "work", "--owner", "Zeus", "--project", project, "--verify", "pwd"))
+        r = self.run_hub("claim", "1")
+        self.assert_ok(r)
+        return r
+
+    def test_claim_prints_and_stores_the_workspace_and_done_verifies_in_it(self):
+        r = self.claim()
+        self.assertIn(f"workspace: {self.ws} (detached at origin/integration", r.stdout)
+        self.assertEqual(self.read_board()["tasks"][0]["workspace"], str(self.ws))
+        self.assertEqual(self.git(self.ws, "rev-parse", "HEAD"), self.git(self.clone, "rev-parse", "origin/integration"))
+        done = self.run_hub("done", "1", cwd=self.clone)
+        self.assert_ok(done)
+        self.assertIn(f"(in {self.ws})", done.stdout)
+
+    def test_release_removes_a_clean_workspace_and_keeps_a_dirty_one(self):
+        self.claim()
+        r = self.run_hub("release", "1")
+        self.assert_ok(r)
+        self.assertIn(f"workspace: removed {self.ws}", r.stdout)
+        self.assertFalse(self.ws.exists())
+        self.assert_ok(self.run_hub("claim", "1"))
+        (self.ws / "wip").write_text("unsaved\n")
+        r = self.run_hub("release", "1")
+        self.assert_ok(r)
+        self.assertIn(f"workspace: kept {self.ws} (dirty)", r.stdout)
+        self.assertTrue((self.ws / "wip").exists())
+        self.assertEqual(self.read_board()["tasks"][0]["status"], "open")
+
+    def test_hub_project_gets_no_workspace(self):
+        r = self.claim("hub")
+        self.assertIn("workspace: hub uses its live checkout", r.stdout)
+        self.assertNotIn("workspace", self.read_board()["tasks"][0])
+        self.assertFalse((self.root / "work").exists())
+
+    def test_a_create_failure_leaves_the_claim_intact(self):
+        self.assert_ok(self.run_hub("new", "work", "--owner", "Zeus", "--project", "p"))
+        board = self.load_module()
+        with mock.patch.object(sys, "path", [str(ROOT), *sys.path]):
+            import workspace
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"HUB_AGENT": "Zeus", "HOME": str(self.root)}), \
+                mock.patch.object(workspace, "create", side_effect=RuntimeError("boom")), \
+                contextlib.redirect_stdout(out):
+            board.cmd_claim(argparse.Namespace(id="1", as_agent=None, force=False, project=None))
+        self.assertIn("workspace: not created (boom); claim stands", out.getvalue())
+        t = self.read_board()["tasks"][0]
+        self.assertEqual((t["status"], t["owner"]), ("claimed", "Zeus"))
+        self.assertNotIn("workspace", t)
 
 
 if __name__ == "__main__":

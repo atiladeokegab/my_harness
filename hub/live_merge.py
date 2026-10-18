@@ -5,11 +5,12 @@ import json
 import os
 import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import gh_sync
@@ -23,7 +24,65 @@ SECRET = re.compile(r"sk-ant-|sk_live|AKIA[0-9A-Z]{16}|ghp_|github_pat_|AIza|xox
                     r"|BEGIN [A-Z ]*PRIVATE KEY|://[^/\s:@]+:[^/\s@]+@")
 # A PR body proves its work with an `## Evidence` block or a `Verified:` line (R1 practice 6).
 EVIDENCE = re.compile(r"(?m)^(## Evidence\b|Verified:)")
+# Runs detached: $1 clone, $2 sha, $3 command, $4 exit file, $5 cap in seconds. A throwaway worktree of
+# the sha, .env copied in, the command capped, then its exit code ("setup" if no worktree). hub live's
+# deploy and the change-branch gate both run in it.
+DETACHED_SH = """d=$(mktemp -d)
+if git -C "$1" worktree add -q --detach "$d" "$2"; then
+  cp "$1/.env" "$d/" 2>/dev/null
+  (cd "$d" && timeout "$5" sh -c "$3"); code=$?
+  git -C "$1" worktree remove --force "$d"
+else code=setup; fi
+echo "$code" > "$4.tmp" && mv "$4.tmp" "$4" && touch "$(dirname "$4")/.tick-now"
+"""
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".mp4", ".mov", ".webm", ".pdf")
+
+
+# A project with a spec (T-517): PRs carry `Req: A-3.2@2` trailers, and these paths are Zeus's alone.
+REQ = re.compile(r"(?mi)^Req:[ \t]*(.*)$")
+CLOSES = re.compile(r"\b(?:closes|fixes|resolves)\s+#(\d+)", re.I)
+PROTECTED = ("spec/", "tests/acceptance/")
+TRAILERS = re.compile(r"(?mi)^(?:Req|Task):[ \t]*\S.*$")
+COAUTHOR = re.compile(r"(?i)^co-authored-by:")
+
+
+def req_text(pr, repo, fetch):
+    """The PR body, plus its commit messages when the body has no Req: (one call); None if unreadable."""
+    body = pr.get("body") or ""
+    if REQ.search(body):
+        return body
+    view = fetch(["gh", "pr", "view", str(pr["number"]), "-R", repo, "--json", "commits"])
+    if not isinstance(view, dict):
+        return None
+    return body + "".join(f"\n{c.get('messageHeadline') or ''}\n{c.get('messageBody') or ''}"
+                          for c in view.get("commits") or [])
+
+
+def req_problem(text, lines, ci_fix_tasks=None):
+    """Why a PR's Req: trailers keep it out, or None. lines: {"A-3.2": 2}, the current PRD. `Req: ci-fix`
+    passes only when `Task: T-n` names a ci-fix task and the PR closes that task's issue."""
+    cites = [c for line in REQ.findall(text or "") for c in re.split(r"[,\s]+", line) if c]
+    if not cites:
+        return "no `Req:` trailer"
+    bad = []
+    issue = CLOSES.search(text or "")
+    task = re.search(r"(?mi)^Task:[ \t]*(T-\d+)", text or "")
+    fix = bool(issue and task and (ci_fix_tasks or {}).get(task.group(1)) == int(issue.group(1)))
+    for c in cites:
+        if c.lower() == "ci-fix":
+            if not fix:
+                bad.append("ci-fix (the PR must `Closes #` its `Task:` ci-fix issue)")
+            continue
+        m = re.fullmatch(r"(A-[\w.]+)@(\d+)", c)
+        if not m or lines.get(m[1]) != int(m[2]):
+            bad.append(f"{c} (current: {m[1]}@{lines[m[1]]})" if m and m[1] in lines else f"{c} (not in the PRD)")
+    return f"`Req:` cites a line that is not current: {', '.join(bad)}" if bad else None
+
+
+def protected(pr):
+    """True when the PR touches spec/ or tests/acceptance/, or gh did not list all its files."""
+    files = [f.get("path") or "" for f in pr.get("files") or []]
+    return len(files) != pr.get("changedFiles") or any(f.startswith(PROTECTED) for f in files)
 
 
 def secret_files(diff):
@@ -80,16 +139,46 @@ def lead_changes(pr, lead_login):
                   and body.strip().startswith("CHANGES:"))
 
 
+def squash_body(commits, trailers):
+    """GitHub's default squash body (one commit: its body; more: each as a `* headline` item), with the
+    Req:/Task: trailers and every Co-Authored-By: line together in one final trailer block."""
+    parts, block = [], list(trailers)
+    for c in commits:
+        lines = (c.get("messageBody") or "").splitlines()
+        block += [line.strip() for line in lines if COAUTHOR.match(line)]
+        body = "\n".join(line for line in lines if not (TRAILERS.match(line) or COAUTHOR.match(line))).strip()
+        parts.append(body if len(commits) == 1 else "\n\n".join(filter(None, [f"* {c.get('messageHeadline') or ''}", body])))
+    return "\n\n".join(filter(None, parts + ["\n".join(dict.fromkeys(block))]))
+
+
+def spawn(argv, out):
+    """Start argv detached from hub live (its own session), output to the open file out."""
+    subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
-               run, send, review_before=None) -> None:
+               run, send, review_before=None, req_lines=None, change_tasks=(),
+               acceptance=(), acceptance_timeout=300, ci_fix_tasks=None, change_timeout=1800,
+               gate_dir=None, spawn=spawn, change_issues=None) -> None:
     """Merge at most one eligible PR, then smoke and promote or revert integration.
     Records in state the PRs merged without review ("unreviewed") and the PRs waiting
-    for review this pass ("gated"), for hub live's digest and alerts."""
+    for review this pass ("gated"), for hub live's digest and alerts.
+    req_lines: the current PRD's {"A-3.2": 2} in a project with a spec, else None (no spec rules).
+    change_tasks: its unfinished generated tasks; a change branch waits for them.
+    acceptance: the argv of every current PRD line's acceptance check (factory.json acceptance_cmd), each run
+    under acceptance_timeout seconds on a change branch's head before it may join integration.
+    ci_fix_tasks: {task id: issue number} for the project's ci-fix tasks with published issues.
+    change_timeout: seconds for the smoke and make check on a change head, which run whole product suites.
+    gate_dir: where a change gate's exit file and log go (hub live passes the project dir).
+    spawn: starts the detached change gate; tests pass a fake.
+    change_issues: {"change/C-NNN": [issue, ...]} of its generated tasks, closed once that change lands."""
     clone = Path(clone)
+    gate_dir = Path(gate_dir or tempfile.gettempdir())
+    spec = req_lines is not None
     # No "review_before" in hackathon.json: everything waits for LGTM (fail closed). The one
     # default list lives in the hackathon-reviewer skill, which the hackathon skill copies in.
     factory = review_before is None  # no hackathon config: factory rule F2 (docs_only) applies instead
@@ -119,6 +208,128 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
 
     def git(*args):
         return call(["git", "-C", str(clone), *args])
+
+    def close_change_issues():
+        """Close the issues of a landed change's generated tasks: GitHub only auto-closes on the default
+        branch. gh exits 0 on an already-closed issue; a failed close stays pending for the next pass."""
+        pending = state.get("change_issue_pending", {})
+        for branch, record in list(pending.items()):
+            for issue in list(record["issues"]):  # no closed-forever list: a revert may reopen one for a later change
+                result = call(["gh", "issue", "close", str(issue), "-R", repo, "-c",
+                               f"Landed with {branch} at {record['sha'][:12]}"])
+                if result.returncode:
+                    print(f"live merge: {branch}: issue #{issue} close failed: {result.stderr.strip()}")
+                    continue
+                record["issues"].remove(issue)
+            if not record["issues"]:
+                del pending[branch]
+
+    def merge_changes():
+        """change/C-NNN joins integration as one unit once its tasks are done, no PR into it is open, and on
+        its head every current acceptance check, the smoke and `make check` (when the Makefile has one) are
+        green, which proves the rebuild matches the new PRD; smoke_head then promotes it to main like any merge.
+        That gate runs detached (DETACHED_SH, as hub live's deploy), one at a time, recorded per branch in
+        state["change_gates"]; a later pass reads how it ended, so a long suite never holds the live pass."""
+        if change_tasks:
+            return
+        heads = git("ls-remote", "--heads", "origin")
+        tried = state.setdefault("change_tried", {})  # the head whose gate result was acted on, per branch
+        gates = state.setdefault("change_gates", {})
+        busy = False
+        for g in gates.values():
+            if "exit" in g:
+                continue
+            exit_file = gate_dir / f"change-gate-{g['sha'][:12]}.exit"
+            if exit_file.is_file():
+                g["exit"] = exit_file.read_text().strip()
+                exit_file.unlink()
+            elif datetime.now(timezone.utc) - datetime.fromisoformat(g["started"]) > timedelta(seconds=g["cap"] + 300):
+                g["exit"] = "lost"  # past its cap with no exit file: hub live or the machine restarted
+            else:
+                busy = True  # still running
+                continue
+            g["finished"] = now_iso()
+        for line in heads.stdout.splitlines() if not heads.returncode else []:
+            sha, _, ref = line.partition("\t")
+            branch = ref.removeprefix("refs/heads/")
+            if (not branch.startswith("change/") or tried.get(branch) == sha
+                    or any(p.get("baseRefName") == branch for p in prs)):
+                continue
+            gate = gates.get(branch) or {}
+            if gate.get("sha") == sha and "exit" not in gate:
+                continue  # running
+            if gate.get("sha") == sha and gate["exit"] != "lost":
+                land_change(branch, sha, gate)
+                continue
+            if busy:
+                continue
+            if gate.get("exit") == "lost":  # its worktree died with it: prune the registration first
+                print(f"live merge: {branch}: the gate at {gate['sha'][:12]} never finished; starting it again")
+                git("worktree", "prune")
+            if git("fetch", "-q", "origin", "integration", ref).returncode:
+                print(f"live merge: {branch}: cannot fetch it with integration")  # transient: retried next pass
+                continue
+            if not git("merge-base", "--is-ancestor", sha, "origin/integration").returncode:
+                git("push", "origin", "--delete", branch)  # merged on an earlier pass
+                continue
+            # hub env stripped from the checks, as spec.py and board.run_verify do
+            steps = [(" ".join(argv), ["env", "-u", "HUB_DIR", "-u", "HUB_AGENT", "timeout",
+                                       str(acceptance_timeout), *argv]) for argv in acceptance]
+            steps += [("smoke", ["timeout", str(change_timeout), "sh", "-c", smoke]),
+                      ("make check", ["timeout", str(change_timeout), "sh", "-c",
+                                      "if make -n check >/dev/null 2>&1; then make check; fi"])]
+            # the gate exits with the number of its first red step, so the result names it
+            command = "\n".join(f"{shlex.join(argv)} || exit {n}" for n, (_, argv) in enumerate(steps, 1))
+            cap = acceptance_timeout * len(acceptance) + 2 * change_timeout + 60
+            exit_file = gate_dir / f"change-gate-{sha[:12]}.exit"
+            exit_file.unlink(missing_ok=True)
+            with open(gate_dir / "change-gate.log", "w") as out:
+                spawn(["sh", "-c", DETACHED_SH, "change-gate", str(clone), sha, command, str(exit_file), str(cap)], out)
+            gates[branch] = {"sha": sha, "started": now_iso(), "cap": cap, "steps": [name for name, _ in steps]}
+            busy = True
+
+    def land_change(branch, sha, gate):
+        """Act once on a finished gate: tell Zeus the first red step, or merge the green head --no-ff."""
+        tried = state["change_tried"]
+        tried[branch] = sha
+        code = gate["exit"]
+        if code == "setup":
+            fail(f"{branch}: cannot create a worktree at {sha[:12]}")
+            return
+        if code != "0":
+            steps = gate["steps"]
+            red = steps[int(code) - 1] if code.isdigit() and 0 < int(code) <= len(steps) else f"exit {code}"
+            fail(f"{branch} is red at {sha[:12]} ({red}): not merged into integration")
+            return
+        if git("fetch", "-q", "origin", "integration").returncode:
+            tried.pop(branch)  # transient: retried next pass, on the same green result
+            print(f"live merge: {branch}: cannot fetch integration")
+            return
+        with tempfile.TemporaryDirectory(prefix="hub-live-change-") as directory:
+            path = Path(directory)
+            if git("worktree", "add", "-q", "--detach", str(path), sha).returncode:
+                fail(f"{branch}: cannot create a worktree at {sha[:12]}")
+                return
+            inside = lambda *args: call(["git", "-C", str(path), *args])
+            try:
+                if (inside("checkout", "-q", "-f", "--detach", "origin/integration").returncode
+                        or inside("merge", "--no-ff", "-m", f"Merge {branch}: its suite is green", sha).returncode):
+                    fail(f"{branch} is green at {sha[:12]} but does not merge cleanly into integration: rebase it")
+                    return
+                if inside("push", "origin", "HEAD:refs/heads/integration").returncode:
+                    tried.pop(branch)  # integration moved meanwhile: retried next pass, on the same green result
+                    print(f"live merge: {branch}: integration push failed")
+                    return
+            finally:
+                git("worktree", "remove", "--force", str(path))
+        git("push", "origin", "--delete", branch)
+        state.setdefault("merge_events", []).append(
+            {"at": now_iso(), "event": "change-merged", "branch": branch, "sha": sha})
+        issues = list(dict.fromkeys((change_issues or {}).get(branch, [])))
+        if issues:
+            state.setdefault("change_issue_pending", {})[branch] = {"sha": sha, "issues": issues}
+            close_change_issues()
+        send(LEAD_AGENT, f"{branch} is green at {sha[:12]}: merged into integration; the smoke promotes it to main")
 
     def smoke_head(merged_pr=None, issue=None, branch=None, branch_sha=None):
         # ponytail: retry covers lock contention from builder worktrees sharing the clone
@@ -227,6 +438,7 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
         else:
             fail(f"Smoke failed after #{merged_pr}; reverted integration and reopened issue #{issue}")
 
+    close_change_issues()
     prs = data(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "100",
                 "--json", "number,body,author,headRefOid,headRefName,baseRefName,isDraft,mergeable,comments,reviews,files,changedFiles"])
     if prs is None:
@@ -240,9 +452,14 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
         if pr.get("isDraft") or pr.get("mergeable") == "CONFLICTING":
             continue
         body = pr.get("body") or ""
-        match = re.search(r"\b(?:closes|fixes|resolves)\s+#(\d+)", body, re.I)
+        match = CLOSES.search(body)
         if not match or not EVIDENCE.search(body):
             continue  # no Evidence: hub live has asked for it, and it never merges without
+        if spec:  # hub live comments on a bad Req: and sends spec/ and tests/acceptance/ PRs to Zeus
+            text = req_text(pr, repo, data)
+            if text is None or req_problem(text, req_lines, ci_fix_tasks) or protected(pr):
+                continue
+        to_change = spec and (pr.get("baseRefName") or "").startswith("change/")
         issue_number = int(match.group(1))
         linked_issue = data(["gh", "issue", "view", str(issue_number), "-R", repo,
                              "--json", "state,body,labels"])
@@ -307,6 +524,9 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
         if not approved:
             gated.append(pr["number"])
             continue
+        if to_change:  # CI runs on PRs into integration only; the change's own suite gates it (merge_changes)
+            chosen, issue, unreviewed = pr, issue_number, fast
+            break
         if pr.get("baseRefName") == "main":
             edited = call(["gh", "pr", "edit", str(pr["number"]), "-R", repo,
                            "--base", "integration"])
@@ -332,22 +552,43 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
         break
 
     if chosen is None:
+        if spec:
+            merge_changes()
         smoke_head()
         return
+    to_change = spec and (chosen.get("baseRefName") or "").startswith("change/")
     number, sha = chosen["number"], chosen["headRefOid"]
     command = ["gh", "pr", "merge", str(number), "-R", repo, "--squash", "--delete-branch",
                "--match-head-commit", sha]
+    # The squash commit keeps the PR's Req: and Task: trailers (body or commits), for spec.py's history()
+    view = data(["gh", "pr", "view", str(number), "-R", repo, "--json", "commits"])
+    if view is None:
+        print(f"live merge: #{number}: cannot read its commits; not merged this pass")
+        return
+    commits = view.get("commits") or []
+    text = "\n".join([chosen.get("body") or ""] + [c.get("messageBody") or "" for c in commits])
+    trailers = list(dict.fromkeys(t.strip() for t in TRAILERS.findall(text)))
+    if trailers:
+        command += ["--body", squash_body(commits, trailers)]
     if (chosen.get("author") or {}).get("login") == lead_login:
         command.append("--admin")
     merged = call(command)
     if merged.returncode:
         print(f"live merge: cannot merge #{number}: {merged.stderr}")
         return
-    state.setdefault("first_merge", sha)  # hub live checks CI reported on it
-    # The dashboard counts merged-not-reverted PRs per agent from these (issue -> board task -> owner).
-    state.setdefault("merge_events", []).append({"at": now_iso(), "pr": number, "issue": issue, "event": "merged"})
+    if not to_change:
+        state.setdefault("first_merge", sha)  # hub live checks CI reported on it
+    # The dashboard counts merged-not-reverted PRs per agent from these (issue -> board task -> owner);
+    # hub live sets the task's merge_sha from sha, found by issue, then by the Task: trailer.
+    view = data(["gh", "pr", "view", str(number), "-R", repo, "--json", "mergeCommit"])
+    task = re.search(r"(?mi)^Task:[ \t]*(T-\d+)", text)
+    state.setdefault("merge_events", []).append(  # base: a change branch's merge commit is these tasks' too
+        {"at": now_iso(), "pr": number, "issue": issue, "event": "merged", "base": chosen.get("baseRefName"),
+         "sha": ((view or {}).get("mergeCommit") or {}).get("oid"), "task": task and task[1]})
     if unreviewed:
         state.setdefault("unreviewed", []).append(number)
+    if to_change:
+        return  # integration is untouched: nothing to smoke or promote
     smoke_head(number, issue, chosen.get("headRefName"), sha)
     open_prs = data(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "100",
                      "--json", "number,mergeable"])

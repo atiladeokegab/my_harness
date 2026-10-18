@@ -1,0 +1,90 @@
+{
+  "version": 4,
+  "requirements": [
+    {
+      "id": "R-1",
+      "title": "create link",
+      "needs": [],
+      "acceptance": [
+        {
+          "id": "A-1.1",
+          "v": 1,
+          "text": "POST /links returns a 6-char code",
+          "test": "tests/acceptance/test_A_1_1.py"
+        }
+      ]
+    },
+    {
+      "id": "R-2",
+      "title": "redirect",
+      "needs": [],
+      "acceptance": [
+        {
+          "id": "A-2.1",
+          "v": 1,
+          "text": "GET /<code> 302s to the target",
+          "test": "tests/acceptance/test_A_2_1.py"
+        }
+      ]
+    },
+    {
+      "id": "R-3",
+      "title": "clicks",
+      "needs": [],
+      "acceptance": [
+        {
+          "id": "A-3.1",
+          "v": 1,
+          "text": "total rises by one per redirect",
+          "test": "tests/acceptance/test_A_3_1.py"
+        },
+        {
+          "id": "A-3.2",
+          "v": 1,
+          "text": "stats returns {clicks}",
+          "test": "tests/acceptance/test_A_3_2.py"
+        }
+      ]
+    },
+    {
+      "id": "R-4",
+      "title": "expiry",
+      "needs": [],
+      "acceptance": [
+        {
+          "id": "A-4.1",
+          "v": 1,
+          "text": "after 30 days, 410",
+          "test": "tests/acceptance/test_A_4_1.py"
+        },
+        {
+          "id": "A-4.2",
+          "v": 1,
+          "text": "the expiry is configurable per link",
+          "test": "tests/acceptance/test_A_4_2.py"
+        }
+      ]
+    },
+    {
+      "id": "R-5",
+      "title": "dashboard",
+      "needs": [
+        "R-3"
+      ],
+      "acceptance": [
+        {
+          "id": "A-5.1",
+          "v": 1,
+          "text": "lists links with clicks",
+          "test": "tests/acceptance/test_A_5_1.py"
+        },
+        {
+          "id": "A-5.2",
+          "v": 1,
+          "text": "sorts and pages 20 a page",
+          "test": "tests/acceptance/test_A_5_2.py"
+        }
+      ]
+    }
+  ]
+}

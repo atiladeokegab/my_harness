@@ -66,10 +66,18 @@ PROSE = ("● Done. Do you want to keep T-505 open for the review duty?",
 STUBS = {
     "tmux": r'''#!/usr/bin/env python3
 import os, sys
+from pathlib import Path
 a = sys.argv[1:]
 p = os.path.join(os.environ["FAKE_PANES"], a[a.index("-t") + 1])
 if a[0] != "capture-pane" or not os.path.exists(p):
     sys.exit("can't find session")
+if os.environ.get("FAKE_KICK_DURING_CAPTURE"):
+    marker = Path(os.environ["FAKE_LOG"]) / "kicked"
+    if not marker.exists():
+        marker.touch()
+        kick = Path(os.environ["HUB_DIR"]) / "state" / "dispatch.kick"
+        kick.parent.mkdir(exist_ok=True)
+        kick.touch()
 print(open(p).read(), end="")
 ''',
     "hubmsg": r'''#!/usr/bin/env python3
@@ -192,6 +200,26 @@ class ClassifyTest(unittest.TestCase):
 
 
 class TickTest(Factory):
+    def test_recent_tick_is_debounced(self):
+        self.board([task("T-002")])
+        self.pane("hub-hermes", CLAUDE_IDLE)
+        last_tick = time.time() - 4
+        self.write_state("dispatch.json", {"last_tick": last_tick})
+        out = self.run_cmd("tick")
+        self.assertIn("debounced ", out)
+        self.assertIn("Hermes: idle, wake for T-002", out)
+        self.assertGreaterEqual(self.state("dispatch.json")["last_tick"], last_tick + 5)
+        self.assertEqual(len(self.calls("hubmsg")), 1)
+
+    def test_kick_during_tick_runs_body_again(self):
+        self.board([task("T-002")])
+        self.pane("hub-hermes", CLAUDE_IDLE)
+        self.env["FAKE_KICK_DURING_CAPTURE"] = "1"
+        out = self.run_cmd("tick")
+        self.assertIn("Hermes: idle, wake for T-002", out)
+        self.assertIn("Hermes: idle, offer of T-002 pending", out)
+        self.assertEqual(len(self.calls("hubmsg")), 1)
+
     def test_idle_agent_is_woken_once_per_task(self):
         self.board([task("T-002")])
         self.pane("hub-hermes", CLAUDE_IDLE)
@@ -201,6 +229,8 @@ class TickTest(Factory):
         self.assertEqual(call["argv"][0], "Hermes")
         self.assertEqual(call["argv"][2:], ["--task", "T-002"])
         self.assertEqual(call["sender"], "Dispatch")
+        state = self.state("dispatch.json")
+        self.write_state("dispatch.json", {**state, "last_tick": time.time() - 6})
         self.run_cmd("tick")
         self.assertEqual(len(self.calls("hubmsg")), 1)
         self.assertEqual(self.state("dispatch.json")["woken"]["T-002"]["agent"], "Hermes")
@@ -274,6 +304,8 @@ class TickTest(Factory):
         self.run_cmd("tick")
         self.assertEqual([c["argv"][0] for c in self.calls("hubmsg")], ["Prometheus"])  # T-001
         self.board([task("T-001", owner=None), task("T-002", owner=None)])  # Hermes is free now
+        state = self.state("dispatch.json")
+        self.write_state("dispatch.json", {**state, "last_tick": time.time() - 6})
         out = self.run_cmd("tick")
         self.assertIn("Prometheus: idle, offer of T-001 pending", out)
         self.assertEqual([(c["argv"][0], c["argv"][-1]) for c in self.calls("hubmsg")],
@@ -298,6 +330,7 @@ class TickTest(Factory):
     def test_skipped_tasks_fall_through_to_the_next_candidate(self):
         cases = {
             "untrusted": lambda: self.board([task("T-001", tags=["untrusted"]), task("T-002")]),
+            "stale": lambda: self.board([task("T-001", tags=["stale"]), task("T-002")]),
             "run lock held": lambda: (self.board([task("T-001"), task("T-002")]), (self.hub / "run").mkdir(),
                                       (self.hub / "run" / "T-001.lock").write_text(f"{os.getpid()}\n")),
         }
@@ -395,6 +428,66 @@ class TickTest(Factory):
         self.assertNotIn("factory poll failed", out)
         self.assertGreater(self.state("dispatch.json")["polled"], 0)
 
+
+    def test_a_future_last_tick_debounces_at_most_five_seconds(self):
+        """Hermes on T-528: a clock step or an edited state must not hold the oneshot."""
+        self.write_state("dispatch.json", {"last_tick": time.time() + 3600})
+        self.assertIn("debounced 5.0s", self.run_cmd("tick"))
+
+
+class ResetTest(Factory):
+    """Agent OS §1: an idle agent with nothing held, just stopped, gets a fresh session per task."""
+
+    def arrange(self, name="Hermes", reset="per-task", event="Stop", tasks=()):
+        cfg = json.loads((self.hub / "factory.json").read_text())
+        for a in cfg["agents"]:
+            a.update(reset=reset, dispatch=True)
+        (self.hub / "factory.json").write_text(json.dumps(cfg))
+        self.board([task("T-002", owner=name), *tasks])
+        self.pane(f"hub-{name.lower()}", CLAUDE_IDLE)
+        if event:
+            self.write_state(f"{name}.json", {"at": datetime.now(timezone.utc).isoformat(), "event": event})
+
+    def test_idle_after_stop_with_nothing_held_gets_a_reset_request(self):
+        for name, kind in (("Hermes", "claude"), ("Prometheus", "codex")):
+            with self.subTest(name):
+                self.setUp()
+                self.arrange(name)
+                self.assertIn(f"{name}: idle, reset for T-002", self.run_cmd("tick"))
+                self.assertEqual(self.calls("hubmsg"), [])
+                [msg] = [json.loads(line) for line in (self.hub / "inbox" / f"{name}.jsonl").read_text().splitlines()]
+                self.assertTrue(msg["text"].startswith(
+                    "[dispatch] Fresh session. Your task: T-002 Task T-002. Run: hub claim T-002 && hub show T-002, "
+                    "then work in the workspace path hub claim prints."), msg)
+                lines = (self.hub / "wake" / f"{name}.wake").read_text().splitlines()
+                self.assertEqual(lines[:5], ["version=2", f"agent={name}", f"ids={msg['id']}", "reset=1", f"kind={kind}"])
+                self.assertRegex(lines[5], r"^created=\d+$")
+                self.assertEqual(len(lines), 6)
+                self.assertEqual(self.state("dispatch.json")["woken"]["T-002"]["how"], "reset")
+
+    def test_plain_wake_when_reset_does_not_apply(self):
+        cases = {
+            "holds a blocked task": dict(tasks=[task("T-003", status="blocked")]),
+            "holds a standing task": dict(tasks=[task("T-003", status="claimed", tags=["standing"])]),
+            "opted out": dict(reset=False),
+            "Zeus": dict(name="Zeus"),
+            "last event not Stop": dict(event="PostToolUse"),
+            "no heartbeat": dict(event=None),
+        }
+        for label, kw in cases.items():
+            with self.subTest(label):
+                self.setUp()
+                self.arrange(**kw)
+                self.run_cmd("tick")
+                self.assertEqual([c["argv"][-1] for c in self.calls("hubmsg")], ["T-002"], label)
+                self.assertFalse((self.hub / "wake").exists(), label)
+                self.assertEqual(self.state("dispatch.json")["woken"]["T-002"]["how"], "wake", label)
+
+    def test_dry_run_says_reset_and_writes_nothing(self):
+        self.arrange()
+        self.assertIn("Hermes: idle, would reset for T-002", self.run_cmd("tick", "--dry-run"))
+        self.assertFalse((self.hub / "wake").exists())
+        self.assertFalse((self.hub / "inbox").exists())
 
 class WeeklyTest(Factory):
     def test_opens_two_tasks_for_zeus_once(self):

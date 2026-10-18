@@ -3,6 +3,7 @@
     python3 tests/test_gh_sync.py
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -1688,6 +1689,124 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         tag = [i for i, c in enumerate(calls) if "POST" in c and "repos/o/hk/git/refs" in c]
         self.assertTrue(var and tag and var[0] < tag[0], calls)
         self.assertIn("2026-10-04T14:00:00Z", calls[var[0]])
+
+
+def spec(version, text, v=None):
+    return {"version": version, "requirements": [{"id": "R-1", "title": "Create link", "needs": [], "acceptance": [
+        {"id": "A-1.1", "v": v or version, "text": text, "test": "tests/acceptance/test_A_1_1.py"}]}]}
+
+
+class SpecSyncTest(unittest.TestCase):
+    """T-517: in a project with spec/requirements.json, issues cite their PRD lines and stale ones close."""
+    setUp, tearDown, add_task, tasks, sync, calls = (GhSyncTest.setUp, GhSyncTest.tearDown, GhSyncTest.add_task,
+                                                     GhSyncTest.tasks, GhSyncTest.sync, GhSyncTest.calls)
+    use_agents, editor, edited = GhSyncTest.use_agents, GhSyncTest.editor, GhSyncTest.edited
+
+    def write_spec(self, data):
+        d = self.hub / "projects" / "hk" / "spec"
+        d.mkdir(exist_ok=True)
+        (d / "requirements.json").write_text(json.dumps(data))
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.hub), "-c", "user.email=t@t", "-c", "user.name=t", *args],
+                       check=True, capture_output=True)
+
+    def bodies(self):
+        return [json.loads(l) for l in (self.stub / "bodies.jsonl").read_text().splitlines()]
+
+    def test_issue_cites_each_acceptance_line_at_its_version_from_spec_history(self):
+        self.git("init", "-q")
+        self.write_spec(spec(1, "POST /links returns a 6-char code"))
+        self.git("add", "projects/hk/spec/requirements.json")
+        self.git("commit", "-qm", "v1")
+        self.write_spec(spec(2, "POST /links returns an 8-char code"))
+        self.git("commit", "-qam", "v2")
+        self.add_task("T-001", reqs=["A-1.1@2"], generated_from="v2")
+        self.add_task("T-002", reqs=["A-1.1@1"], generated_from="v1")
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        new, old = self.bodies()
+        self.assertIn("- A-1.1@2 (R-1 Create link): POST /links returns an 8-char code. "
+                      "Test: tests/acceptance/test_A_1_1.py", new)
+        self.assertTrue(new.startswith("Context: x\nDeadline: submit\n\nAcceptance"), new)
+        self.assertTrue(new.endswith("<!-- hub-task: T-001 -->"), new)
+        self.assertIn("A-1.1@1 (R-1 Create link): POST /links returns a 6-char code", old)
+        self.assertNotIn("8-char", old)
+
+    def test_a_cited_line_missing_from_the_spec_fails_that_task_only(self):
+        self.write_spec(spec(1, "POST /links returns a 6-char code"))
+        self.add_task("T-001", reqs=["A-9.9@1"], generated_from="v1")
+        self.add_task("T-002", reqs=["A-1.1@1"], generated_from="v1")
+        r = self.sync()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("A-9.9@1", r.stderr)
+        self.assertNotIn("issue", self.tasks()["T-001"])
+        self.assertEqual(self.tasks()["T-002"]["issue"], 1)
+
+    def stale_fixture(self):
+        note = [{"at": "2026-10-18T02:00:00+00:00", "by": "Zeus", "text": "superseded by C-002"}]
+        brief = hashlib.sha256(b"Context: x\nDeadline: submit").hexdigest()
+        self.add_task("T-001", status="claimed", tags=["stale"], notes=note, issue=4, issue_hash=brief,
+                      issue_assignee="sam-gh", issue_title="title T-001", issue_milestone="submit")
+        self.add_task("T-002", status="done", tags=["stale"], notes=note, issue=5, issue_hash=brief,
+                      issue_assignee="sam-gh", issue_title="title T-002", issue_milestone="submit")
+        row = lambda n, state, why: {"number": n, "title": f"title T-00{n - 3}", "state": state, "stateReason": why,
+                                     "assignees": [{"login": "sam-gh"}], "labels": [{"name": "task"}], "url": f"u{n}",
+                                     "body": f"Context: x\nDeadline: submit\n\n<!-- hub-task: T-00{n - 3} -->"}
+        (self.stub / "issues.json").write_text(json.dumps([row(4, "OPEN", ""), row(5, "CLOSED", "COMPLETED")]))
+        return row
+
+    def test_stale_task_gets_one_superseded_comment_and_its_issue_closed(self):
+        self.write_spec(spec(1, "POST /links returns a 6-char code"))
+        row = self.stale_fixture()
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [close] = self.calls(["issue", "close"])
+        self.assertEqual(close[:6], ["issue", "close", "4", "-R", "o/hk", "--reason"])
+        self.assertEqual(close[6], "not planned")  # never read back as done by pull
+        self.assertIn("Superseded by C-002", close[close.index("--comment") + 1])
+        [comment] = self.calls(["issue", "comment"])  # T-002's issue is already closed: comment only
+        self.assertEqual(comment[2], "5")
+        self.assertIn("Superseded by C-002", self.bodies()[-1])
+        self.assertEqual(self.calls(["issue", "edit"]), [])  # a stale brief is never re-pushed
+        self.assertEqual(self.tasks()["T-001"]["issue_superseded"], "C-002")
+        # GitHub now shows it closed as not planned, with a linked open PR: it stays closed, the task untouched
+        (self.stub / "issues.json").write_text(json.dumps([row(4, "CLOSED", "NOT_PLANNED"),
+                                                           row(5, "CLOSED", "COMPLETED")]))
+        (self.stub / "prs.json").write_text(json.dumps([{"number": 9, "body": "Closes #4", "headRefName": "4-x"}]))
+        (self.stub / "graphql.json").write_text(json.dumps({"data": {"viewer": {"login": "lead-gh"}, "repository": {
+            "issue": {"timelineItems": {"nodes": [{"closer": None}]}, "comments": {"nodes": []}}}}}))
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.calls(["issue", "close"])), 1)
+        self.assertEqual(len(self.calls(["issue", "comment"])), 1)
+        self.assertEqual(self.calls(["issue", "reopen"]), [])
+        self.assertNotIn("closed as not planned", r.stdout)
+        self.assertEqual(self.tasks()["T-001"]["status"], "claimed")
+
+    def test_without_a_spec_reqs_and_the_stale_tag_change_nothing(self):
+        """A project with no spec/requirements.json behaves exactly as before T-517."""
+        self.stale_fixture()
+        self.add_task("T-003", reqs=["A-1.1@1"])
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.calls(["issue", "close"]), [])
+        self.assertEqual(self.calls(["issue", "comment"]), [])
+        self.assertNotIn("issue_superseded", self.tasks()["T-001"])
+        self.assertEqual(self.bodies(), ["Context: x\nDeadline: submit\n\n<!-- hub-task: T-003 -->"])
+
+    def test_github_edit_to_a_generated_task_is_held_never_adopted(self):
+        """Tasks generated from the PRD are never hand-edited, not even by their owner on GitHub."""
+        self.write_spec(spec(1, "POST /links returns a 6-char code"))
+        self.use_agents()
+        self.add_task("T-001", owner="Sam", detail="Context: x\nFiles: a/\nDeadline: submit",
+                      reqs=["A-1.1@1"], generated_from="v1")
+        self.sync()
+        self.edited("Context: better\nFiles: a/\nDeadline: submit", assignee="sam-gh")
+        self.editor("sam-gh")
+        r = self.sync()
+        self.assertIn("was edited on GitHub", r.stdout)
+        self.assertEqual(self.tasks()["T-001"]["detail"], "Context: x\nFiles: a/\nDeadline: submit")
 
 
 if __name__ == "__main__":

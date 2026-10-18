@@ -10,7 +10,7 @@ Run:  python3 tests/test_messaging.py
 These use throwaway tmux sessions as delivery targets. They never send keystrokes into a
 real agent's pane, and never into one a human is attached to.
 """
-import json, os, shutil, subprocess, sys, tempfile, time, uuid
+import json, os, shlex, shutil, subprocess, sys, tempfile, time, uuid
 
 HUB = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 HUBMSG, HUBWAKED = os.path.join(HUB, "hubmsg"), os.path.join(HUB, "hubwaked")
@@ -57,19 +57,39 @@ class Bed:
         self.env = {**os.environ, "HUB_DIR": self.dir, "HUB_AGENT": "Zeus"}
         self.sessions = []
 
-    def target(self, suffix, delay=0):
+    def target(self, suffix, delay=0, slash_clears=False, preamble=""):
         """A stand-in TUI.
 
         The pty echoes the typed wake and the loop consumes it like a TUI. hubwaked watches
-        cursor movement rather than interpreting rendered pane history.
+        cursor movement rather than interpreting rendered pane history. With slash_clears,
+        /clear and /new clear the screen as Claude and Codex do (spike T1); without it a typed
+        slash command stays on screen, like a Codex /new that never left the composer.
         """
         sess = f"hub-{suffix}{self.tag}"
         out = os.path.join(self.dir, f"{suffix}.out")
-        script = (f'sleep {delay}; while IFS= read -r l; do '
-                  f'printf "%s\\n" "$l" >> {out}; printf "rendered: %s\\n" "$l"; done')
+        clears = 'case "$l" in /clear|/new) clear; continue ;; esac; ' if slash_clears else ""
+        script = (f'printf "%s" {shlex.quote(preamble)}; sleep {delay}; while IFS= read -r l; do '
+                  f'printf "%s\\n" "$l" >> {out}; {clears}printf "rendered: %s\\n" "$l"; done')
         sh(["tmux", "new-session", "-d", "-s", sess, "-c", self.dir, "bash", "-c", script])
         self.sessions.append(sess)
         return sess, out
+
+    def busy_target(self, suffix, banner):
+        """A stand-in TUI that shows `banner` (mid-turn, or a dialog) until the returned flag
+        file exists, then reads lines like target(). Keys typed meanwhile wait in the tty and
+        are read after the flag, so a wake typed during the banner shows up as an extra line."""
+        sess = f"hub-{suffix}{self.tag}"
+        out, flag = os.path.join(self.dir, f"{suffix}.out"), os.path.join(self.dir, f"{suffix}.idle")
+        script = (f'printf "%s\\n" "{banner}"; while [ ! -e {flag} ]; do sleep 0.2; done; clear; '
+                  f'while IFS= read -r l; do printf "%s\\n" "$l" >> {out}; printf "rendered: %s\\n" "$l"; done')
+        sh(["tmux", "new-session", "-d", "-s", sess, "-c", self.dir, "bash", "-c", script])
+        self.sessions.append(sess)
+        time.sleep(1)
+        return sess, out, flag
+
+    def agent(self, suffix):
+        """The board name hubmsg canonicalises a target to, which names wake/<Agent>.wake."""
+        return f"{suffix.capitalize()}{self.tag}"
 
     def msg(self, target, text, *extra):
         return sh([HUBMSG, target, text, *extra], env=self.env)
@@ -160,6 +180,14 @@ def test_relay_rejects_bad_targets(b):
         p = os.path.join(wake, f"{rid}.wake")
         with open(p, "w") as f:
             f.write(f"{sess}\n[hub:{rid}] payload\nversion=1\nid={rid}\nattempts=0\n")
+        r = sh([HUBWAKED, "--deliver", p], env=b.env)
+        check(f"relay rejects {label}", r.returncode != 0 and not os.path.exists(p),
+              f"rc={r.returncode} still_present={os.path.exists(p)}")
+    for label, agent, ids in [("v2 agent traversal", "../../etc", "1-1-1"), ("v2 glob id", "Probe", "*"),
+                              ("v2 path id", "Probe", "1-1-1,../../x")]:
+        p = os.path.join(wake, f"v2probe{uuid.uuid4().hex[:6]}.wake")
+        with open(p, "w") as f:
+            f.write(f"version=2\nagent={agent}\nids={ids}\ncreated=0\n")
         r = sh([HUBWAKED, "--deliver", p], env=b.env)
         check(f"relay rejects {label}", r.returncode != 0 and not os.path.exists(p),
               f"rc={r.returncode} still_present={os.path.exists(p)}")
@@ -373,7 +401,7 @@ def test_single_delivery_with_daemon_running(b):
         time.sleep(3)
         got = open(out).read() if os.path.exists(out) else ""
         mid = msg_id(r)
-        n = got.count(f"hub receive {mid}")
+        n = got.count("hub receive --pending")
         check("one hubmsg delivers exactly one turn with the daemon running", n == 1,
               f"delivered {n} times:\n        {got!r}\n        {r.stdout}")
 
@@ -458,7 +486,291 @@ def test_codex_menu_defers_the_wake(b):
         daemon.terminate()
 
 
+def test_wake_into_trust_prompt_is_not_confirmed(b):
+    """Dry run 2026-10-12: Codex opened on "Trust this folder?", the wake's keys backed it
+    into the Agent Command Center, the cursor moved, and hubmsg said "confirmed"."""
+    sess = f"hub-trust{b.tag}"
+    script = os.path.join(b.dir, "trust.sh")
+    with open(script, "w") as f:
+        f.write('read -r _; clear\n'
+                'echo "  Trust this folder?"\n'
+                'echo "  1. Trust and continue"\n'
+                'echo "  2. Back to Agent Command Center"\n'
+                'sleep 120\n')
+    sh(["tmux", "new-session", "-d", "-s", sess, "-c", b.dir, "bash", script])
+    b.sessions.append(sess)
+    time.sleep(1)
+    wake = os.path.join(b.dir, "wake"); os.makedirs(wake, exist_ok=True)
+    rid = f"{time.time_ns()}-9-9"
+    p = os.path.join(wake, f"{rid}.wake")
+    with open(p, "w") as f:
+        f.write(f"{sess}\n[hub:{rid}] hub receive {rid}\nversion=1\nid={rid}\nattempts=0\n")
+    r = sh([HUBWAKED, "--deliver", p], env=b.env)
+    check("a wake that lands on the trust prompt is unconfirmed", r.returncode == 5,
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+    check("it stays queued for retry, with no delivered receipt",
+          os.path.exists(p) and not os.path.exists(os.path.join(wake, "delivered", rid)), "")
+
+
+WAKE_LINE = "[hub wake] Run exactly: hub receive --pending"
+
+
+def lines_of(path):
+    return [l for l in open(path).read().splitlines() if l.strip()] if os.path.exists(path) else []
+
+
+def test_busy_pane_gets_no_keys_and_messages_coalesce(b):
+    """Agent OS §5.3-4: nothing is typed while a turn runs; two messages make one wake."""
+    sess, out, idle = b.busy_target("t8b", "  Working (5s - esc to interrupt)")
+    agent = b.agent("t8b")
+    r1, r2 = b.msg(agent, "first while busy"), b.msg(agent, "second while busy")
+    check("hubmsg to a busy pane reports busy, exit 0",
+          all(r.returncode == 0 and "busy" in r.stdout for r in (r1, r2)), r1.stdout + r2.stdout + r2.stderr)
+    req = os.path.join(b.dir, "wake", f"{agent}.wake")
+    text = open(req).read() if os.path.exists(req) else ""
+    ids = [l[4:].split(",") for l in text.splitlines() if l.startswith("ids=")]
+    check("two hubmsgs leave one wake file listing both ids",
+          ids == [[msg_id(r1), msg_id(r2)]] and "version=2" in text, repr(text))
+    open(idle, "w").close()
+    time.sleep(1)
+    check("the busy pane received no keys", lines_of(out) == [], repr(lines_of(out)))
+    r = sh([HUBWAKED, "--deliver", req], env=b.env)
+    wait_for(out)
+    time.sleep(1)
+    check("once idle, the pane gets exactly one receive line",
+          r.returncode == 0 and lines_of(out) == [WAKE_LINE], f"rc={r.returncode} {lines_of(out)!r}")
+    got = sh([os.path.join(HUB, "board.py"), "receive", "--pending"], env={**b.env, "HUB_AGENT": agent}).stdout
+    check("receive --pending reveals both messages", "first while busy" in got and "second while busy" in got, got)
+    # Received by the Stop hook before the relay got to it: no wake was ever typed for this id.
+    mid = f"{time.time_ns()}-7-7"
+    agent_env = {**b.env, "HUB_AGENT": agent}
+    sh([os.path.join(HUB, "board.py"), "notify", agent, "handled at turn end", "--message-id", mid], env=b.env)
+    sh([os.path.join(HUB, "board.py"), "receive", "--pending"], env=agent_env)
+    with open(req, "w") as f:
+        f.write(f"version=2\nagent={agent}\nids={mid}\ncreated={int(time.time())}\n")
+    r = sh([HUBWAKED, "--deliver", req], env=b.env)
+    time.sleep(1)
+    logf = os.path.join(b.dir, "wake", "hubwaked.log")
+    log = open(logf).read() if os.path.exists(logf) else ""
+    check("a fully received request is dropped untyped",
+          r.returncode == 0 and not os.path.exists(req) and lines_of(out) == [WAKE_LINE]
+          and f"dropped id={agent} session=hub-t8b{b.tag} (already received)" in log, repr(lines_of(out)) + log[-300:])
+    check("the busy deferral is logged", "busy" in log, log[-300:])
+
+
+def test_busy_heartbeat_defers_the_wake(b):
+    """A turn between tool calls may not show `esc to interrupt`; the heartbeat still says busy."""
+    sess, out = b.target("t8h")
+    agent = b.agent("t8h")
+    state = os.path.join(b.dir, "state"); os.makedirs(state, exist_ok=True)
+    beat = os.path.join(state, f"{agent}.json")
+    with open(beat, "w") as f:
+        json.dump({"at": "2026-10-18T10:00:00+00:00", "event": "PostToolUse", "tool": "Bash"}, f)
+    r = b.msg(agent, "while a tool runs")
+    time.sleep(2)
+    check("a PostToolUse heartbeat defers the wake untyped", "busy" in r.stdout and lines_of(out) == [],
+          r.stdout + repr(lines_of(out)))
+    with open(beat, "w") as f:
+        json.dump({"at": "2026-10-18T10:00:05+00:00", "event": "Stop", "tool": None}, f)
+    sh([HUBWAKED, "--deliver", os.path.join(b.dir, "wake", f"{agent}.wake")], env=b.env)
+    wait_for(out)
+    time.sleep(1)
+    check("after Stop the wake is typed once", lines_of(out) == [WAKE_LINE], repr(lines_of(out)))
+
+
+def test_codex_launch_dialogs_defer_the_wake(b):
+    """Spike T1: Codex's "Update available" runs npm install -g on Enter; "Hooks need review"
+    trusts hooks. Claude's select dialogs end "Esc to cancel", capitalised. None matched the old
+    MODAL_MARKERS."""
+    for suffix, banner in (("t8u", "  Update available! 0.162.1 -> 0.163.0   enter continue · esc skip"),
+                           ("t8k", "  Hooks need review: 2 hooks are new or changed"),
+                           ("t8c", "  Teach auto mode about your environment? Enter to confirm · Esc to cancel")):
+        sess, out, idle = b.busy_target(suffix, banner)
+        b.msg(b.agent(suffix), "wake arriving on a launch dialog")
+        time.sleep(2)
+        open(idle, "w").close()
+        time.sleep(1)
+        check(f"no keys typed into {banner.split(':')[0].split('!')[0].strip()!r}", lines_of(out) == [],
+              repr(lines_of(out)))
+
+
+def test_quoted_markers_above_the_status_rows_do_not_defer(b):
+    """Hermes, T-532 review: transcript text that quotes "esc to interrupt" or a dialog footer is not a
+    busy status line or a dialog. Only the bottom rows count: 3 for the status line, 12 for dialogs."""
+    filler = "".join(f"transcript line {n}\n" for n in range(15))
+    for suffix, quote in (("q534i", "the pane shows `esc to interrupt` while a turn runs"),
+                          ("q534d", "a dialog reads: Do you want to proceed? Esc to cancel")):
+        b.target(suffix, preamble=f"{quote}\n{filler}")
+        time.sleep(0.5)
+        r = b.msg(b.agent(suffix), "quoted marker, idle pane")
+        out = os.path.join(b.dir, f"{suffix}.out")
+        wait_for(out)
+        time.sleep(1)
+        check(f"a quote above the status rows is not {'busy' if suffix.endswith('i') else 'a dialog'}",
+              confirmed(r) and lines_of(out) == [WAKE_LINE], r.stdout + r.stderr + repr(lines_of(out)))
+
+
+def reset_request(b, agent, kind, created=None):
+    """The dispatcher's reset request (dispatch.py reset_wake): six lines, version=2 ... created=."""
+    wake = os.path.join(b.dir, "wake"); os.makedirs(wake, exist_ok=True)
+    req = os.path.join(wake, f"{agent}.wake")
+    with open(req, "w") as f:
+        f.write(f"version=2\nagent={agent}\nids={time.time_ns()}-534\nreset=1\nkind={kind}\n"
+                f"created={int(time.time()) if created is None else created}\n")
+    return req
+
+
+def relay_log(b):
+    p = os.path.join(b.dir, "wake", "hubwaked.log")
+    return open(p).read() if os.path.exists(p) else ""
+
+
+def test_reset_request_types_the_reset_then_the_line(b):
+    """Agent OS §1 and spike T1: /clear for Claude, /new for Codex, then about 3 s, then the line."""
+    for suffix, kind, cmd in (("r534c", "claude", "/clear"), ("r534x", "codex", "/new")):
+        b.target(suffix, slash_clears=True)
+        agent = b.agent(suffix)
+        out = os.path.join(b.dir, f"{suffix}.out")
+        start = time.time()
+        r = sh([HUBWAKED, "--deliver", reset_request(b, agent, kind)], env=b.env)
+        took = time.time() - start
+        wait_for(out)
+        time.sleep(1)
+        check(f"{kind}: a reset request types {cmd}, then the receive line",
+              r.returncode == 0 and lines_of(out) == [cmd, WAKE_LINE], f"rc={r.returncode} {lines_of(out)!r} {r.stderr}")
+        check(f"{kind}: the line waits for the fresh session (>= 3 s after the reset)", took >= 3.5, f"{took:.1f}s")
+        check(f"{kind}: logged as reset delivered", f"reset delivered id={agent}" in relay_log(b), relay_log(b)[-400:])
+
+
+def test_plain_wake_clears_leftover_input_first(b):
+    """Live rollout: a relay killed mid-type left "[hub wake" in Hermes's composer; the next wake would
+    have submitted "<leftover>[hub wake] ..." as one garbled prompt."""
+    sess, out = b.target("p534u")
+    time.sleep(0.5)
+    sh(["tmux", "send-keys", "-t", sess, "-l", "[hub wake"])
+    time.sleep(0.3)
+    r = b.msg(b.agent("p534u"), "wake onto leftover input")
+    wait_for(out)
+    time.sleep(1)
+    check("leftover input is cleared, so the pane receives only the receive line",
+          confirmed(r) and lines_of(out) == [WAKE_LINE], r.stdout + r.stderr + repr(lines_of(out)))
+
+
+def test_reset_clears_a_draft_first(b):
+    """Hermes, T-534 review: a draft left in the composer would make "<draft>/clear", submitted as a prompt."""
+    sess, out = b.target("r534d", slash_clears=True)
+    agent = b.agent("r534d")
+    time.sleep(0.5)
+    sh(["tmux", "send-keys", "-t", sess, "-l", "half-typed draft"])
+    time.sleep(0.3)
+    r = sh([HUBWAKED, "--deliver", reset_request(b, agent, "claude")], env=b.env)
+    wait_for(out)
+    time.sleep(1)
+    check("a draft is cleared, so /clear is the only input, then the line",
+          r.returncode == 0 and lines_of(out) == ["/clear", WAKE_LINE], f"rc={r.returncode} {lines_of(out)!r}")
+
+
+def test_reset_that_stays_in_the_composer_falls_back(b):
+    """Spike T1: a Codex /new can stay in the input box, and a prompt typed onto it can be lost."""
+    b.target("r534s")
+    agent = b.agent("r534s")
+    out = os.path.join(b.dir, "r534s.out")
+    r = sh([HUBWAKED, "--deliver", reset_request(b, agent, "codex")], env=b.env)
+    wait_for(out)
+    time.sleep(1)
+    check("a /new left on screen is cleared and followed by a plain wake",
+          r.returncode == 0 and lines_of(out) == ["/new", WAKE_LINE], f"rc={r.returncode} {lines_of(out)!r}")
+    check("the fallback is logged as a downgrade", "reset downgraded: /new not submitted" in relay_log(b),
+          relay_log(b)[-400:])
+
+
+def test_reset_downgrades_to_the_plain_line(b):
+    """Agent OS §1: any guard turns a reset into the plain receive line, and a reset is never retried."""
+    state = os.path.join(b.dir, "state"); os.makedirs(state, exist_ok=True)
+    board = os.path.join(b.dir, "board.json")
+    saved = open(board).read()
+
+    def plain_only(suffix, why, setup, req_created=None):
+        b.target(suffix, slash_clears=True)
+        agent, out = b.agent(suffix), os.path.join(b.dir, f"{suffix}.out")
+        setup(agent)
+        try:
+            r = sh([HUBWAKED, "--deliver", reset_request(b, agent, "claude", req_created)], env=b.env)
+        finally:
+            open(board, "w").write(saved)
+        wait_for(out)
+        time.sleep(1)
+        check(f"{why}: the line only, no /clear", r.returncode == 0 and lines_of(out) == [WAKE_LINE],
+              f"rc={r.returncode} {lines_of(out)!r}")
+        check(f"{why}: logged as reset downgraded", f"reset downgraded: {why} id={agent}" in relay_log(b),
+              relay_log(b)[-400:])
+
+    def beat(agent):
+        with open(os.path.join(state, f"{agent}.json"), "w") as f:
+            json.dump({"at": "2026-10-18T12:00:00+00:00", "event": "Stop", "tool": None}, f)
+    plain_only("r534h", "heartbeat newer than the offer", beat, req_created=int(time.time()) - 30)
+
+    for suffix, status in (("r534k", "claimed"), ("r534l", "blocked")):
+        def holds(agent, status=status):
+            json.dump({"next_id": 2, "tasks": [{"id": "T-001", "title": "held", "status": status, "owner": agent,
+                                                 "notes": [], "deps": []}]}, open(board, "w"))
+        plain_only(suffix, f"holds a {status} task", holds)
+
+    # Attached, a dialog, or mid-turn: the request is deferred, and the retry is a plain wake.
+    for suffix, banner, why in (("r534m", "  Do you want to proceed? Press enter to confirm", "confirmation dialog"),
+                                ("r534w", "  Working (5s - esc to interrupt)", "busy")):
+        sess, out, idle = b.busy_target(suffix, banner)
+        agent = b.agent(suffix)
+        req = reset_request(b, agent, "claude")
+        r = sh([HUBWAKED, "--deliver", req], env=b.env)
+        text = open(req).read() if os.path.exists(req) else ""
+        open(idle, "w").close()
+        time.sleep(1)
+        r2 = sh([HUBWAKED, "--deliver", req], env=b.env)
+        wait_for(out)
+        time.sleep(1)
+        check(f"{why}: deferred, then the line only", r.returncode in (4, 6) and r2.returncode == 0
+              and "reset=" not in text and lines_of(out) == [WAKE_LINE],
+              f"rc={r.returncode},{r2.returncode} {text!r} {lines_of(out)!r}")
+        check(f"{why}: logged as reset downgraded", f"reset downgraded: {why} id={agent}" in relay_log(b),
+              relay_log(b)[-400:])
+
+    sess, out = b.target("r534a", slash_clears=True)
+    agent = b.agent("r534a")
+    client = subprocess.Popen(["script", "-qec", f"tmux attach-session -t {sess}", "/dev/null"],
+                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              env={**os.environ, "TERM": "xterm"})
+    try:
+        end = time.time() + 5
+        while time.time() < end and sh(["tmux", "display-message", "-p", "-t", sess,
+                                        "#{session_attached}"]).stdout.strip() in ("", "0"):
+            time.sleep(0.1)
+        req = reset_request(b, agent, "claude")
+        r = sh([HUBWAKED, "--deliver", req], env=b.env)
+        text = open(req).read() if os.path.exists(req) else ""
+        sh(["tmux", "detach-client", "-s", sess])
+        time.sleep(0.5)
+        r2 = sh([HUBWAKED, "--deliver", req], env=b.env)
+        wait_for(out)
+        time.sleep(1)
+        check("attached: deferred, then the line only", r.returncode == 4 and r2.returncode == 0
+              and "reset=" not in text and lines_of(out) == [WAKE_LINE],
+              f"rc={r.returncode},{r2.returncode} {text!r} {lines_of(out)!r}")
+        check("attached: logged as reset downgraded", f"reset downgraded: attached id={agent}" in relay_log(b),
+              relay_log(b)[-400:])
+    finally:
+        client.terminate()
+        try:
+            client.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            client.kill()
+
+
 def main():
+    # A private tmux server (its own socket directory, the effect of -L): no pane this suite makes or
+    # types into can be a live agent's, whatever its hub-* name.
+    os.environ.pop("TMUX", None)
+    os.environ["TMUX_TMPDIR"] = tempfile.mkdtemp(prefix="hubtest-tmux-")
     b = Bed()
     print(f"bed: {b.dir}\n")
     try:
@@ -470,7 +782,17 @@ def main():
                   test_attached_pane_defers_without_collision,
                   test_single_delivery_with_daemon_running,
                   test_modal_dialog_is_never_confirmed_by_a_wake,
-                  test_codex_menu_defers_the_wake):
+                  test_codex_menu_defers_the_wake,
+                  test_wake_into_trust_prompt_is_not_confirmed,
+                  test_busy_pane_gets_no_keys_and_messages_coalesce,
+                  test_busy_heartbeat_defers_the_wake,
+                  test_codex_launch_dialogs_defer_the_wake,
+                  test_quoted_markers_above_the_status_rows_do_not_defer,
+                  test_reset_request_types_the_reset_then_the_line,
+                  test_plain_wake_clears_leftover_input_first,
+                  test_reset_clears_a_draft_first,
+                  test_reset_that_stays_in_the_composer_falls_back,
+                  test_reset_downgrades_to_the_plain_line):
             print(f"{t.__name__}:")
             try:
                 t(b)
@@ -479,6 +801,7 @@ def main():
             print()
     finally:
         b.cleanup()
+        sh(["tmux", "kill-server"])
     print(f"{len(PASSES)} passed, {len(FAILURES)} failed")
     if FAILURES:
         print("failed: " + ", ".join(FAILURES))

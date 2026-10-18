@@ -1,12 +1,12 @@
 {
   "agents": [
-    {"name": "Prometheus", "kind": "codex", "session": "hub-prometheus", "dispatch": true},
-    {"name": "Hermes", "kind": "claude", "session": "hub-hermes", "dispatch": true},
-    {"name": "Zeus", "kind": "claude", "session": "hub-zeus", "dispatch": false}
+    {"name": "Prometheus", "kind": "codex", "session": "hub-prometheus", "reset": "per-task", "dispatch": true},
+    {"name": "Hermes", "kind": "claude", "session": "hub-hermes", "reset": false, "dispatch": true},
+    {"name": "Zeus", "kind": "claude", "session": "hub-zeus", "reset": false, "dispatch": false}
   ],
   "repos": [
     {"repo": "your-org/your-app"},
-    {"repo": "your-org/your-other-app"}
+    {"repo": "your-org/your-other-app", "acceptance_cmd": "uv run pytest -q {test}"}
   ],
   "projects": ["your-app", "your-other-app", "hub"],
   "snapshot_bucket": "gs://your-hub-snapshots",

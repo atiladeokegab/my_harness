@@ -58,12 +58,19 @@ LOCK_TIMEOUT = 10.0
 MAX_ATTEMPTS = 2
 VERIFY_TIMEOUT = 1800   # seconds; HUB_VERIFY_TIMEOUT overrides it
 VERIFY_TAIL = 30        # lines of verify output kept on the task
+SH_LOGS = os.path.join(HUB_DIR, "logs", "sh")   # hub sh and verify output; inbox_gc prunes after 7 days
+SHOW_NOTES, NOTE_CUT = 5, 600                   # hub show without --full
 
 # Bumped when board.json's shape changes; migrate() upgrades older boards in place.
 # A board written before versioning existed has no field at all, which is version 1.
 SCHEMA_VERSION = 1
 
 IDENTITY_VARS = ("HUB_AGENT", "CLAUDE_CODE_SESSION_NAME")
+
+# Events that can make work claimable. board() touches state/dispatch.kick on any of them, which
+# hub-dispatch.path turns into a dispatcher run; a plain note or notify must not, or dispatch's
+# own messages would re-trigger it.
+KICK_EVENTS = {"created", "done", "released", "unblocked", "assigned", "delegated", "reopened"}
 
 # Agent names become file paths (inbox/<Agent>.jsonl), so they are validated rather than
 # trusted: os.path.join with an absolute or traversing name silently escapes INBOX_DIR.
@@ -322,8 +329,29 @@ def board(write=False):
                 _write_json_atomic(BOARD, data)
                 os.remove(WAL)
                 _fsync_dir(HUB_DIR)
+                _kick(data, events)
         finally:
             fcntl.flock(lk, fcntl.LOCK_UN)
+
+
+def _kick(data, events):
+    """Wake the dispatcher, and on done the project's hub live loop. Best effort: the commit
+    has landed, and the timers still catch a missed kick."""
+    if not KICK_EVENTS & {e["event"] for e in events}:
+        return
+    paths = [os.path.join(HUB_DIR, "state", "dispatch.kick")]
+    tasks = {t["id"]: t for t in data["tasks"]}
+    for e in events:
+        p = e["event"] == "done" and tasks.get(e["task"], {}).get("project")
+        if p and os.path.isdir(os.path.join(HUB_DIR, "projects", p)):
+            paths.append(os.path.join(HUB_DIR, "projects", p, ".tick-now"))
+    for path in paths:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "a").close()
+            os.utime(path)
+        except OSError:
+            pass
 
 
 def log(events, who, event, task_id, **extra):
@@ -634,11 +662,14 @@ def task_repo(t):
     return None
 
 
-def verify_checkout(repo):
-    """The caller's worktree when it is a checkout of the task's repo, else the repo itself.
+def verify_checkout(repo, workspace=None):
+    """The task's claim workspace, else the caller's worktree when it is a checkout of the
+    task's repo, else the repo itself.
 
     Builders work in linked worktrees on branches; verifying the main checkout would test
     the wrong tree."""
+    if workspace and os.path.isdir(workspace):
+        return workspace
     env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
 
     def rev_parse(d, flag):
@@ -669,26 +700,49 @@ def verify_command(t, repo):
         return None
 
 
-def run_verify(cmd, cwd):
-    """(passed, last VERIFY_TAIL lines of output). Own session so a timeout kills the whole tree."""
+def sh_log(me, name):
+    os.makedirs(d := os.path.join(SH_LOGS, me), exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    return os.path.join(d, f"{stamp}-{re.sub(r'[^A-Za-z0-9._-]', '_', name)[:60]}.log")
+
+
+def run_verify(cmd, cwd, log=None, strip_hub_env=True, tail=VERIFY_TAIL):
+    """(exit code, output lines, last `tail` lines); 124 on timeout. Own session so a timeout
+    kills the whole tree. Output goes straight to `log` when given, so a killed run keeps it."""
     timeout = int(os.environ.get("HUB_VERIFY_TIMEOUT") or VERIFY_TIMEOUT)
     # A repo check is not a board operation: without this a hub test suite run as verify
     # would inherit HUB_DIR and write to whichever board the caller is pointed at.
-    env = {k: v for k, v in os.environ.items() if k not in ("HUB_DIR", "HUB_AGENT")}
-    p = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                         errors="replace", start_new_session=True)
-    try:
-        out, _ = p.communicate(timeout=timeout)
-        ok = p.returncode == 0
-        if not ok:
-            out += f"\n(exit {p.returncode})"
-    except subprocess.TimeoutExpired:
-        os.killpg(p.pid, signal.SIGKILL)
-        out, _ = p.communicate()
-        ok = False
-        out += f"\n(timed out after {timeout}s)"
-    return ok, "\n".join(out.rstrip("\n").splitlines()[-VERIFY_TAIL:])
+    env = {k: v for k, v in os.environ.items()
+           if not (strip_hub_env and k in ("HUB_DIR", "HUB_AGENT"))}
+    with open(log, "w+b") if log else tempfile.TemporaryFile() as f:
+        p = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                             stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            rc = p.wait(timeout=timeout)
+            rc = 128 - rc if rc < 0 else rc   # killed by a signal: report it as a shell would
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+            rc = 124
+            f.seek(0, os.SEEK_END)
+            f.write(f"\n(timed out after {timeout}s)\n".encode())
+        f.seek(0)
+        lines = f.read().decode(errors="replace").rstrip("\n").splitlines()
+    return rc, len(lines), "\n".join(lines[-tail:] if tail else [])
+
+
+def cmd_sh(a):
+    argv = a.argv[1:] if a.argv[:1] == ["--"] else a.argv
+    if not argv or not argv[0].strip():
+        sys.exit("usage: hub sh [--tail N] [--name x] -- <cmd...>")
+    cmd = argv[0] if len(argv) == 1 else shlex.join(argv)   # one argument is a shell line
+    log = sh_log(whoami(a.as_agent), a.name or os.path.basename(argv[0].split()[0]))
+    start = time.monotonic()
+    rc, n, tail = run_verify(cmd, None, log=log, strip_hub_env=False, tail=a.tail)
+    print(f"exit {rc} · {n} lines · {time.monotonic() - start:.1f}s · log {log}")
+    if tail:
+        print(tail)
+    sys.exit(rc)
 
 
 def bump_attempts(tid, me, why, tail):
@@ -736,6 +790,13 @@ def cmd_new(a):
         a.owner = addressable(a.owner, "owner")
     project = which_project(getattr(a, "project", None))
     check_owner(project, a.owner)
+    if project and os.path.isfile(os.path.join(HUB_DIR, "projects", project, "spec", "requirements.json")) \
+            and not a.from_spec:
+        sys.exit(f"tasks for {project} come from hub spec apply")
+    if a.from_spec and not a.generated_from:
+        sys.exit("--from-spec needs --generated-from")
+    if a.generated_from and not a.from_spec:
+        sys.exit("--generated-from needs --from-spec")
     with board(write=True) as (data, events):
         nid = f"T-{data['next_id']:03d}"
         data["next_id"] += 1
@@ -752,6 +813,8 @@ def cmd_new(a):
             "updated": now(),
             "notes": [],
             "project": project,
+            **({"reqs": a.req} if a.req else {}),
+            **({"generated_from": a.generated_from} if a.generated_from else {}),
             **({"kind": "vertical"} if a.vertical else {}),
             **({"verify": a.verify} if a.verify is not None else {}),
         })
@@ -807,6 +870,10 @@ def cmd_show(a):
         print(f"\n{'▣ ' if t.get('kind') == 'vertical' else ''}{label(t)}  [{t['status']}]  {t['title']}")
         if t.get("tags"):
             print(f"tags: {', '.join(t['tags'])}")
+        if t.get("reqs"):
+            print(f"reqs: {', '.join(t['reqs'])}")
+        if t.get("generated_from"):
+            print(f"generated from: {t['generated_from']}")
         print(f"owner: {t.get('owner') or '-'}   project: {t.get('project') or '-'}"
               f"   created by {t['created_by']} at {t['created']}"
               + (f"   key: {t['id']}" if label(t) != t["id"] else ""))
@@ -816,8 +883,14 @@ def cmd_show(a):
             named = lambda ids: ",".join(label(by_id[d]) if d in by_id else d for d in ids)
             print(f"deps: {named(t['deps'])}" + (f"   UNMET: {named(missing)}" if missing else "   (all met)"))
         print(f"\n{t['detail'] or '(no detail)'}\n")
-        for n in t["notes"]:
-            print(f"  · [{n['at']}] {n['by']}: {n['text']}")
+        notes = t["notes"] if a.full else t["notes"][-SHOW_NOTES:]
+        if len(notes) < len(t["notes"]):
+            print(f"  ({len(t['notes']) - len(notes)} earlier notes: hub show {label(t)} --full)")
+        for n in notes:
+            text, half = n["text"], NOTE_CUT // 2
+            if not a.full and len(text) > NOTE_CUT:   # both ends: a verify tail's summary and log path are last
+                text = f"{text[:half]} …(--full)… {text[-half:]}"
+            print(f"  · [{n['at']}] {n['by']}: {text}")
         if t["notes"]:
             print()
 
@@ -861,6 +934,11 @@ def cmd_edit(a):
         t = dict(resolve(data, a.id, project))
     if t["status"] == "done":
         sys.exit(f"{label(t)} is done; reopen it before editing its brief")
+    if t.get("generated_from") and (a.title or a.detail_file or a.take_github or a.deadline or
+                                    not (a.keep_hub or a.verify is not None or a.tag or a.untag)):
+        sys.exit(f"{label(t)} was generated from the PRD; change its brief through hub spec apply")
+    if t.get("generated_from") and a.verify is not None and me != LEAD_AGENT and not a.force:
+        sys.exit(f"{label(t)} was generated from the PRD; change its verify through hub spec apply")
     if a.take_github and a.keep_hub:
         sys.exit("choose one of --take-github and --keep-hub")
     if (a.take_github or a.keep_hub) and a.detail_file:
@@ -876,8 +954,9 @@ def cmd_edit(a):
     # The dispatcher holds untrusted tasks for the lead; injected text would ask any reader to lift that.
     # shortcut: identity is self-declared (--as / HUB_AGENT), so this stops a naive injection or a slip, not a
     # determined one; upgrade with signed identities, together with signed LGTMs in live_merge.py.
-    if "untrusted" in untagged and me != LEAD_AGENT and not a.force:
-        sys.exit(f"only {LEAD_AGENT} clears 'untrusted' on {label(t)}; --force overrides (recorded)")
+    for protected in ("untrusted", "stale"):
+        if protected in untagged and me != LEAD_AGENT and not a.force:
+            sys.exit(f"only {LEAD_AGENT} clears '{protected}' on {label(t)}; --force overrides (recorded)")
     old_detail = t.get("detail") or ""
     new_title, new_detail, extra = a.title or t["title"], old_detail, {}
     if a.take_github or a.keep_hub:
@@ -928,6 +1007,10 @@ def cmd_edit(a):
             sys.exit(f"{label(cur)} is done; reopen it before editing its brief")
         if cur["title"] != t["title"] or (cur.get("detail") or "") != old_detail:
             sys.exit(f"{label(cur)} changed while you were editing; run hub edit again")
+        if cur.get("generated_from") and (new_title != cur["title"] or new_detail != old_detail):
+            sys.exit(f"{label(cur)} was generated from the PRD; change its brief through hub spec apply")
+        if cur.get("generated_from") and a.verify is not None and me != LEAD_AGENT and not a.force:
+            sys.exit(f"{label(cur)} was generated from the PRD; change its verify through hub spec apply")
         fields = []
         if new_title != cur["title"]:
             cur["title"] = new_title
@@ -946,7 +1029,9 @@ def cmd_edit(a):
         cur["updated"] = now()
         log(events, me, "edited", cur["id"], fields=fields, keep_hub=bool(a.keep_hub),
             **({"tagged": tagged, "untagged": untagged} if tagged or untagged else {}),
-            **({"forced": True} if a.force and "untrusted" in untagged else {}))
+            **({"forced": True} if a.force and
+               (any(tag in untagged for tag in ("untrusted", "stale")) or
+                (cur.get("generated_from") and a.verify is not None)) else {}))
     print(f"{label(t)} saved" + ("; the next hub gh-sync pushes it" if is_hackathon(t.get("project")) else ""))
 
 
@@ -958,12 +1043,13 @@ def next_candidates(tasks, agent, project=None):
     # Strict: an unscoped task is not this project's work either. Without this an agent that
     # clears its own queue falls through to unrelated tasks, which is the whole reason project
     # scoping exists.
-    pool = [t for t in tasks if t["status"] == "open"
+    pool = [t for t in tasks if t["status"] == "open" and "stale" not in (t.get("tags") or [])
             and (not project or (t.get("project") or "") == project)]
     # Scope keeps an agent out of unrelated FREE work; it must not hide work someone assigned to
     # it by name. A project-scoped Prometheus was offered T-078 and never shown T-101..T-103,
     # which Zeus had assigned it under project hub/testbed.
     elsewhere = [t for t in tasks if t["status"] == "open" and project
+                 and "stale" not in (t.get("tags") or [])
                  and (t.get("project") or "") != project and (actor(t) or "").lower() == me]
     out = []
     for group, scoped in (([t for t in pool if (actor(t) or "").lower() == me], True),
@@ -976,7 +1062,8 @@ def next_candidates(tasks, agent, project=None):
                 out.append(t)  # an ordinary task, or a vertical that still needs its breakdown
             for child in children:
                 who = actor(child)
-                if (child["status"] == "open" and child.get("project") == t.get("project")
+                if (child["status"] == "open" and "stale" not in (child.get("tags") or [])
+                        and child.get("project") == t.get("project")
                         and (who or scoped) and (not who or who.lower() == me)
                         and not unmet_deps(data, child)):
                     out.append(child)
@@ -991,6 +1078,7 @@ def cmd_next(a):
     with board() as (data, _):
         pick = next(iter(next_candidates(data["tasks"], me, project)), None)
         elsewhere = [t for t in data["tasks"] if project and (t.get("project") or "") != project
+                     and "stale" not in (t.get("tags") or [])
                      and t["status"] == "open" and (actor(t) or "").lower() == me.lower()
                      and not unmet_deps(data, t)]
         if not pick:
@@ -1013,6 +1101,8 @@ def cmd_claim(a):
     refuse_if_paused("hub claim")
     with board(write=True) as (data, events):
         t = resolve(data, a.id, which_project(getattr(a, "project", None)))
+        if "stale" in (t.get("tags") or []):
+            sys.exit(f"{label(t)} superseded: hub spec regenerates it")
         missing = unmet_deps(data, t)
         if missing and not a.force:
             by_id = {x["id"]: x for x in data["tasks"]}
@@ -1036,6 +1126,18 @@ def cmd_claim(a):
                 t["agent"] = me  # hub live's builder(): the agent that built the PR
         log(events, me, "claimed", t["id"], forced=bool(missing) or overridden)
     print(f"{label(t)} claimed by {me}")
+    if not t.get("project"):
+        return
+    # Outside the lock: create fetches, and the claim must stand whatever it does.
+    try:
+        import workspace
+        path = workspace.create(t)
+    except Exception as exc:
+        print(f"workspace: not created ({exc}); claim stands")
+        return
+    if path:
+        with board(write=True) as (data, _):
+            find(data, t["id"])["workspace"] = str(path)
 
 
 def cmd_release(a):
@@ -1052,6 +1154,11 @@ def cmd_release(a):
                 t["agent"] = None
         log(events, me, "released", t["id"], forced=overridden)
     print(f"{label(t)} released back to open")
+    try:
+        import workspace
+        workspace.gc([t], False)
+    except Exception as exc:
+        print(f"workspace: gc skipped ({exc})")
 
 
 
@@ -1097,8 +1204,19 @@ def cmd_delegate(a):
         notify_hint([(agent, f"{message}. Run: hub show {t['id']}", mid)])
     print(f"{label(t)} " + (f"delegated to {agent}" if agent else "delegate cleared"))
 
+
+def resets_per_task(me):
+    """factory.json gives `me` a fresh session per task (agent OS §1)."""
+    try:
+        with open(os.path.join(HUB_DIR, "factory.json")) as f:
+            agents = json.load(f).get("agents", [])
+    except (OSError, ValueError, AttributeError):
+        return False
+    return any(str(x.get("name", "")).lower() == me.lower() and x.get("reset") == "per-task" for x in agents)
+
+
 def done_guard(data, t, me, a):
-    """Every refusal hub done makes; returns whether the issue rule was overridden."""
+    """Every refusal hub done makes; returns whether a rule was overridden with --force."""
     if t.get("kind") == "vertical":
         open_children = [label(x) for x in data["tasks"]
                          if x.get("parent") == t["id"] and x["status"] != "done"]
@@ -1113,7 +1231,13 @@ def done_guard(data, t, me, a):
                  f"with `Closes #{t['issue']}` (or post DONE: on the issue): the merge closes the issue, the next "
                  f"gh-sync closes this task, and a smoke revert reopens both. To drop it "
                  f"instead: hub done {label(t)} --force --note \"dropped: <why>\"")
-    return issue_rule
+    # Only the board, inbox, git and memory survive the reset that follows, so the note is the handoff.
+    short_note = len((a.note or "").strip()) < 20 and resets_per_task(me)
+    if short_note and not a.force:
+        sys.exit(f"cannot done {label(t)} without a handoff note: {me} starts a fresh session next.\n"
+                 f"add --note \"<what changed, branch and commit, what is left>\" (20+ characters), "
+                 f"or --force (recorded in the ledger)")
+    return issue_rule or short_note
 
 
 def cmd_done(a):
@@ -1127,7 +1251,7 @@ def cmd_done(a):
         done_guard(data, t, me, a)
         transition(dict(t), "done", me, a.force,
                    who=actor(t) if is_hackathon(t.get("project")) else None)
-        repo = verify_checkout(task_repo(t))
+        repo = verify_checkout(task_repo(t), t.get("workspace"))
         cmd = verify_command(t, repo)
     verdict, tail = None, ""
     if cmd and a.no_verify:
@@ -1138,10 +1262,12 @@ def cmd_done(a):
                      f"{t.get('project') or '(none)'} (looked in $HUB_CODE_DIR/<project> and ~/<project>).\n"
                      f"fix the project, or pass --no-verify (recorded in the ledger)")
         print(f"verify: {cmd}  (in {repo})", flush=True)
-        ok, tail = run_verify(cmd, repo)
-        if not ok:
-            verify_failed(t["id"], me, cmd, tail)
-        verdict = "passed"
+        path = sh_log(me, f"verify-{label(t)}")
+        rc, n, tail = run_verify(cmd, repo, log=path)
+        if rc:
+            verify_failed(t["id"], me, cmd, f"{tail}\n(exit {rc}, log {path})")
+        verdict, tail = "passed", f"verify passed: {cmd} ({n} lines, log {path})"
+        print(tail)
     with board(write=True) as (data, events):
         t = resolve(data, a.id, project)
         issue_rule = done_guard(data, t, me, a)
@@ -1150,7 +1276,7 @@ def cmd_done(a):
                                 who=actor(t) if is_hackathon(t.get("project")) else None) or issue_rule
         if overridden:
             log(events, me, "override", t["id"], verb="done")
-        note = "\n".join(filter(None, [a.note, verdict == "passed" and f"verify passed: {cmd}\n{tail}",
+        note = "\n".join(filter(None, [a.note, verdict == "passed" and tail,
                                        verdict == "skipped" and f"verify skipped: {cmd} (--no-verify)"]))
         if note:
             t["notes"].append({"at": now(), "by": me, "text": note})
@@ -1271,9 +1397,66 @@ def cmd_brief(a):
     print("\n".join(out))
 
 
+# Routine hub live chatter: `--unseen` feeds a hook that interrupts an attached agent, and
+# these would bury the one alert that matters ("Smoke failed ...").
+INBOX_NOISE = re.compile(r"not accepted the invite yet|deployed [0-9a-f]{12}:|deploy started")
+
+
+def take_receipt(receipt_dir, mid):
+    """The receive receipt, O_EXCL: True only for the one caller that created it."""
+    os.makedirs(receipt_dir, exist_ok=True)
+    try:
+        os.close(os.open(os.path.join(receipt_dir, mid), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        return False
+    return True
+
+
+def inbox_unseen(me, path):
+    """New messages since the last --unseen, for the inbox-surface hook. Never consumes:
+    the cursor is the set of keys already shown, pruned to what is still in the inbox, so a
+    --clear (which restarts the file) cannot hide what arrives after it.
+
+    A message with an id shares receipts with `hub receive`: one already received is not shown,
+    and one shown in full is received, so the Stop hook and the relay do not deliver it again
+    (live rollout 2026-10-18). A line cut at 300 characters is left for them to deliver whole."""
+    cursor = os.path.join(INBOX_DIR, f".{me}.unseen.json")
+    receipt_dir = os.path.join(INBOX_DIR, ".received", me)
+
+    def has_id(m):
+        return bool(m.get("id")) and bool(MESSAGE_ID_RE.match(m["id"]))
+
+    with inbox_lock(me):
+        msgs = read_msgs(path)
+        try:
+            with open(cursor) as f:
+                seen = set(json.load(f))
+        except (OSError, ValueError):
+            seen = set()
+        keys = [m.get("id") or f"{m.get('at')}|{m.get('text')}" for m in msgs]
+        new = [m for m, k in zip(msgs, keys) if k not in seen and not INBOX_NOISE.search(m.get("text", ""))
+               and not (has_id(m) and os.path.exists(os.path.join(receipt_dir, m["id"])))]
+        lines = []
+        for m in new[-8:]:
+            mid = f" [{m['id']}]" if m.get("id") else ""
+            line = f"  · [{m['at']}]{mid} {m['text']}"
+            if has_id(m) and len(line) <= 300:
+                take_receipt(receipt_dir, m["id"])
+            lines.append(line[:300])
+        if set(keys) != seen:
+            _write_json_atomic(cursor, sorted(set(keys)))
+    for line in lines:
+        print(line)
+    if len(new) > 8:
+        print(f"  (+{len(new) - 8} more: run hub inbox)")
+
+
 def cmd_inbox(a):
     me = valid_agent(a.agent, "agent") if a.agent else whoami(a.as_agent)
     path = os.path.join(INBOX_DIR, f"{me}.jsonl")
+    if getattr(a, "unseen", False):  # callers that build the Namespace by hand predate it
+        inbox_unseen(me, path)
+        return
     if a.clear:
         # Atomic consume. Reading then unlinking loses any message that lands in between:
         # it is acknowledged to the sender and then destroyed. Renaming under the lock
@@ -1305,13 +1488,40 @@ def cmd_inbox(a):
         print(f"  · [{m['at']}]{mid} {m['text']}")
 
 
+def receive_pending(me, path, receipt_dir):
+    """Agent OS §5.1: reveal every recent message without a receipt, writing the receipts, so the
+    Stop hook and the relay's one coalesced wake both pull the whole backlog at once. Messages older
+    than the wake horizon (hubwaked drops such wakes too) stay in the inbox for `hub inbox`."""
+    horizon = time.time() - int(os.environ.get("HUB_WAKE_MAX_AGE") or 21600)
+    with inbox_lock(me):
+        fresh = []
+        for m in read_msgs(path):
+            if not m.get("id") or not MESSAGE_ID_RE.match(m["id"]):
+                continue
+            try:
+                if datetime.fromisoformat(m["at"]).timestamp() < horizon:
+                    continue
+            except (KeyError, TypeError, ValueError):
+                continue
+            if take_receipt(receipt_dir, m["id"]):
+                fresh.append(m)
+    for m in fresh:
+        print(f"  · [{m['at']}] [{m['id']}] {m['text']}")
+    if not fresh:
+        print("nothing pending")
+
+
 def cmd_receive(a):
     """Atomically reveal a durable message once; duplicate wake prompts are harmless."""
     me = addressable(whoami(a.as_agent), "receiving agent")
-    if not MESSAGE_ID_RE.match(a.id):
-        sys.exit(f"invalid message id: {a.id!r}")
     path = os.path.join(INBOX_DIR, f"{me}.jsonl")
     receipt_dir = os.path.join(INBOX_DIR, ".received", me)
+    if a.pending:
+        return receive_pending(me, path, receipt_dir)
+    if not a.id:
+        sys.exit("usage: hub receive <id> | hub receive --pending")
+    if not MESSAGE_ID_RE.match(a.id):
+        sys.exit(f"invalid message id: {a.id!r}")
     receipt = os.path.join(receipt_dir, a.id)
     with inbox_lock(me):
         matches = [m for m in read_msgs(path) if m.get("id") == a.id]
@@ -1361,6 +1571,9 @@ def main():
     n.add_argument("--vertical", action="store_true", help="create an owner-area vertical")
     n.add_argument("--verify", help="command hub done must pass in the task's repo "
                    "(default: make check if the repo has that target; \"\" for none)")
+    n.add_argument("--req", action="append", help="acceptance line and version, e.g. A-3.2@1")
+    n.add_argument("--from-spec", action="store_true", help=argparse.SUPPRESS)
+    n.add_argument("--generated-from", help=argparse.SUPPRESS)
     n.set_defaults(fn=cmd_new)
 
     l = sub.add_parser("list", help="list tasks")
@@ -1374,6 +1587,8 @@ def main():
     s = sub.add_parser("show", help="show one task in full")
     s.add_argument("id")
     s.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
+    s.add_argument("--full", action="store_true", help=f"every note, uncut (default: last {SHOW_NOTES}, "
+                   f"each cut to {NOTE_CUT} characters)")
     s.set_defaults(fn=cmd_show)
 
     ed = sub.add_parser("edit", help="change a task's title, brief, deadline or tags")
@@ -1388,7 +1603,7 @@ def main():
     ed.add_argument("--tag", action="append", default=[], help="add a tag, e.g. standing (repeatable)")
     ed.add_argument("--untag", action="append", default=[], help="remove a tag (repeatable)")
     ed.add_argument("--yes", action="store_true", help="save without asking")
-    ed.add_argument("--force", action="store_true", help="let a non-lead clear 'untrusted' (recorded)")
+    ed.add_argument("--force", action="store_true", help="override stale/untrusted tags or generated verify (recorded)")
     ed.set_defaults(fn=cmd_edit)
 
     nx = sub.add_parser("next", help="show the next task available to you")
@@ -1462,10 +1677,14 @@ def main():
     ib = sub.add_parser("inbox", help="read queued messages")
     ib.add_argument("agent", nargs="?", help="whose inbox (defaults to you)")
     ib.add_argument("--clear", action="store_true")
+    ib.add_argument("--unseen", action="store_true",
+                    help="only messages not shown by --unseen before; leaves the inbox intact")
     ib.set_defaults(fn=cmd_inbox)
 
     recv = sub.add_parser("receive", help="receive one durable message idempotently")
-    recv.add_argument("id")
+    recv.add_argument("id", nargs="?")
+    recv.add_argument("--pending", action="store_true",
+                      help="every recent message not yet received, once (the coalesced wake and the Stop hook)")
     recv.set_defaults(fn=cmd_receive)
 
     import gh_sync
@@ -1474,6 +1693,17 @@ def main():
     live.register(sub)
     import review
     review.register(sub)
+    import spec
+    spec.register(sub)
+    import workspace
+    workspace.register(sub)
+
+    sh = sub.add_parser("sh", help="run a long or noisy command: full output to a log, "
+                        "a header and the tail to you, its exit code kept")
+    sh.add_argument("--tail", type=int, default=20, help="lines of output to print (default 20)")
+    sh.add_argument("--name", help="log name (default: the command's name)")
+    sh.add_argument("argv", nargs=argparse.REMAINDER, metavar="-- cmd")
+    sh.set_defaults(fn=cmd_sh)
 
     ev = sub.add_parser("events", help="read the append-only ledger")
     ev.add_argument("--tail", type=int, default=30)

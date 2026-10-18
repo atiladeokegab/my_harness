@@ -4,6 +4,7 @@
 """
 
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -82,6 +83,42 @@ class TestReview(unittest.TestCase):
         self.assertEqual((out["decision"], out["note"]), ("changes", "swap owners"))
         saved = json.loads((self.dir / "reviews" / "approval-1.json").read_text())
         self.assertEqual(saved, out)
+
+    def test_approval_receipt_hashes_named_delta_at_click(self):
+        # Start a separate review because setUp already launched the plain page.
+        delta = self.dir / "C-001.json"
+        delta.write_text('{"reason": "new intent"}')
+        page = self.dir / "delta.html"
+        page.write_text('<body data-approves="C-001.json"><button id="approve">A</button></body>')
+        env = {k: v for k, v in os.environ.items() if k not in ("HUB_AGENT", "HUB_PROJECT")}
+        env.update(HUB_DIR=str(self.dir), HUB_REVIEW_PORT="0")
+        p = subprocess.Popen([sys.executable, str(HUB / "board.py"), "review", str(page),
+                              "--name", "delta", "--no-open"], stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, env=env)
+        try:
+            url = p.stderr.readline().split(": ", 1)[1].strip()
+            req = urllib.request.Request(url + "decision", data=b'{"decision":"approve"}', method="POST")
+            delta.write_text('{"reason": "changed while open"}')
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(req, timeout=5)
+            self.assertEqual(error.exception.code, 409)
+            error.exception.close()
+            self.assertIsNone(p.poll())
+            self.assertFalse((self.dir / "reviews" / "delta.json").exists())
+            delta.write_text('{"reason": "new intent"}')
+            with urllib.request.urlopen(req, timeout=5):
+                pass
+            self.assertEqual(p.wait(timeout=5), 0)
+            receipt = json.loads(p.stdout.read())
+            self.assertEqual(receipt["approved_path"], str(delta))
+            self.assertEqual(receipt["approved_sha256"], hashlib.sha256(delta.read_bytes()).hexdigest())
+            self.assertEqual(receipt, json.loads((self.dir / "reviews" / "delta.json").read_text()))
+        finally:
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+            p.stdout.close()
+            p.stderr.close()
 
     def test_builds_review_from_files_with_defaults_and_overrides(self):
         (self.dir / "idea.md").write_text('A <b> tag & a note')

@@ -130,6 +130,20 @@ def claimed(all_tasks, name):
             and "standing" not in (t.get("tags") or [])]
 
 
+def blocked_by(all_tasks, name):
+    return [t["id"] for t in all_tasks
+            if t["status"] == "blocked" and (hb.actor(t) or "").lower() == name.lower()]
+
+
+def resettable(a, all_tasks):
+    """Agent OS §1: a fresh session per task only for an opted-in agent holding nothing, standing
+    and blocked tasks included (their context is still worth keeping), that just stopped a turn."""
+    name = a["name"]
+    held = [t for t in all_tasks if t["status"] == "claimed" and (hb.actor(t) or "").lower() == name.lower()]
+    return (a.get("reset") == "per-task" and name.lower() != LEAD.lower() and a.get("kind") in ("claude", "codex")
+            and not held and not blocked_by(all_tasks, name) and load(f"{name}.json").get("event") == "Stop")
+
+
 def capture(session):
     try:
         r = subprocess.run(["tmux", "capture-pane", "-p", "-t", session],
@@ -263,6 +277,31 @@ def wake(name, t):
     return "queued" in r.stdout  # the durable half landed; hubwaked retries the keystroke
 
 
+def reset_wake(name, t, kind):
+    """Inbox message, then the v2 request hubwaked turns into /clear or /new plus the receive line."""
+    mid = f"{time.time_ns()}-{os.getpid()}"
+    text = (f"[dispatch] Fresh session. Your task: {t['id']} {t['title']}. Run: hub claim {t['id']} && "
+            f"hub show {t['id']}, then work in the workspace path hub claim prints.")
+    try:
+        r = subprocess.run([sys.executable, str(HERE / "board.py"), "notify", name, text, "--task", t["id"],
+                            "--message-id", mid], capture_output=True, text=True, timeout=30,
+                           env={**os.environ, "HUB_AGENT": "Dispatch"})
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"  hub notify failed: {e!r}", file=sys.stderr)
+        return False
+    if r.returncode:
+        print(f"  hub notify failed: {r.stderr.strip()}", file=sys.stderr)
+        return False
+    wake_dir = HUB / "wake"
+    wake_dir.mkdir(exist_ok=True)
+    # Overwrites any pending request: the relay's receive --pending reveals every unreceived message anyway.
+    with tempfile.NamedTemporaryFile("w", dir=wake_dir, prefix=f".{name}.", delete=False) as f:
+        f.write(f"version=2\nagent={name}\nids={mid}\nreset=1\nkind={kind}\ncreated={int(time.time())}\n")
+    os.replace(f.name, wake_dir / f"{name}.wake")
+    print(f"  queued -> {name} inbox; reset request wake/{name}.wake")
+    return True
+
+
 def start_headless(name, t):
     # Its own transient unit: a child of this oneshot service would die when the tick exits.
     env = [f"--setenv={k}={os.environ[k]}" for k in ("PATH", "HUB_DIR", "HUB_CODE_DIR", "HUB_LEAD",
@@ -331,44 +370,57 @@ def tick(dry):
         print(f"hub is paused ({reason}); dispatching nothing")
         return 0
     agents, intervals = config()
-    state, now = load("dispatch.json"), time.time()
-    poll_github(state, intervals, now, dry)
-    all_tasks, watch, woken = tasks(), load("watch.json"), state.setdefault("woken", {})
-    expire_offers(woken, all_tasks, intervals.get("offer_minutes", 30), now)
-    projects = dispatch_projects()
-    for a in agents:
-        name = a["name"]
-        why = not_idle(a, claimed(all_tasks, name), watch.get(name, {}), now)
-        pending = next((tid for tid, o in woken.items() if o.get("agent") == name and o.get("how") != "run"), None)
-        if why or pending:
-            print(f"{name}: {why or f'idle, offer of {pending} pending'}")
-            continue
-        t, skipped = None, []
-        for c in candidates(name, all_tasks, projects):
-            offer = woken.get(c["id"], {})
-            skip = ("untrusted" if "untrusted" in (c.get("tags") or [])
-                    else f"offered to {offer['agent']}" if offer.get("agent")
-                    else "ignored before" if name in offer.get("ignored", [])
-                    else "run lock held" if run_locked(c["id"], dry) else None)
-            if not skip:
-                t = c
-                break
-            skipped.append(f"{c['id']} {skip}")
-        note = f" (skipped {'; '.join(skipped)})" if skipped else ""
-        if t is None:
-            print(f"{name}: idle, nothing available{note}")
-            continue
-        headless = "headless" in (t.get("tags") or [])
-        verb = "start hub run for" if headless else "wake for"
-        if dry:
-            print(f"{name}: idle, would {verb} {t['id']} {t['title']}{note}")
-            continue
-        print(f"{name}: idle, {verb} {t['id']} {t['title']}{note}")
-        if (start_headless if headless else wake)(name, t):
-            woken[t["id"]] = {**woken.get(t["id"], {}), "agent": name, "at": hb.now(),
-                              "how": "run" if headless else "wake"}
-    if not dry:
-        save("dispatch.json", state)
+    state = load("dispatch.json")
+    delay = min(state.get("last_tick", 0) + 5 - time.time(), 5)  # a future last_tick waits 5 s, not forever
+    if delay > 0:
+        print(f"debounced {delay:.1f}s")
+        time.sleep(delay)
+    kick = STATE / "dispatch.kick"
+    for _ in range(3):  # initial pass plus at most two re-runs
+        started = kick.stat().st_mtime_ns if kick.exists() else 0
+        now = time.time()
+        poll_github(state, intervals, now, dry)
+        all_tasks, watch, woken = tasks(), load("watch.json"), state.setdefault("woken", {})
+        expire_offers(woken, all_tasks, intervals.get("offer_minutes", 30), now)
+        projects = dispatch_projects()
+        for a in agents:
+            name = a["name"]
+            why = not_idle(a, claimed(all_tasks, name), watch.get(name, {}), now)
+            pending = next((tid for tid, o in woken.items() if o.get("agent") == name and o.get("how") != "run"), None)
+            if why or pending:
+                print(f"{name}: {why or f'idle, offer of {pending} pending'}")
+                continue
+            t, skipped = None, []
+            for c in candidates(name, all_tasks, projects):
+                offer = woken.get(c["id"], {})
+                skip = ("untrusted" if "untrusted" in (c.get("tags") or [])
+                        else "stale" if "stale" in (c.get("tags") or [])
+                        else f"offered to {offer['agent']}" if offer.get("agent")
+                        else "ignored before" if name in offer.get("ignored", [])
+                        else "run lock held" if run_locked(c["id"], dry) else None)
+                if not skip:
+                    t = c
+                    break
+                skipped.append(f"{c['id']} {skip}")
+            note = f" (skipped {'; '.join(skipped)})" if skipped else ""
+            if t is None:
+                print(f"{name}: idle, nothing available{note}")
+                continue
+            how = ("run" if "headless" in (t.get("tags") or [])
+                   else "reset" if resettable(a, all_tasks) else "wake")
+            verb = {"run": "start hub run for", "reset": "reset for", "wake": "wake for"}[how]
+            if dry:
+                print(f"{name}: idle, would {verb} {t['id']} {t['title']}{note}")
+                continue
+            print(f"{name}: idle, {verb} {t['id']} {t['title']}{note}")
+            if (start_headless(name, t) if how == "run" else reset_wake(name, t, a["kind"]) if how == "reset"
+                    else wake(name, t)):
+                woken[t["id"]] = {**woken.get(t["id"], {}), "agent": name, "at": hb.now(), "how": how}
+        if not dry:
+            state["last_tick"] = now
+            save("dispatch.json", state)
+        if (kick.stat().st_mtime_ns if kick.exists() else 0) <= started:
+            break
     return 0
 
 

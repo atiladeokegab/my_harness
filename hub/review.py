@@ -11,9 +11,12 @@ plain HTML with no JavaScript of its own.
 """
 
 import glob
+import hashlib
 import html
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -61,8 +64,15 @@ def serve(page, name, open_browser=True, roots=None):
     page = Path(page).resolve()
     built = roots is not None
     roots = tuple(Path(root).resolve() for root in (roots or ()))
-    html = page.read_text()
-    html = html.replace("</body>", WIRE + "</body>") if "</body>" in html else html + WIRE
+    page_html = page.read_text()
+    named = re.search(r'''data-approves\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))''', page_html)
+    approved = (page.parent / html.unescape(next(x for x in named.groups() if x))).resolve() if named else None
+    if approved:
+        try:
+            approved_sha256 = hashlib.sha256(approved.read_bytes()).hexdigest()
+        except OSError:
+            sys.exit(f"review: approved file is unavailable: {approved}")
+    page_html = page_html.replace("</body>", WIRE + "</body>") if "</body>" in page_html else page_html + WIRE
     out = page.parent / "reviews" / f"{name}.json"
     result = {}
 
@@ -80,7 +90,7 @@ def serve(page, name, open_browser=True, roots=None):
 
         def do_GET(self):
             if self.path == "/":
-                return self.reply(200, html, "text/html; charset=utf-8")
+                return self.reply(200, page_html, "text/html; charset=utf-8")
             request = unquote(self.path.split("?")[0].lstrip("/"))
             if request.startswith("_files/"):
                 parts = request.split("/", 2)
@@ -111,8 +121,17 @@ def serve(page, name, open_browser=True, roots=None):
                 return self.reply(400, "decision must be approve or changes")
             if decision == "changes" and not note:
                 return self.reply(400, "a change request needs a note")
+            if decision == "approve" and approved:
+                try:
+                    digest = hashlib.sha256(approved.read_bytes()).hexdigest()
+                except OSError:
+                    return self.reply(400, "approved file is unavailable")
+                if digest != approved_sha256:
+                    return self.reply(409, "approved file changed; reopen the review")
             result.update(name=name, decision=decision, note=note,
                           at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+            if decision == "approve" and approved:
+                result.update(approved_path=str(approved), approved_sha256=approved_sha256)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps(result, indent=2) + "\n")
             self.reply(200, "recorded")

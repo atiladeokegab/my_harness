@@ -1,0 +1,28 @@
+[Unit]
+Description=hub live for %i: the hackathon loop (sync, merges, smoke, timers, nudges)
+# A crash loop stops after 5 starts in 10 min; journalctl says "Start request repeated too quickly".
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# systemd cannot expand $HUB_DIR in paths: if your hub is not ~/hub, edit %h/hub here and below.
+WorkingDirectory=%h/hub
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin
+# Your roster and HUB_CODE_DIR, if not the defaults (runbooks/install-factory-timers.md).
+EnvironmentFile=-%h/.config/hub/env
+UnsetEnvironment=HUB_AGENT HUB_PROJECT
+# Exit 75 when another hub live (the old tmux one) holds projects/%i/.live.lock: no restart, unit just fails.
+ExecStart=/bin/bash -c 'flock -n -E 75 projects/%i/.live.lock true || { rc=$$?; echo "hub-live@%i: .live.lock held or unreadable (flock exit $$rc), not starting"; exit $$rc; }; exec %h/.local/bin/hub live --project %i'
+StandardOutput=append:%h/hub/projects/%i/live.out
+StandardError=inherit
+Restart=on-failure
+RestartSec=30
+# 75: another hub live holds the lock. 209 (STDOUT): projects/%i/ is missing, so live.out can't open: a typo, not a crash.
+RestartPreventExitStatus=75 209
+# Main process only: detached change gates and deploys (start_new_session) finish and write their exit files,
+# as they did under tmux; the default control-group would kill them mid-run.
+KillMode=process
+
+[Install]
+WantedBy=default.target

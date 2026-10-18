@@ -159,6 +159,8 @@ _hub_enter() {
         # The board state goes into the system prompt rather than being left for the
         # agent to discover: a session should open already knowing what is waiting for
         # it and what its peers are holding, instead of spending its first turn asking.
+        # hub claim puts each task's worktree under ~/work; --add-dir saves a prompt per edit there.
+        mkdir -p "$HOME/work"
         local brief; brief="$(HUB_AGENT="$name" HUB_PROJECT="$proj" \
             "$HUB_DIR/board.py" brief 2>/dev/null)"
 
@@ -168,7 +170,7 @@ _hub_enter() {
             -e HUB_AGENT="$name" \
             -e HUB_DIR="$HUB_DIR" \
             -e HUB_PROJECT="$proj" \
-            claude ${brief:+--append-system-prompt "$brief"}
+            claude --add-dir "$HOME/work" ${brief:+--append-system-prompt "$brief"}
         echo "started $name in $dir  (account: $cfg)${proj:+  project: $proj}"
     else
         local at; at="$(tmux display-message -p -t "$sess" '#{pane_current_path}' 2>/dev/null)"
@@ -231,13 +233,30 @@ _hub_enter_codex() {
         # regardless of whether the launch directory happens to be a trusted project.
         # Codex has no --append-system-prompt; it reads ~/.codex/AGENTS.md (symlinked to
         # hub/AGENTS-codex.md) instead, which tells it to run `hub brief` on arrival.
+        # Trust the launch dir up front: an untrusted dir opens on "Trust this folder?",
+        # and the next wake's keystrokes back out of it into the Agent Command Center.
+        # A -c override doesn't skip that prompt, so record the trust the way clicking
+        # "Trust" does, in config.toml.
+        # The HUB_* vars go through shell_environment_policy.set because Codex's tool
+        # commands run in its shared app-server daemon, whose env is whatever the first
+        # launch had -- the tmux -e values never reach them.
+        # ~/work holds each claim's worktree (hub claim), so it is writable too, and so is
+        # $HUB_CODE_DIR: a worktree's commits land in its clone's .git ($HUB_CODE_DIR/<p>/.git).
+        local proj; proj="$(_hub_project_for "$dir")"
+        mkdir -p "$HOME/work"
+        local ccfg="${CODEX_HOME:-$HOME/.codex}/config.toml"
+        grep -qF "[projects.\"$dir\"]" "$ccfg" 2>/dev/null || \
+            printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$dir" >> "$ccfg"
         tmux new-session -d -s "$sess" -c "$dir" \
             -e HUB_AGENT="$name" \
             -e HUB_DIR="$HUB_DIR" \
-            -e HUB_PROJECT="$(_hub_project_for "$dir")" \
-            codex --sandbox workspace-write --add-dir "$HUB_DIR"
+            -e HUB_PROJECT="$proj" \
+            codex --sandbox workspace-write --add-dir "$HUB_DIR" --add-dir "$HOME/work" --add-dir "$HUB_CODE_DIR" \
+                -c "shell_environment_policy.set.HUB_AGENT=\"$name\"" \
+                -c "shell_environment_policy.set.HUB_DIR=\"$HUB_DIR\"" \
+                -c "shell_environment_policy.set.HUB_PROJECT=\"$proj\""
         echo "started $name in $dir  (codex, account: ${CODEX_HOME:-$HOME/.codex})"
-        echo "  writable: \$PWD and $HUB_DIR"
+        echo "  writable: \$PWD, $HUB_DIR, $HOME/work and $HUB_CODE_DIR"
         [ -e "${CODEX_HOME:-$HOME/.codex}/auth.json" ] || \
             echo "  not signed in yet -- run /login inside the session, once."
     fi

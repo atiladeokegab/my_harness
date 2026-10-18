@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Archive inbox messages received more than seven days ago."""
+"""Archive inbox messages received more than seven days ago; delete hub sh logs older than that."""
 
 import fcntl
 import json
@@ -99,10 +99,19 @@ def archive_inboxes(inbox, now=None):
     return sum(_archive_one(inbox, source, cutoff) for source in inbox.glob("*.jsonl"))
 
 
+def prune_logs(logs, now=None):
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=7)
+    old = [f for f in Path(logs).rglob("*") if f.is_file() and f.stat().st_mtime < cutoff.timestamp()]
+    for f in old:
+        f.unlink(missing_ok=True)
+    return len(old)
+
+
 if __name__ == "__main__":
     hub = Path(os.environ.get("HUB_DIR") or HERE)
     try:
         print(f"archived {archive_inboxes(hub / 'inbox')} received message(s)")
+        print(f"pruned {prune_logs(hub / 'logs' / 'sh')} hub sh log(s)")
     except (OSError, TimeoutError) as error:
         print(error, file=sys.stderr)
         sys.exit(1)

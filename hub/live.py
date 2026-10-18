@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 import board as hb
 import gh_sync
-from live_merge import EVIDENCE, docs_only, fast_lane, lead_changes, secret_files
+from live_merge import CLOSES, DETACHED_SH, EVIDENCE, docs_only, fast_lane, lead_changes, protected, req_problem, req_text, secret_files
 
 REVIEWER = os.environ.get("HUB_REVIEWER") or "Hermes"
 LEAD_AGENT = os.environ.get("HUB_LEAD") or "Zeus"
@@ -31,7 +31,6 @@ LEAD_AGENT = os.environ.get("HUB_LEAD") or "Zeus"
 # shortcut/ponytail notes only after a comment marker, so `shortcut: "⌘K"` in UI code is not a limitation
 LIMITS = r"(#|//|/\*|--|<!--) *(shortcut|ponytail):"
 THROTTLE = re.compile(r"rate limit|HTTP 429|retry-after", re.I)
-CLOSES = re.compile(r"\b(?:closes|fixes|resolves)\s+#(\d+)", re.I)
 BIG_DIFF = 800  # changed lines; unmerged agent PRs are the larger ones (R1 practice 3)
 NO_EVIDENCE = ("Held: this PR body has no `## Evidence` block (or `Verified:` line), so it is not sent for "
                "review and will not merge. Add one to the body: the commands you ran in a clean checkout, their "
@@ -51,18 +50,6 @@ def send(agent, text):
     # Sign as hub-live, not "Unknown" (dry run #4), unless the caller set an identity.
     subprocess.run(["hubmsg", agent, text], capture_output=True, text=True, timeout=30,
                    env={**os.environ, "HUB_AGENT": os.environ.get("HUB_AGENT") or "hub-live"})
-
-
-# Runs detached: $1 clone, $2 sha, $3 command, $4 exit file. A throwaway worktree of the promoted
-# sha, .env copied in, the command capped at 30 minutes, then its exit code ("setup" if no worktree).
-DEPLOY_SH = """d=$(mktemp -d)
-if git -C "$1" worktree add -q --detach "$d" "$2"; then
-  cp "$1/.env" "$d/" 2>/dev/null
-  (cd "$d" && timeout 1800 sh -c "$3"); code=$?
-  git -C "$1" worktree remove --force "$d"
-else code=setup; fi
-echo "$code" > "$4.tmp" && mv "$4.tmp" "$4"
-"""
 
 
 def owned_files(detail):
@@ -167,7 +154,7 @@ class Live:
         self._prs_error = self._branch_error = self._branch_work_error = False
         steps = (self.sync,) if self.state["ticks"] % 2 == 1 else ()
         for step in steps + (self.inbox, self.done, self.agent_labels, self.prs, self.ci_failures, self.issues,
-                             self.merge, self.hand_merges, self.reverts, self.deploy,
+                             self.merge, self.hand_merges, self.merge_shas, self.reverts, self.deploy,
                              self.ci_reports, self.timers, self.nudges, self.roll_call):
             try:
                 step()
@@ -246,7 +233,9 @@ class Live:
                 continue
             plan = next((c.get("url") for c in comments if (c.get("body") or "").lstrip().startswith("Plan:")), None)
             body = f"Closes #{n}\n\n- [x] Plan comment: {plan or 'none posted'}\n\n{said[-1]['body']}\n"
-            r = self.run(["gh", "pr", "create", "-R", self.repo, "--base", "integration", "--head", branch,
+            task = self.task_for({"body": f"Closes #{n}"})  # a task hub spec apply generated builds on its change branch
+            base = (gh_sync.change_branch(task) if task and task.get("generated_from") else None) or "integration"
+            r = self.run(["gh", "pr", "create", "-R", self.repo, "--base", base, "--head", branch,
                           "--title", f"{issue['title']} (#{n})", "--body", body])
             if r.returncode:
                 self.state["sent"].remove(key)  # retry this DONE: on the next pass
@@ -266,6 +255,8 @@ class Live:
             self.once(f"prlist:{hour}", LEAD_AGENT, f"{self.project}: PR list failed; review routing and roll call are incomplete.")
             return
         self._prs_error = False
+        lines = gh_sync.current_lines(self.project)  # re-read each pass: hub spec apply moves it
+        fixes = self.ci_fix_tasks() if lines is not None else {}
         for pr in self._prs:
             if pr["isDraft"]:
                 continue
@@ -278,7 +269,9 @@ class Live:
                     continue  # logged by gh_json; retried next pass
                 pr["commits"] = view.get("commits")
             key = f"pr:{n}:{sha}"
-            if key in self.state["sent"]:
+            if lines is not None and self.spec_hold(pr, lines, fixes):
+                pass
+            elif key in self.state["sent"]:
                 pass
             elif not EVIDENCE.search(pr.get("body") or ""):
                 self.hold(pr)  # not reviewed until it proves its work; live_merge never merges it
@@ -302,6 +295,39 @@ class Live:
                 ["gh", "pr", "comment", pr["number"], "-R", self.repo, "--body", NO_EVIDENCE]).returncode:
             self.state["sent"].append(key)
             self.log(f"held PR #{pr['number']}: no Evidence")
+
+    def ci_fix_tasks(self):
+        with hb.board() as (data, _):
+            return {t["id"]: t["issue"] for t in data["tasks"] if t.get("project") == self.project
+                    and "ci-fix" in (t.get("tags") or []) and t.get("issue")}
+
+    def spec_hold(self, pr, lines, ci_fix_tasks=None):
+        """In a project with a spec: a PR whose Req: is missing or not current gets one comment per problem
+        and no review; one touching spec/ or tests/acceptance/ goes to Zeus, never Hermes or the fast lane.
+        True when held; live_merge applies the same rules and never merges either."""
+        n, sha = pr["number"], pr["headRefOid"]
+        text = req_text(pr, self.repo, lambda args: self.gh_json(*args[1:]))
+        if text is None:
+            return True  # commits unreadable: logged by gh_json, retried next pass
+        problem = req_problem(text, lines, ci_fix_tasks)
+        if problem:
+            key = f"req:{n}:{problem}"
+            if key not in self.state["sent"] and not self.run(
+                    ["gh", "pr", "comment", n, "-R", self.repo, "--body",
+                     f"Held: {problem}. In this project every PR cites the acceptance lines it implements, at "
+                     "their current versions, as `Req: A-3.2@2` lines in its body or a commit message (the current "
+                     "lines are in the issue). Push a commit whose message carries them; nothing is reviewed or "
+                     "merged until then."]).returncode:
+                self.state["sent"].append(key)
+                self.log(f"held PR #{n}: {problem}")
+            return True
+        if protected(pr):
+            self.once(f"protected:{n}:{sha}", LEAD_AGENT,
+                      f"{self.project} PR #{n} at {sha[:12]} touches spec/ or tests/acceptance/ (or gh cut its file "
+                      f"list short): protected, so not sent to {REVIEWER} and never merged by hub live. Review it and "
+                      "merge it by hand.")
+            return True
+        return False
 
     def task_for(self, pr):
         """The hub task whose issue the PR closes, or None."""
@@ -450,8 +476,23 @@ class Live:
         def send(agent, text):  # live.log keeps what live_merge tells Zeus too (reverts, failures)
             self._send(agent, text)
             self.log(f"sent {agent}: {text}")
+        lines, spec = gh_sync.current_lines(self.project), {}
+        if lines is not None:  # a change branch waits for every unfinished task generated from the PRD
+            with hb.board() as (data, _):
+                spec = {"req_lines": lines, "change_tasks": [
+                    t["id"] for t in data["tasks"] if t.get("project") == self.project and t.get("generated_from")
+                    and t.get("status") != "done" and "stale" not in (t.get("tags") or [])]}
+                issues = {}
+                for task in data["tasks"]:
+                    if task.get("project") == self.project and task.get("issue") and (branch := gh_sync.change_branch(task)):
+                        issues.setdefault(branch, []).append(task["issue"])
+                spec["change_issues"] = issues
+            spec["acceptance"], spec["acceptance_timeout"] = gh_sync.acceptance_checks(self.project)
+            spec["ci_fix_tasks"] = self.ci_fix_tasks()
+            spec["change_timeout"] = gh_sync.factory_entry(self.project).get("change_timeout", 1800)
+            spec["gate_dir"] = self.dir
         live_merge.merge_tick(self.repo, self.clone, self.cfg["smoke"], self.lead, self.state,
-                              self.run, send, self.cfg.get("review_before"))
+                              self.run, send, self.cfg.get("review_before"), **spec)
         now, since = self.now(), self.state.setdefault("gated_since", {})
         for n in self.state.get("gated", []):
             if now - when(since.setdefault(str(n), now.isoformat())) > timedelta(minutes=10):
@@ -464,7 +505,7 @@ class Live:
         gets the merged merge_event live_merge would have written, once: the dashboard counts from these."""
         events = self.state.setdefault("merge_events", [])
         prs = self.gh_json("pr", "list", "-R", self.repo, "--state", "merged", "--base", "integration",
-                           "--limit", "20", "--json", "number,body,mergedAt")
+                           "--limit", "20", "--json", "number,body,mergedAt,mergeCommit")
         if not self.state.get("hand_merges_seeded"):  # merges before this step existed are not hand merges
             if prs is None:
                 return  # a failed first call must not seed an empty set
@@ -476,9 +517,30 @@ class Live:
             if pr["number"] in known:
                 continue
             m = CLOSES.search(pr.get("body") or "")
+            task = re.search(r"(?mi)^Task:[ \t]*(T-\d+)", pr.get("body") or "")
             events.append({"at": pr.get("mergedAt"), "pr": pr["number"], "issue": m and int(m[1]),
-                           "event": "merged", "by": "hand"})
+                           "event": "merged", "by": "hand", "sha": (pr.get("mergeCommit") or {}).get("oid"),
+                           "task": task and task[1]})
             self.log(f"recorded hand merge of #{pr['number']}")
+
+    def merge_shas(self):
+        """Each merged PR's squash commit goes on the board task it closes (by issue, then by its Task:
+        trailer) as merge_sha, a list once a task has more than one, for spec.py's history(). Once per merge."""
+        for e in self.state.get("merge_events", []):
+            key = f"mergesha:{e.get('pr')}:{e.get('sha')}"
+            if e.get("event") != "merged" or not e.get("sha") or key in self.state["sent"]:
+                continue
+            with hb.board(write=True) as (data, events):
+                mine = [x for x in data["tasks"] if x.get("project") == self.project]
+                t = (next((x for x in mine if e.get("issue") and x.get("issue") == e["issue"]), None)
+                     or next((x for x in mine if e.get("task") and x["id"] == hb.norm_id(e["task"])), None))
+                if t is not None:
+                    had = t.get("merge_sha")
+                    t["merge_sha"] = e["sha"] if had is None else [*([had] if isinstance(had, str) else had), e["sha"]]
+                    t["updated"] = hb.now()
+                    hb.log(events, "hub-live", "merge_sha", t["id"], pr=e["pr"], sha=e["sha"])
+            self.state["sent"].append(key)  # after the write: a failed one is retried next tick
+            self.log(f"merge_sha {e['sha'][:12]} on {t['id']}" if t else f"merge of #{e['pr']}: no task for its sha")
 
     def factory_tasks(self):
         with hb.board() as (data, _):
@@ -510,8 +572,10 @@ class Live:
         """live_merge reverted a merge after a red smoke and reopened its issue: reopen the board task
         too, keeping its owner and agent, and wake that agent. Once per revert."""
         for e in self.state.get("merge_events", []):
+            if e.get("event") != "reverted":
+                continue  # before the key: a change-merged event has no pr
             key = f"reopen:{e['pr']}:{e['at']}"
-            if e.get("event") != "reverted" or key in self.state["sent"]:
+            if key in self.state["sent"]:
                 continue
             note = f"reverted after smoke: {e.get('why') or 'see the reopened issue'}"
             with hb.board(write=True) as (data, events):
@@ -568,7 +632,7 @@ class Live:
             return
         exit_file.unlink(missing_ok=True)
         with open(log, "w") as out:
-            subprocess.Popen(["sh", "-c", DEPLOY_SH, "deploy", str(self.clone), sha, spec["command"], str(exit_file)],
+            subprocess.Popen(["sh", "-c", DETACHED_SH, "deploy", str(self.clone), sha, spec["command"], str(exit_file), "1800"],
                              stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
         self.state["deploy"] = {"sha": sha, "started": self.now().isoformat(timespec="seconds")}
         self.log(f"deploy started at {sha[:12]}")
@@ -610,11 +674,16 @@ class Live:
             return
         try:
             self.merge()
+            self.deploy()
         except Throttled as e:
             self.throttle(e)
         except Exception as e:
             self.log(f"merge_now failed: {e}")
         self.save()
+
+    def fast_tick(self):
+        """Handle a finished gate or deploy without waiting for the next full tick."""
+        self.merge_now()
 
     def roll_call_now(self):
         if self.throttled():
@@ -667,11 +736,13 @@ class Live:
             self.log("freeze report: cannot fetch main; retrying next pass")
             return
         self.state["freeze_sha"] = sha
+        runner = self.cfg.get("runner")
+        missing = bool(runner) and self.run(["git", "-C", self.clone, "cat-file", "-e", f"{sha}:{runner}"]).returncode
+        # say the runner check passed too, so a silent message is never mistaken for a pass (rehearsal 2026-10-18)
         self.once(f"freeze-sha:{sha}", LEAD_AGENT,
                   f"{self.project}: code freeze is {sha} on main. Tell the lead: the final runs and the demo "
-                  "come from this commit.")
-        runner = self.cfg.get("runner")
-        if runner and self.run(["git", "-C", self.clone, "cat-file", "-e", f"{sha}:{runner}"]).returncode:
+                  "come from this commit." + (f" The runner {runner} is in it." if runner and not missing else ""))
+        if missing:
             self.once(f"no-runner:{sha}", LEAD_AGENT,
                       f"{self.project}: the runner {runner} is not in the frozen commit {sha[:12]}, so the "
                       "answers cannot come from the freeze. Decide now.")
@@ -927,8 +998,8 @@ def cmd_live(a):
     if not project:
         sys.exit("live: --project is required")
     live = Live(project)
-    now_file, hold_file, call_file = (live.dir / ".merge-now", live.dir / ".merge-hold",
-                                     live.dir / ".roll-call-now")
+    now_file, hold_file, call_file, tick_file = (live.dir / ".merge-now", live.dir / ".merge-hold",
+                                                live.dir / ".roll-call-now", live.dir / ".tick-now")
     if getattr(a, "roll_call", False):
         call_file.touch()
         return print("roll call requested")
@@ -956,6 +1027,9 @@ def cmd_live(a):
             if now_file.is_file():
                 now_file.unlink(missing_ok=True)
                 live.merge_now()
+            if tick_file.is_file():
+                tick_file.unlink(missing_ok=True)
+                live.fast_tick()
             if call_file.is_file():
                 call_file.unlink(missing_ok=True)
                 live.roll_call_now()

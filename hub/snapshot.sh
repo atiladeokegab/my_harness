@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Copies hub state off this disk to the private, versioned bucket named in factory.json (T-501).
 #
-#   snapshot.sh full    nightly: tarball of board.json, events.jsonl, inbox/, projects/; keeps the newest 30
+#   snapshot.sh full    nightly: tarball of board.json, events.jsonl, inbox/, projects/, artifacts/
+#                       and hub.bundle (`git bundle --all`: the whole history); keeps the newest 30
 #   snapshot.sh quick   every 15 min: board.json and events.jsonl to live/ (bucket versioning keeps history)
 #
+# SNAPSHOT_BUCKET=gs://<bucket>/<path> overrides factory.json, for a rehearsal that must not
+# write the live nightly/ and live/ paths.
 # Never blocks anything: a missing bucket, gcloud or login logs one line and exits 0.
 # The bucket is created once by hand: runbooks/install-factory-timers.md. Restore: runbooks/restore-hub.md.
 set -uo pipefail
@@ -11,9 +14,9 @@ HUB_DIR="${HUB_DIR:-$HOME/hub}"
 mode="${1:-full}"
 say() { echo "snapshot $mode: $*"; }
 
-bucket=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["snapshot_bucket"])' \
-    "$HUB_DIR/factory.json" 2>/dev/null)
-[[ "$bucket" == gs://* ]] || { say "no snapshot_bucket in $HUB_DIR/factory.json; nothing copied"; exit 0; }
+bucket=${SNAPSHOT_BUCKET:-$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["snapshot_bucket"])' \
+    "$HUB_DIR/factory.json" 2>/dev/null)}
+[[ "$bucket" == gs://* ]] || { say "no SNAPSHOT_BUCKET, nor snapshot_bucket in $HUB_DIR/factory.json; nothing copied"; exit 0; }
 command -v gcloud >/dev/null || { say "gcloud not on PATH; nothing copied"; exit 0; }
 if ! timeout 60 gcloud storage buckets describe "$bucket" --format='value(name)' >/dev/null 2>&1; then
     say "bucket $bucket is missing or unreadable; nothing copied. Create it with runbooks/install-factory-timers.md"
@@ -28,9 +31,19 @@ quick)
 full)
     tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
     name="hub-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
-    parts=(); for p in board.json events.jsonl inbox projects; do [ -e "$HUB_DIR/$p" ] && parts+=("$p"); done
+    parts=(); for p in board.json events.jsonl inbox projects artifacts; do [ -e "$HUB_DIR/$p" ] && parts+=("$p"); done
+    # Plain files have no history: when the hub is a git repo, the bundle is the off-disk copy of
+    # it, projects/ included. It stays in this private bucket; never push it anywhere.
+    bundle=()
+    if [ ! -e "$HUB_DIR/.git" ]; then
+        :  # not a git repo: nothing to bundle
+    elif timeout 900 git -C "$HUB_DIR" bundle create -q "$tmp/hub.bundle" --all 2>"$tmp/bundle.err"; then
+        bundle=(-C "$tmp" hub.bundle)
+    else
+        say "git bundle failed, tarball has no history: $(tail -1 "$tmp/bundle.err")"
+    fi
     # --warning=no-file-changed: agents keep writing while we read; a moving file is not a failure.
-    tar --warning=no-file-changed -czf "$tmp/$name" -C "$HUB_DIR" "${parts[@]}"
+    tar --warning=no-file-changed -czf "$tmp/$name" -C "$HUB_DIR" "${parts[@]}" "${bundle[@]}"
     [ $? -le 1 ] || { say "tar failed; nothing copied"; exit 0; }
     timeout 1800 gcloud storage cp --quiet "$tmp/$name" "$bucket/nightly/$name" \
         || { say "upload failed"; exit 0; }

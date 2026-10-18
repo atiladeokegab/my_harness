@@ -97,9 +97,121 @@ def issue_body(t, by_id):
         return t["issue_source_body"]
     deps = [f"#{by_id[d]['issue']}" if "issue" in by_id.get(d, {}) else f"{d} (not published yet)"
             for d in t.get("deps") or []]
+    body += acceptance_block(t)
     if deps:
         body += "\n\nDepends on: " + ", ".join(deps)
     return body if t.get("kind") == "gh-imported" else body + "\n\n" + MARKER.format(t["id"])
+
+
+# The spec contract (T-515): ~/hub/projects/<project>/spec/requirements.json is the PRD. Read here,
+# not through spec.py, so gh-sync and hub live never depend on it. No file: everything runs as before.
+def spec_file(project):
+    return os.path.join(hb.HUB_DIR, "projects", project or "", "spec", "requirements.json")
+
+
+def load_spec(project):
+    try:
+        with open(spec_file(project)) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+
+
+def spec_lines(spec):
+    """{"A-3.2@2": (requirement, acceptance line)} for one PRD version."""
+    return {f"{a['id']}@{a['v']}": (r, a) for r in spec.get("requirements") or [] for a in r.get("acceptance") or []}
+
+
+def current_lines(project):
+    """{"A-3.2": 2}: each acceptance line's current version, or None for a project without a spec."""
+    spec = load_spec(project)
+    return None if spec is None else {a["id"]: a["v"] for r in spec.get("requirements") or []
+                                      for a in r.get("acceptance") or []}
+
+
+def factory_entry(project):
+    """This project's factory.json repo entry ({} if none): optional shared, migrations, acceptance_cmd."""
+    try:
+        with open(os.path.join(hb.HUB_DIR, "factory.json")) as f:
+            repos = json.load(f).get("repos", [])
+    except FileNotFoundError:
+        return {}
+    return next((r for r in repos if isinstance(r, dict) and (r.get("repo") or "").split("/")[-1] == project), {})
+
+
+def acceptance_checks(project):
+    """(argv of every current PRD line's check, timeout): factory.json acceptance_cmd, as hub spec runs it."""
+    entry, spec = factory_entry(project), load_spec(project) or {}
+    cmd = entry.get("acceptance_cmd", "uv run pytest -q {test}")
+    return ([[x.replace("{test}", a["test"]) for x in shlex.split(cmd)]
+             for r in spec.get("requirements") or [] for a in r.get("acceptance") or []],
+            entry.get("acceptance_timeout", 300))
+
+
+def stale(t):
+    return "stale" in (t.get("tags") or []) and os.path.isfile(spec_file(t.get("project")))
+
+
+def cited_lines(project, reqs):
+    """[(ref, requirement, line)] for each cited A-n@v: the current PRD first, then older versions from
+    the spec's history in ~/hub git. None without a spec or reqs; GhError for a line found nowhere."""
+    spec = load_spec(project) if reqs else None
+    if spec is None:
+        return None
+    found = spec_lines(spec)
+    if any(ref not in found for ref in reqs):
+        rel = os.path.relpath(spec_file(project), hb.HUB_DIR)
+        try:
+            shas = git(hb.HUB_DIR, "log", "--format=%H", "--", rel).split()
+        except GhError:
+            shas = []  # ~/hub not a git repo (tests, a restore): the current PRD only
+        for sha in shas:
+            try:
+                found = {**spec_lines(json.loads(git(hb.HUB_DIR, "show", f"{sha}:{rel}"))), **found}
+            except (GhError, ValueError, KeyError, TypeError, AttributeError):
+                continue
+            if all(ref in found for ref in reqs):
+                break
+    missing = [ref for ref in reqs if ref not in found]
+    if missing:
+        raise GhError(f"cites {', '.join(missing)}: not in {project}'s PRD or its history")
+    return [(ref, *found[ref]) for ref in reqs]
+
+
+def acceptance_block(t):
+    """The task's cited PRD lines for its issue, or "" (no spec, no reqs)."""
+    cited = cited_lines(t.get("project"), t.get("reqs"))
+    return "\n\nAcceptance (from the PRD; the tests are protected):\n" + "\n".join(
+        f"- {ref} ({r['id']} {r.get('title', '')}): {a.get('text', '')}. Test: {a.get('test', '-')}"
+        for ref, r, a in cited) if cited else ""
+
+
+def change_branch(t):
+    """change/C-NNN for a task hub spec apply generated (its brief names the branch), else None."""
+    m = re.search(r"Work on branch (change/C-\d+)", (t or {}).get("detail") or "")
+    return m and m[1]
+
+
+def superseded_by(t):
+    """The change hub spec apply named in its 'superseded by C-NNN' note on the task."""
+    for note in reversed(t.get("notes") or []):
+        m = re.search(r"superseded by (C-\d+)", note.get("text") or "", re.I)
+        if m:
+            return m[1]
+    return None
+
+
+def supersede(gh, repo, t, state):
+    """One 'Superseded by C-NNN' comment, closing the issue if it is open. Not planned, so a pull
+    never reads it as done. Returns the field that records it, so it happens once."""
+    change = superseded_by(t)
+    text = (f"Superseded by {change or 'a PRD change'}: this task was regenerated from the new PRD version. "
+            "Stop work on it; its branch is abandoned.")
+    if state == "CLOSED":
+        gh("issue", "comment", t["issue"], "-R", repo, body=text)
+    else:
+        gh("issue", "close", t["issue"], "-R", repo, "--reason", "not planned", "--comment", text)
+    return {"issue_superseded": change or True}
 
 
 def edit_warning(n, hub_body, remote):
@@ -397,7 +509,7 @@ def pull(tasks, cfg, gh, repo):
                      for p in cfg["roster"] for a in p.get("agents", []) if a.get("github")}
     changes = []
     for t in tasks:
-        if "issue" not in t:
+        if "issue" not in t or stale(t):  # superseded: push closes its issue, nothing comes back
             continue
         i = issues.get(t["issue"])
         if not i:
@@ -473,6 +585,14 @@ def push(tasks, cfg, gh, repo, failures, assignable, issues):
 
     by_id = {t["id"]: t for t in tasks}
     for t in tasks:
+        if stale(t):  # superseded by a PRD change: closed once, never re-briefed
+            if "issue" in t and not t.get("issue_superseded"):
+                try:
+                    record(t["id"], supersede(gh, repo, t, issues.get(t["issue"], {}).get("state")), "gh-superseded")
+                except GhError as e:
+                    print(f"error: {t['id']}: {e}", file=sys.stderr)
+                    failures.append(t["id"])
+            continue
         if t["status"] == "done":  # finished work is neither created nor re-briefed
             continue
         try:
@@ -532,7 +652,8 @@ def push(tasks, cfg, gh, repo, failures, assignable, issues):
                 hub_unchanged = digest(body) == t["issue_hash"]
                 new = hb.strip_issue_extras(remote)
                 same_files = files_line(new) == files_line(t.get("detail"))
-                editor = last_editor(gh, repo, n) if hub_unchanged and same_files else None
+                # a task generated from the PRD is never hand-edited: no editor, so the edit is held, not adopted
+                editor = last_editor(gh, repo, n) if hub_unchanged and same_files and not t.get("generated_from") else None
                 if hub_unchanged and same_files and editor and editor.lower() in own:
                     fields = {"detail": new, "issue_hash": digest(remote)}
                     if t.get("kind") == "gh-imported":
@@ -1063,19 +1184,35 @@ def can_write(gh, repo, login, cache):
 # Fixed text, never the issue's: it goes after any untrusted wrapper, so it reads as the hub's own.
 SHIP = """How to ship (factory repo):
 - Your brief is issue #{n}. Your area is its `Files:` line, or the whole repo if it has none.
-- Branch from integration: `gh issue develop {n} --base integration --checkout`.
+- Branch from {base}: `gh issue develop {n} --base {base} --checkout`.
 - Never commit to integration or main; never `gh pr create`.
 - When done, post `DONE:` on the issue with a `Verified:` line (each command run and its counts) and a
   `Not verified:` line, then `hub done`. hub live opens the PR with `Closes #{n}` and merges it after review."""
 
 
-def factory_candidates(gh, repo, known):
+SPEC_DRIVEN = ("No task from this issue: this repo is spec-driven: Zeus turns this into a PRD change proposal, "
+               "and the work comes from the approved PRD.")
+
+
+def factory_candidates(gh, repo, known, spec_driven=False):
     """New tasks for one repo, built from GitHub alone; `known` holds every task source already
-    on the board, done tasks included, so nothing is created twice."""
+    on the board, done tasks included, so nothing is created twice. In a spec-driven repo only hub spec
+    apply makes work: an agent issue loses its label, gets one comment and goes to Zeus as a proposal."""
     name, out, perms = repo.split("/")[1], [], {}
     for i in gh.json("issue", "list", "-R", repo, "--label", "agent", "--state", "open",
                      "--limit", "100", "--json", "number,title,body,author,url,labels"):
         if i["url"] in known:
+            continue
+        # trusted body: only maintainers can set the agent label, so an outsider cannot plant this marker
+        if spec_driven and "<!-- hub-task: " in (i.get("body") or ""):
+            continue  # the hub's own issue for a generated task whose create reply was lost: publish finds it
+        if spec_driven:  # the label goes first, so a failure later never comments twice
+            gh("issue", "edit", i["number"], "-R", repo, "--remove-label", "agent")
+            if not gh.dry:
+                hb.deliver(LEAD_AGENT, f"{repo}: agent issue {i['url']} filed in a spec-driven repo; no task made. "
+                           "Turn it into a PRD change proposal if it is wanted.",
+                           message_id=f"spec-intake-{repo.replace('/', '-')}-{i['number']}")
+            gh("issue", "comment", i["number"], "-R", repo, body=SPEC_DRIVEN)
             continue
         login = (i.get("author") or {}).get("login") or "ghost"
         # Only maintainers can set labels, so the label is trusted even on an untrusted author's issue.
@@ -1083,12 +1220,12 @@ def factory_candidates(gh, repo, known):
         if can_write(gh, repo, login, perms):
             out.append({"title": f"{name}#{i['number']}: {i['title']}", "source": i["url"], "issue": i["number"],
                         **({"tags": tags} if tags else {}),
-                        "detail": f"{i.get('body') or ''}\n\nIssue: {i['url']}\n\n{SHIP.format(n=i['number'])}"})
+                        "detail": f"{i.get('body') or ''}\n\nIssue: {i['url']}\n\n{SHIP.format(n=i['number'], base='integration')}"})
         else:  # the title is the author's text too, so it stays out of the board title
             out.append({"title": f"{name}#{i['number']}: agent issue from @{login} (untrusted)",
                         "source": i["url"], "issue": i["number"], "tags": tags + ["untrusted"],
                         "detail": untrusted(i["url"], f"{i['title']}\n\n{i.get('body') or ''}")
-                        + f"\n\n{SHIP.format(n=i['number'])}"})
+                        + f"\n\n{SHIP.format(n=i['number'], base='integration')}"})
     latest = {}  # gh lists newest first: only each workflow's latest finished run counts
     for r in gh.json("run", "list", "-R", repo, "--branch", "main", "--limit", "50",
                      "--json", "databaseId,workflowName,status,conclusion,url,headSha"):
@@ -1100,9 +1237,39 @@ def factory_candidates(gh, repo, known):
         log = gh("run", "view", r["databaseId"], "-R", repo, "--log-failed", write=False)
         tail = "\n".join(log.splitlines()[-LOG_TAIL:])
         out.append({"title": f"{name}: fix failed CI '{r['workflowName']}' on main", "source": r["url"],
+                    **({"tags": ["ci-fix"]} if spec_driven else {}),  # its PR may cite `Req: ci-fix`
                     "detail": f"Run {r['url']} failed on main at {r.get('headSha')}. Make it pass.\n\n"
                               f"Last {LOG_TAIL} lines of the failing log:\n" + untrusted(r["url"], tail)})
     return out
+
+
+def publish_generated(gh, repo, t, dry):
+    """Publish a generated or CI-fix task's issue with its brief and How-to-ship block, once."""
+    record = lambda fields, event: apply([(t["id"], fields, event)], dry)
+    mark, n = MARKER.format(t["id"]), t.get("issue")
+    # A create whose reply was lost: find it before sending another. The marker is trusted because only
+    # maintainers can set the agent label this search filters on.
+    if not n and t.get("issue_pending"):
+        found = next((i for i in gh.json("issue", "list", "-R", repo, "--label", "agent", "--state", "all", "--limit",
+                                         "200", "--json", "number,body,url") or [] if mark in (i.get("body") or "")), None)
+        if found:
+            n = found["number"]
+            record({"issue": n, "issue_pending": False,
+                    **({"source": found["url"]} if t.get("generated_from") else {})}, "gh-found")
+    brief = (t.get("detail") or "").rstrip() + acceptance_block(t)
+    if not n:
+        record({"issue_pending": True}, "gh-creating")
+        url = gh("issue", "create", "-R", repo, "--title", t["title"], "--label", "agent",
+                 body=f"{brief}\n\n{mark}").strip()
+        if not url:  # dry run
+            return
+        n = int(url.rsplit("/", 1)[1])
+        # Generated tasks use the issue as source; CI fixes keep the failed run URL for deduplication.
+        record({"issue": n, "issue_pending": False,
+                **({"source": url} if t.get("generated_from") else {})}, "gh-created")
+    ship = SHIP.format(n=n, base=change_branch(t) or "integration")
+    gh("issue", "edit", n, "-R", repo, body=f"{brief}\n\n{ship}\n\n{mark}")
+    record({"issue_shipped": True}, "gh-shipped")
 
 
 def seen(data):
@@ -1123,13 +1290,29 @@ def poll_factory_repos(dry_run=False):
         return []
     with hb.board() as (data, _):
         known, live = seen(data)
+        superseded = [dict(t) for t in data["tasks"] if t.get("issue") and not t.get("issue_superseded") and stale(t)]
+        unpublished = [dict(t) for t in data["tasks"] if (t.get("generated_from") or "ci-fix" in (t.get("tags") or []))
+                       and t.get("status") != "done"
+                       and not t.get("issue_shipped") and "stale" not in (t.get("tags") or [])]
     gh, pending = Gh(dry_run), []
     for repo in factory_repos():
+        spec_driven = os.path.isfile(spec_file(repo.split("/")[1]))
         try:
-            pending += [(repo, c) for c in factory_candidates(gh, repo, known)
+            pending += [(repo, c) for c in factory_candidates(gh, repo, known, spec_driven)
                         if (repo.split("/")[1], c["title"]) not in live]
         except (GhError, KeyError, TypeError, AttributeError) as e:
             print(f"factory: {repo}: {e!r}", file=sys.stderr)
+        for t in (t for t in unpublished if spec_driven and t.get("project") == repo.split("/")[1]):
+            try:
+                publish_generated(gh, repo, t, dry_run)
+            except (GhError, ValueError, IndexError, AttributeError) as e:
+                print(f"factory: {repo}: {t['id']}: {e!r}", file=sys.stderr)
+        for t in (t for t in superseded if t.get("project") == repo.split("/")[1]):
+            try:
+                state = (gh.json("issue", "view", t["issue"], "-R", repo, "--json", "state") or {}).get("state")
+                apply([(t["id"], supersede(gh, repo, t, state), "gh-superseded")], dry_run)
+            except (GhError, AttributeError) as e:
+                print(f"factory: {repo}: {t['id']}: {e!r}", file=sys.stderr)
     if dry_run:
         for repo, c in pending:
             print(f"would create [{repo}] {c['title']}")

@@ -19,3 +19,6 @@ state/
 run/
 watchdog.log
 factory.json
+
+# hub sh and hub done verify output; inbox_gc deletes it after 7 days.
+logs/

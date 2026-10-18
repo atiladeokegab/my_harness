@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the hub dispatcher when the board or an idle agent touches state/dispatch.kick
+
+[Path]
+# systemd cannot expand $HUB_DIR here: if your hub is not ~/hub, edit this path.
+PathModified=%h/hub/state/dispatch.kick
+Unit=hub-dispatch.service
+
+[Install]
+WantedBy=paths.target
