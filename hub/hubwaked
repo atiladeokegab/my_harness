@@ -78,7 +78,10 @@ MODAL_MARKERS=(
 
 pane_shows_modal() {
     local sess="$1" tail_text marker
-    tail_text="$(tmux capture-pane -p -t "$sess" 2>/dev/null | tail -25)" || return 1
+    # $(...) drops the pane's trailing blank rows first; tail-ing them directly would see
+    # only blanks on a pane taller than 25 rows (new detached sessions can open 46 rows tall).
+    tail_text="$(tmux capture-pane -p -t "$sess" 2>/dev/null)" || return 1
+    tail_text="$(tail -25 <<< "$tail_text")"
     for marker in "${MODAL_MARKERS[@]}"; do
         case "$tail_text" in *"$marker"*) return 0 ;; esac
     done
