@@ -1,0 +1,11 @@
+[Unit]
+Description=Copy board.json and events.jsonl to the hub snapshot bucket
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin
+Environment=HUB_DIR=%h/hub
+# Your roster, HUB_DIR and HUB_CODE_DIR, if not the defaults (runbooks/install-factory-timers.md).
+EnvironmentFile=-%h/.config/hub/env
+TimeoutStartSec=10min
+ExecStart=/bin/bash ${HUB_DIR}/snapshot.sh quick

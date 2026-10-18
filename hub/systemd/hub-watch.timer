@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the hub health watch every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Hub dispatcher: wake each idle agent once per available task, poll factory repos
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin
+Environment=HUB_DIR=%h/hub
+# Your roster, HUB_DIR and HUB_CODE_DIR, if not the defaults (runbooks/install-factory-timers.md).
+EnvironmentFile=-%h/.config/hub/env
+Environment=HUB_AGENT=Dispatch
+TimeoutStartSec=10min
+ExecStart=/usr/bin/env python3 ${HUB_DIR}/dispatch.py tick

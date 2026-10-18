@@ -1,0 +1,19 @@
+{
+  "agents": [
+    {"name": "Prometheus", "kind": "codex", "session": "hub-prometheus", "dispatch": true},
+    {"name": "Hermes", "kind": "claude", "session": "hub-hermes", "dispatch": true},
+    {"name": "Zeus", "kind": "claude", "session": "hub-zeus", "dispatch": false}
+  ],
+  "repos": [
+    {"repo": "your-org/your-app"},
+    {"repo": "your-org/your-other-app"}
+  ],
+  "projects": ["your-app", "your-other-app", "hub"],
+  "snapshot_bucket": "gs://your-hub-snapshots",
+  "lead_alert": [],
+  "intervals": {
+    "poll_seconds": 100,
+    "stuck_minutes": 30,
+    "offer_minutes": 30
+  }
+}

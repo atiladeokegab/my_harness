@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the hub nightly jobs at 02:30 UTC
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the hub dispatcher every 2 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

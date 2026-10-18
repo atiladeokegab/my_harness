@@ -112,6 +112,13 @@ for f in board.py hubmsg hubwaked hubctl; do put "$REPO/hub/$f" "$HUB_DIR/$f" 75
 put "$REPO/hub/gh_sync.py" "$HUB_DIR/gh_sync.py" 644 owned   # imported by board.py: missing = hub crashes
 for f in gh_board.py live.py live_merge.py review.py; do put "$REPO/hub/$f" "$HUB_DIR/$f" 644 owned; done   # imported by board.py / gh_sync.py
 put "$REPO/hub/shell.sh" "$HUB_DIR/shell.sh" 644 owned
+# The factory (hub/OVERVIEW.md): dispatcher, headless runner, heartbeat hook, snapshots, systemd units.
+# factory.json is yours: copy factory.example.json and edit it (runbooks/install-factory-timers.md).
+for f in dispatch.py run.py heartbeat.sh snapshot.sh; do put "$REPO/hub/$f" "$HUB_DIR/$f" 755 owned; done
+put "$REPO/hub/inbox_gc.py" "$HUB_DIR/inbox_gc.py" 644 owned
+put "$REPO/hub/factory.example.json" "$HUB_DIR/factory.example.json" 644 owned
+run mkdir -p "$HUB_DIR/systemd"
+for f in "$REPO"/hub/systemd/*; do put "$f" "$HUB_DIR/systemd/$(basename "$f")" 644 owned; done
 put "$REPO/hub/.gitignore" "$HUB_DIR/.gitignore" 644 owned
 # Docs and the Codex protocol are yours to edit (docs/customizing.md tells you to rename
 # agents in AGENTS-codex.md), so a differing copy is backed up before it is refreshed.
@@ -140,7 +147,7 @@ if [ "$DO_BIN" = 1 ]; then
     # Agent launchers and hubs/hubaccounts/hubkill are also linked to hubctl, so they work
     # from any shell (macOS logs in to zsh; shell.sh is bash). Re-run the installer after
     # changing the roster to link new names.
-    pairs="hub:board.py hubmsg:hubmsg hubwaked:hubwaked hubctl:hubctl"
+    pairs="hub:board.py hubmsg:hubmsg hubwaked:hubwaked hubctl:hubctl hubrun:run.py"
     for name in ${HUB_CLAUDE_AGENTS-Zeus Apollo Hermes Athena} ${HUB_CODEX_AGENTS-Prometheus} hubs hubaccounts hubkill; do
         pairs="$pairs $(echo "$name" | tr '[:upper:]' '[:lower:]'):hubctl"
     done

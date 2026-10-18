@@ -1,0 +1,12 @@
+[Unit]
+Description=Hub watch: classify each live agent pane (dialog, rate limit, logged out, stuck), log and alert
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin
+Environment=HUB_DIR=%h/hub
+# Your roster, HUB_DIR and HUB_CODE_DIR, if not the defaults (runbooks/install-factory-timers.md).
+EnvironmentFile=-%h/.config/hub/env
+Environment=HUB_AGENT=Watchdog
+TimeoutStartSec=2min
+ExecStart=/usr/bin/env python3 ${HUB_DIR}/dispatch.py watch

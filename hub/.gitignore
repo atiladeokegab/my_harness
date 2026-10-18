@@ -13,3 +13,9 @@ wake/
 # Python bytecode from importing board.py in tests.
 __pycache__/
 *.pyc
+
+# Factory runtime: dispatcher/watchdog state, run locks, health log, your own factory config.
+state/
+run/
+watchdog.log
+factory.json

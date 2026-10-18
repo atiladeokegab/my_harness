@@ -1,0 +1,11 @@
+[Unit]
+Description=Hub weekly: open the cleanup and promote-rule-candidates tasks for the lead agent
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin
+Environment=HUB_DIR=%h/hub
+# Your roster, HUB_DIR and HUB_CODE_DIR, if not the defaults (runbooks/install-factory-timers.md).
+EnvironmentFile=-%h/.config/hub/env
+Environment=HUB_AGENT=Dispatch
+ExecStart=/usr/bin/env python3 ${HUB_DIR}/dispatch.py weekly
