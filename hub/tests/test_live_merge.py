@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -8,6 +9,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+for _k in [k for k in os.environ if k.startswith("HUB_")]:  # HUB_LEAD, HUB_REVIEWER: test the default roster
+    del os.environ[_k]
 from live_merge import is_lgtm, merge_tick, secret_files
 
 

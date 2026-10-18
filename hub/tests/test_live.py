@@ -53,6 +53,8 @@ class Fake:
 class LiveTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        for k in [k for k in os.environ if k.startswith("HUB_")]:  # HUB_LEAD, HUB_REVIEWER: test the default roster
+            del os.environ[k]
         os.environ["HUB_DIR"] = self.tmp
         import board, live
         board.HUB_DIR = self.tmp

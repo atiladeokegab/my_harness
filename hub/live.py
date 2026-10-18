@@ -422,7 +422,7 @@ class Live:
                           "check the brief or decide it")
         self.once(key, agent,
                   f"{self.project} changes requested on PR #{n} at {sha[:12]}: {asks[-1].splitlines()[0][:200]}"
-                  " (fix it on the same branch; a Zeus sub-agent: resume it by name)")
+                  f" (fix it on the same branch; a {LEAD_AGENT} sub-agent: resume it by name)")
 
     def issues(self):
         for cr in self.gh_json("issue", "list", "-R", self.repo, "--label", "change-request",
@@ -437,7 +437,7 @@ class Live:
             try:
                 if self.now() - when(since) >= timedelta(minutes=15):
                     self.once(f"hold:{since}", LEAD_AGENT,
-                              f"{self.project}: merges held by Hermes since {since} (15 min+). "
+                              f"{self.project}: merges held by {REVIEWER} since {since} (15 min+). "
                               f"Resume: hub live --project {self.project} --resume-merges")
             except ValueError:
                 pass
@@ -457,7 +457,7 @@ class Live:
             if now - when(since.setdefault(str(n), now.isoformat())) > timedelta(minutes=10):
                 self.once(f"gatewait:{n}", LEAD_AGENT,
                           f"{self.project} PR #{n} has waited 10+ min for LGTM: review it "
-                          "(a sub-agent can load hub:hackathon-reviewer) or chase Hermes.")
+                          f"(a sub-agent can load hub:hackathon-reviewer) or chase {REVIEWER}.")
 
     def hand_merges(self):
         """A PR merged into integration by someone other than live_merge (Zeus merging a Hermes-built PR)
