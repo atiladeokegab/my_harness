@@ -18,3 +18,5 @@ You build one GitHub issue `#N` in `<owner>/<p>` for the lead, as `agent:zeus`. 
 Resumed with a review: fix it on the same branch, rerun both checks, report the new sha.
 
 Never merge, review your own PR, push to `integration`/`main`, edit other issues, or commit secrets. Stuck or facing a real choice: stop and report.
+
+**Deadline.** Your brief gives a deadline in UTC (`date -u`). By then the builder pushes with checks green (the real exit code), or pushes nothing and reports what is left. The lead agent never waits past the deadline.
