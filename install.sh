@@ -110,7 +110,7 @@ step "hub -> $HUB_DIR"
 run mkdir -p "$HUB_DIR/tests" "$HUB_DIR/runbooks"
 for f in board.py hubmsg hubwaked hubctl; do put "$REPO/hub/$f" "$HUB_DIR/$f" 755 owned; done
 put "$REPO/hub/gh_sync.py" "$HUB_DIR/gh_sync.py" 644 owned   # imported by board.py: missing = hub crashes
-for f in autonomy.py clean_repo.py dashboard.py gh_board.py hub_trace.py live.py live_merge.py map.py prd.py prd_grill.py \
+for f in autonomy.py clean_repo.py dashboard.py gh_board.py harness_sync.py hub_trace.py live.py live_merge.py map.py prd.py prd_grill.py \
          review.py spec.py spec_lint.py stack_check.py workspace.py; do
     put "$REPO/hub/$f" "$HUB_DIR/$f" 644 owned   # imported by board.py / gh_sync.py / spec.py: missing = hub crashes
 done
