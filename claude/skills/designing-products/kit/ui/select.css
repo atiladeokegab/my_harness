@@ -1,0 +1,55 @@
+.kit-select__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-block-size: var(--control-height);
+  padding-inline: var(--space-3);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border: var(--kit-hairline) solid var(--color-border);
+  border-radius: var(--radius-control);
+  font-family: var(--type-body-font-family);
+  font-size: var(--type-body-font-size);
+  text-align: start;
+  cursor: pointer;
+  transition: border-color var(--kit-duration) var(--kit-ease), background-color var(--kit-duration) var(--kit-ease);
+}
+.kit-select__trigger[data-hovered] { border-color: var(--color-muted); }
+.kit-select__trigger[data-pressed] { background: var(--kit-hover); }
+.kit-select__trigger[data-disabled] { opacity: var(--kit-disabled); cursor: not-allowed; }
+.kit-select__trigger[aria-busy] { cursor: progress; }
+.kit-select__value[data-placeholder] { color: var(--color-muted); }
+.kit-select__chevron {
+  inline-size: 1em;
+  block-size: 1em;
+  fill: none;
+  stroke: var(--color-muted);
+  stroke-width: var(--kit-ring);
+}
+.kit-popover {
+  min-inline-size: var(--trigger-width);
+  background: var(--color-surface);
+  border: var(--kit-hairline) solid var(--color-border);
+  border-radius: var(--radius-control);
+  box-shadow: var(--kit-shadow-overlay);
+  transition: opacity var(--kit-duration) var(--kit-ease);
+}
+.kit-popover[data-entering], .kit-popover[data-exiting] { opacity: 0; }
+.kit-listbox { padding: var(--space-1); outline: none; max-block-size: inherit; overflow: auto; }
+.kit-option {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-control);
+  color: var(--color-ink);
+  font-family: var(--type-body-font-family);
+  font-size: var(--type-body-font-size);
+  cursor: pointer;
+  outline: none;
+}
+.kit-option[data-hovered], .kit-option[data-focused] { background: var(--kit-hover); }
+.kit-option[data-focus-visible] { outline: var(--kit-ring) solid var(--color-accent-text); outline-offset: calc(var(--kit-ring) * -1); }
+.kit-option[data-pressed] { background: var(--kit-press); }
+.kit-option[data-selected] { color: var(--color-accent-text); font-weight: var(--type-label-font-weight); }
+.kit-option[data-disabled] { opacity: var(--kit-disabled); cursor: not-allowed; }
+/* React Aria's hidden native <select> (form autofill): keep the browser's default greys off the page. */
+.kit-select select { background: var(--color-surface); color: var(--color-ink); border-color: var(--color-border); outline-color: var(--color-border); }

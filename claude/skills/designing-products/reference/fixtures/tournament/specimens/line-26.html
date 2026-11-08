@@ -1,0 +1,92 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Strata Lifts</title><style>
+:root{--enamel:#bcbfb8;--ink:#161512;--ink2:#3a3c37;--bakelite:#1a1917;--line:#d6d8d1;--unlit:#45463f;--lamp:#38e06a;
+--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:48px;
+--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;--num:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--enamel);color:var(--ink);font:400 16px/1.5 var(--sans);font-variant-numeric:tabular-nums}
+::selection{background:var(--ink);color:var(--lamp)}
+header{display:flex;justify-content:space-between;align-items:baseline;padding:var(--s5) var(--s7) 0;font-size:16px}
+header b{font-size:20px;font-weight:700}
+header span{color:var(--ink2)}
+main{display:grid;grid-template-columns:500px 1fr;grid-template-areas:"h panel" "time panel" "act panel" "later panel";grid-template-rows:auto auto auto 1fr;column-gap:var(--s7);padding:var(--s5) var(--s7) var(--s7)}
+h1{grid-area:h;margin:0 0 var(--s4);font-size:32px;line-height:1.2;font-weight:600;letter-spacing:-.01em}
+.time{grid-area:time}
+.window{display:inline-flex;align-items:baseline;gap:var(--s4);background:var(--bakelite);border-radius:4px;padding:var(--s2) var(--s5)}
+.window strong{font:700 104px/1 var(--num);color:var(--lamp);letter-spacing:-.02em}
+.window small{font-size:14px;color:var(--line);font-weight:600}
+.time p{margin:var(--s3) 0 0;font-size:20px;line-height:1.4;max-width:36ch}
+.act{grid-area:act;margin-top:var(--s5)}
+button{font:600 20px/1 var(--sans);background:var(--lamp);color:var(--ink);border:2px solid var(--ink);border-radius:4px;min-height:56px;padding:0 var(--s6);cursor:pointer}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.note{margin:var(--s2) 0 0;font-size:14px;color:var(--ink2)}
+.later{grid-area:later;margin-top:var(--s5)}
+.later h2{margin:0 0 var(--s1);font-size:16px;font-weight:600}
+.later ol{list-style:none;margin:0;padding:0;border-top:1px solid var(--ink2)}
+.later li{display:flex;gap:var(--s4);padding:var(--s1) 0;border-bottom:1px solid #9a9d96}
+.later time{font:600 16px/1.5 var(--num);min-width:5ch}
+.panel{grid-area:panel;align-self:start;background:var(--bakelite);border-radius:4px;padding:var(--s5) var(--s5) var(--s4);color:var(--line)}
+.panel svg{display:block;width:100%;height:auto}
+.lamps{list-style:none;margin:var(--s3) 0 0;padding:var(--s4) 0 0;border-top:1px solid var(--unlit);display:grid;grid-template-columns:repeat(5,1fr);gap:var(--s2)}
+.lamps li{font-size:14px;font-weight:600;line-height:1.3;text-align:center}
+.lamps i{display:block;width:28px;height:28px;margin:0 auto var(--s2);border-radius:50%;background:var(--unlit);border:3px solid #77786f}
+@media (max-width:600px){
+ header{padding:var(--s4) var(--s4) 0}
+ header span{font-size:14px}
+ main{grid-template-columns:1fr;grid-template-areas:"h" "panel" "time" "act" "later";padding:var(--s3) var(--s4) var(--s6)}
+ h1{font-size:20px;margin-bottom:var(--s3)}
+ .panel{padding:var(--s3) var(--s3) var(--s3)}
+ .lamps{margin-top:var(--s2);padding-top:var(--s3);gap:var(--s1)}
+ .lamps i{width:20px;height:20px;border-width:2px;margin-bottom:var(--s1)}
+ .time{margin-top:var(--s4);display:flex;gap:var(--s4);align-items:center}
+ .window{padding:var(--s1) var(--s3)}
+ .window strong{font-size:64px}
+ .window small{display:none}
+ .time p{margin:0;font-size:16px}
+ .act{margin-top:var(--s4)}
+ button{width:100%}
+}
+</style></head><body>
+<header><b>Strata Lifts</b><span>Tower Bridge, Sunday 2 November</span></header>
+<main>
+<h1>When Tower Bridge next opens for a ship.</h1>
+<div class=panel>
+<svg viewBox="0 0 600 276" role=img aria-label="Tower Bridge with both bascules raised to 86 degrees, 61 metres clear">
+<g fill="none" stroke="#d6d8d1" stroke-width="2">
+<path d="M0 214 L110 214 M490 214 L600 214"/>
+<path d="M0 120 Q70 200 110 70 M600 120 Q530 200 490 70"/>
+<path d="M175 222 L425 222" stroke-dasharray="6 6" stroke="#8a8b83"/>
+<path d="M0 262 H600" stroke="#8a8b83"/>
+</g>
+<g fill="#6c6d66">
+<path d="M110 70 L120 40 L135 22 L150 40 L160 70 V214 H110Z"/>
+<path d="M440 70 L450 40 L465 22 L480 40 L490 70 V214 H440Z"/>
+<rect x="100" y="214" width="75" height="48"/><rect x="425" y="214" width="75" height="48"/>
+<rect x="160" y="46" width="280" height="8"/><rect x="160" y="62" width="280" height="8"/>
+</g>
+<g stroke="#f4f5f0" stroke-width="22">
+<line x1="174.5" y1="230" x2="184" y2="97"/>
+<line x1="425.5" y1="230" x2="416" y2="97"/>
+</g>
+<g fill="#1a1917"><circle cx="175" cy="222" r="5"/><circle cx="425" cy="222" r="5"/></g>
+<path d="M223 222 A48 48 0 0 0 178.3 174.1" fill="none" stroke="#d6d8d1" stroke-width="2"/>
+<text x="200" y="192" fill="#f4f5f0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="20" font-weight="600">86°</text>
+<g stroke="#d6d8d1" stroke-width="2"><path d="M360 78 V258 M352 78 H368 M352 258 H368"/></g>
+<rect x="328" y="128" width="64" height="28" fill="#1a1917"/>
+<text x="360" y="148" text-anchor="middle" fill="#f4f5f0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="20" font-weight="600">61 m</text>
+<g fill="#8a8b83"><path d="M262 250 H310 L303 260 H269Z"/><path d="M284 248 V170 L304 238 H284Z"/></g>
+</svg>
+<ol class=lamps aria-label="Lift sequence">
+<li><i></i>Traffic stopped</li><li><i></i>Gates down</li><li><i></i>Leaves rising</li><li><i></i>Open 86°</li><li><i></i>Clear&nbsp;61&nbsp;m</li>
+</ol>
+</div>
+<div class=time>
+<div class=window><strong>14:20</strong><small>Next lift</small></div>
+<p>Sailing barge Centaur, heading upstream. Road closes about 10 minutes, from 14:15.</p>
+</div>
+<div class=act><button type=button>Notify me before it lifts</button><p class=note>Illustrative times.</p></div>
+<section class=later><h2>Later today</h2><ol>
+<li><time>16:05</time>MV Dixie Queen, downstream</li>
+<li><time>18:40</time>Tall ship Kaskelot, upstream</li>
+<li><time>20:15</time>Thames sailing barge Will, downstream</li>
+</ol></section>
+</main></body></html>

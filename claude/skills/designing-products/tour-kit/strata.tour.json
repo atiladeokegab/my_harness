@@ -1,0 +1,437 @@
+{
+  "app": "strata",
+  "phone": 900,
+  "chrome": [
+    ".panel",
+    ".dock",
+    ".controls",
+    ".toggles"
+  ],
+  "credits": [
+    ".credit"
+  ],
+  "labels": [
+    ".stage div[style*='translate3d']"
+  ],
+  "default": {
+    "year": null,
+    "exploded": false,
+    "lidar": false,
+    "mode": "orbit",
+    "selected": null,
+    "sheet": false
+  },
+  "steps": [
+    {
+      "id": "orbit",
+      "title": "Look around",
+      "beat": "problem",
+      "shows": {
+        "claim": "Tower Bridge rebuilt in 3D on real ground",
+        "criterion": "fidelity"
+      },
+      "subject": {
+        "box": [
+          [
+            -16,
+            0,
+            -56
+          ],
+          [
+            16,
+            70,
+            56
+          ]
+        ]
+      },
+      "view": {
+        "cam": [
+          170,
+          75,
+          190
+        ]
+      },
+      "caption": "Tower Bridge, rebuilt on real LiDAR ground. Drag to orbit, pinch or scroll to zoom.",
+      "hold": 6
+    },
+    {
+      "id": "time",
+      "title": "Scrub through time",
+      "beat": "wow",
+      "shows": {
+        "claim": "The bridge and the city rebuilt year by year",
+        "criterion": "creativity",
+        "number": "140 years"
+      },
+      "spot": ".dock .timeline",
+      "subject": {
+        "box": [
+          [
+            -16,
+            0,
+            -56
+          ],
+          [
+            16,
+            70,
+            56
+          ]
+        ]
+      },
+      "view": {
+        "cam": [
+          300,
+          40,
+          40
+        ]
+      },
+      "caption": "140 years in one slider: it rebuilds the bridge and the area around it.",
+      "captionFrom": "yearEvent",
+      "stops": [
+        {
+          "label": "1886",
+          "action": {
+            "do": "setYear",
+            "arg": 1886
+          },
+          "hold": 4
+        },
+        {
+          "label": "1890",
+          "action": {
+            "do": "setYear",
+            "arg": 1890
+          },
+          "hold": 3
+        },
+        {
+          "label": "1940",
+          "action": {
+            "do": "setYear",
+            "arg": 1940
+          },
+          "hold": 3
+        },
+        {
+          "label": "Today",
+          "action": {
+            "do": "setYear"
+          },
+          "hold": 3
+        }
+      ]
+    },
+    {
+      "id": "exploded",
+      "title": "Take it apart",
+      "beat": "feature",
+      "shows": {
+        "claim": "Every part pulls away to show how it fits",
+        "criterion": "technical"
+      },
+      "spot": ".toggles button:first-child",
+      "subject": {
+        "box": [
+          [
+            -16,
+            0,
+            -56
+          ],
+          [
+            16,
+            70,
+            56
+          ]
+        ]
+      },
+      "view": {
+        "cam": [
+          150,
+          60,
+          175
+        ],
+        "exploded": true
+      },
+      "caption": "Exploded view pulls every part away from the others, so you can see how it fits together."
+    },
+    {
+      "id": "bascules",
+      "title": "Watch it work",
+      "beat": "feature",
+      "shows": {
+        "claim": "The bascules lift on simulated hydraulics for a ship",
+        "criterion": "technical"
+      },
+      "spot": ".dock .bascule",
+      "subject": {
+        "box": [
+          [
+            -16,
+            0,
+            -56
+          ],
+          [
+            16,
+            70,
+            56
+          ]
+        ]
+      },
+      "view": {
+        "cam": [
+          -200,
+          60,
+          94
+        ]
+      },
+      "action": {
+        "do": "lift"
+      },
+      "caption": "Signals to red, the bascules rise on simulated hydraulics, and a ship comes through. Drag the Bascules slider to work them yourself."
+    },
+    {
+      "id": "part",
+      "title": "Tap any part",
+      "beat": "proof",
+      "shows": {
+        "claim": "Every size carries a source and a status",
+        "criterion": "sourcing"
+      },
+      "spot": ".panel",
+      "subject": ".panel",
+      "view": {
+        "selected": "bascule-north",
+        "sheet": true
+      },
+      "caption": "The inspector shows its sizes, each with a source and a status: text-attested, measured or inferred."
+    },
+    {
+      "id": "docent",
+      "title": "Ask the docent",
+      "beat": "feature",
+      "shows": {
+        "claim": "A docent that cites sources or says it cannot",
+        "criterion": "ai"
+      },
+      "spot": ".docent",
+      "subject": ".docent",
+      "view": {
+        "selected": "counterweight-north",
+        "sheet": true
+      },
+      "action": {
+        "do": "askDocent"
+      },
+      "caption": "Ask anything. Answers cite their sources, and the docent says so when it cannot cite one."
+    },
+    {
+      "id": "search",
+      "title": "Search",
+      "beat": "feature",
+      "shows": {
+        "claim": "Find any part, event or source by name",
+        "criterion": "usability"
+      },
+      "spot": ".search input",
+      "subject": ".search",
+      "view": {
+        "sheet": true
+      },
+      "action": {
+        "type": ".search input",
+        "text": "bascule"
+      },
+      "caption": "Find any part, event or source by name."
+    },
+    {
+      "id": "lidar",
+      "title": "See the LiDAR",
+      "beat": "feature",
+      "shows": {
+        "claim": "The measured ground as a point cloud",
+        "criterion": "fidelity"
+      },
+      "spot": ".toggles button:nth-child(2)",
+      "subject": {
+        "box": [
+          [
+            -16,
+            0,
+            -56
+          ],
+          [
+            16,
+            70,
+            56
+          ]
+        ]
+      },
+      "view": {
+        "cam": [
+          420,
+          90,
+          480
+        ],
+        "lidar": true
+      },
+      "caption": "The ground as the Environment Agency measured it: 1 m LiDAR, shown as a point cloud."
+    },
+    {
+      "id": "top",
+      "title": "Top-down",
+      "beat": "feature",
+      "shows": {
+        "claim": "The topography from above, parts labelled",
+        "criterion": "usability"
+      },
+      "spot": ".seg",
+      "subject": {
+        "box": [
+          [
+            -16,
+            0,
+            -56
+          ],
+          [
+            16,
+            70,
+            56
+          ]
+        ]
+      },
+      "keepLabels": true,
+      "view": {
+        "mode": "top"
+      },
+      "caption": "The topography straight from above, with the parts labelled."
+    },
+    {
+      "id": "walk",
+      "title": "Walk it",
+      "beat": "feature",
+      "shows": {
+        "claim": "Stand on the deck and walk",
+        "criterion": "interaction"
+      },
+      "spot": ".seg",
+      "subject": {
+        "box": [
+          [
+            -16,
+            0,
+            -56
+          ],
+          [
+            16,
+            70,
+            -35
+          ]
+        ]
+      },
+      "view": {
+        "mode": "walk"
+      },
+      "caption": "Stand on the deck. WASD or the arrow keys to walk, drag to look; on a phone, the arrow pad."
+    },
+    {
+      "id": "identify",
+      "title": "Identify a photo",
+      "beat": "feature",
+      "shows": {
+        "claim": "A photo of the real bridge names its parts",
+        "criterion": "ai"
+      },
+      "spot": ".id-open",
+      "when": ".id-open",
+      "subject": {
+        "box": [
+          [
+            -16,
+            0,
+            -56
+          ],
+          [
+            16,
+            70,
+            56
+          ]
+        ]
+      },
+      "caption": "Upload a photo of the real bridge: Strata names the parts it can see, boxes them, and flies to where you stood."
+    },
+    {
+      "id": "reimagine",
+      "title": "See another year",
+      "beat": "feature",
+      "shows": {
+        "claim": "This view as a period photograph",
+        "criterion": "creativity"
+      },
+      "spot": ".rm-open:not(.id-open)",
+      "when": ".rm-open:not(.id-open)",
+      "subject": {
+        "box": [
+          [
+            -16,
+            0,
+            -56
+          ],
+          [
+            16,
+            70,
+            56
+          ]
+        ]
+      },
+      "caption": "Turns this 3D view into a period photograph of the year on the slider, with a before and after slider."
+    },
+    {
+      "id": "voice",
+      "title": "Talk to the docent",
+      "beat": "feature",
+      "shows": {
+        "claim": "Ask out loud, answered by voice",
+        "criterion": "accessibility"
+      },
+      "spot": "button[aria-label=\"Talk to the docent\"]",
+      "when": "button[aria-label=\"Talk to the docent\"]",
+      "subject": ".docent",
+      "view": {
+        "sheet": true
+      },
+      "caption": "Press the mic and ask out loud; the docent answers by voice, with a live transcript."
+    },
+    {
+      "id": "next",
+      "title": "Coming next",
+      "beat": "ask",
+      "shows": {
+        "claim": "The same ground, history and docent for more places",
+        "criterion": "impact"
+      },
+      "subject": {
+        "box": [
+          [
+            -16,
+            0,
+            -56
+          ],
+          [
+            16,
+            70,
+            56
+          ]
+        ]
+      },
+      "view": {
+        "cam": [
+          -200,
+          60,
+          -220
+        ]
+      },
+      "last": true,
+      "caption": "Stonehenge, Hadrian's Wall and the Tower of London: the same LiDAR ground, sourced history and docent. Now you try: tap any part."
+    }
+  ]
+}

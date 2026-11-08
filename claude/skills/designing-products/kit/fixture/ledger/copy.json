@@ -1,0 +1,19 @@
+{
+  "lang": "en-GB",
+  "nav": ["Grants", "Donors", "Receipts"],
+  "primary": "Record a grant",
+  "tip": "Grants under £500 skip the trustee check.",
+  "tipLabel": "About the trustee check",
+  "intro": "Every pledge is traced to a receipt before the year closes. Read the",
+  "introLink": "audit trail rules",
+  "formTitle": "New grant",
+  "fields": { "amount": "Amount (£)", "amountValue": "2,400", "donor": "Donor", "donorError": "This donor has no Gift Aid declaration on file.", "charity": "Charity number", "charityValue": "1182345", "charityHint": "Checking the register", "ref": "Reference", "refValue": "Set by the bank", "fund": "Fund", "funds": ["Winter appeal", "Building fund", "Unrestricted"], "fundLoading": "Region" },
+  "buttons": { "save": "Save grant", "draft": "Save draft", "cancel": "Cancel", "saving": "Saving", "locked": "Year closed" },
+  "tabs": ["Open", "Paid", "Archived"],
+  "cards": [["Riverside Food Bank", "£2,400 pledged on 3 October; the receipt is due by 30 November."], ["St Anne's Night Shelter", "£950 pledged on 12 September; the receipt is 4 days overdue."]],
+  "loadingTab": "Paid",
+  "dialog": { "open": "Close the year", "title": "Close 2025–26?", "body": "Open grants move to next year. Receipts stay editable for 30 days.", "confirm": "Close the year", "cancel": "Keep open" },
+  "sheet": { "open": "Filters", "title": "Filter grants", "field": "Donor name", "apply": "Apply filters" },
+  "toasts": [{ "tone": "success", "title": "Receipt matched to Riverside Food Bank" }, { "tone": "pending", "title": "Importing 212 bank lines" }],
+  "disabledLink": "Export (trustees only)"
+}

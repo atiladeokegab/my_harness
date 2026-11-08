@@ -1,0 +1,19 @@
+{
+  "lang": "en",
+  "nav": ["Incidents", "Rota", "Runbooks"],
+  "primary": "Declare incident",
+  "tip": "Paging wakes the secondary after 5 minutes.",
+  "tipLabel": "About paging",
+  "intro": "Two services degraded in eu-west. Start with the",
+  "introLink": "checkout runbook",
+  "formTitle": "Page someone",
+  "fields": { "amount": "Service", "amountValue": "checkout-api", "donor": "Who", "donorError": "Priya is off rota until 08:00.", "charity": "Alert ID", "charityValue": "ALR-88213", "charityHint": "Matching the alert", "ref": "Region", "refValue": "Set by the alert", "fund": "Severity", "funds": ["SEV1, customers down", "SEV2, degraded", "SEV3, internal only"], "fundLoading": "Escalation policy" },
+  "buttons": { "save": "Page now", "draft": "Acknowledge", "cancel": "Snooze", "saving": "Paging", "locked": "Resolved" },
+  "tabs": ["Firing", "Acked", "Muted"],
+  "cards": [["checkout-api p99 at 2.4s", "Firing for 14 minutes in eu-west-1. Sam is on call."], ["payments queue backlog 18k", "Acknowledged 3 minutes ago by Sam."]],
+  "loadingTab": "Acked",
+  "dialog": { "open": "Resolve all", "title": "Resolve 2 incidents?", "body": "Both alerts have been quiet for 10 minutes. The timeline is kept for the review.", "confirm": "Resolve", "cancel": "Keep open" },
+  "sheet": { "open": "Timeline", "title": "checkout-api timeline", "field": "Add a note", "apply": "Post note" },
+  "toasts": [{ "tone": "success", "title": "Sam acknowledged", "id": "checkout-api" }, { "tone": "pending", "title": "Rolling back deploy", "id": "4f2a" }],
+  "disabledLink": "Postmortem (after resolve)"
+}

@@ -1,0 +1,18 @@
+.kit-card {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border: var(--kit-hairline) solid var(--color-border);
+  border-radius: var(--radius-panel);
+  text-decoration: none;
+}
+.kit-card--link { cursor: pointer; transition: border-color var(--kit-duration) var(--kit-ease), background-color var(--kit-duration) var(--kit-ease); }
+.kit-card--link[data-hovered] { border-color: var(--color-muted); }
+.kit-card--link[data-pressed] { background: var(--kit-hover); }
+.kit-card--link[data-disabled] { opacity: var(--kit-disabled); cursor: not-allowed; }
+.kit-card[aria-busy] { cursor: progress; }
+.kit-card__line { display: block; block-size: 1em; border-radius: var(--radius-control); background: var(--kit-hover); }
+.kit-card__line--short { inline-size: 60%; }

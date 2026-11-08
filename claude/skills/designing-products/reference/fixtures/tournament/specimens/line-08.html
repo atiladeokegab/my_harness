@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Strata Lifts</title>
+<style>
+:root{
+  --sky:#D5D9DD; --ink:#17233A; --ink-2:#3E4C63; --stone:#4A5870; --leaf:#2C3A52; --water:#8FA3B5;
+  --red:#B8202B; --focus:#1F4E9C;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:64px;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  --serif:Georgia,"Times New Roman",serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--sky)}
+body{font:16px/1.5 var(--sans);color:var(--ink);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+::selection{background:var(--ink);color:var(--sky)}
+.page{max-width:1280px;margin:0 auto;padding:var(--s5) var(--s7);display:grid;
+  grid-template-columns:440px 1fr;column-gap:var(--s7);
+  grid-template-areas:"top top" "head fig" "info fig" "later fig";grid-template-rows:auto auto auto 1fr}
+.top{grid-area:top;display:flex;justify-content:space-between;align-items:baseline;font-size:14px;color:var(--ink-2);padding-bottom:var(--s5)}
+.top b{font-size:16px;color:var(--ink)}
+h1{grid-area:head;font-size:32px;line-height:1.15;font-weight:700;letter-spacing:-0.01em;max-width:16ch}
+figure{grid-area:fig;align-self:start}
+figure svg{display:block;width:100%;height:auto}
+figcaption{font-size:14px;color:var(--ink-2);padding-top:var(--s2)}
+.code{font-family:var(--serif);font-size:16px;letter-spacing:0.3em;margin-right:-0.3em;color:var(--ink)}
+.info{grid-area:info;padding-top:var(--s5)}
+.label{font-size:14px;color:var(--ink-2)}
+.time{font-size:88px;line-height:1;font-weight:700;color:var(--red);letter-spacing:-0.02em}
+.vessel{font-size:20px;font-weight:700;padding-top:var(--s2)}
+.facts{color:var(--ink-2);padding-top:var(--s1)}
+button{margin-top:var(--s4);height:56px;padding:0 var(--s5);border:0;border-radius:4px;background:var(--red);color:#fff;
+  font:700 16px/1 var(--sans);cursor:pointer}
+button:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
+.later{grid-area:later;padding-top:var(--s5)}
+table{border-collapse:collapse;width:100%;max-width:400px;font-size:14px}
+th{text-align:left;font-weight:400;color:var(--ink-2);padding-bottom:var(--s1)}
+td{padding:var(--s1) 0;border-top:1px solid #AEB5BD}
+td:first-child{font-weight:700;width:64px}
+td:last-child{color:var(--ink-2);text-align:right}
+@media (max-width:640px){
+  .page{display:block;padding:var(--s4)}
+  .top{display:block;padding-bottom:var(--s3)}
+  .top b{display:block}
+  h1{max-width:none}
+  figure{padding-top:var(--s3)}
+  .info{padding-top:var(--s3)}
+  .facts{font-size:16px}
+  button{width:100%}
+  table{font-size:16px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style></head>
+<body><main class="page">
+<header class="top"><b>Strata Lifts</b><span>Tower Bridge, Sunday 2 November. Illustrative times.</span></header>
+
+<h1>When Tower Bridge next opens for a ship.</h1>
+
+<figure>
+<svg viewBox="0 0 520 310" role="img" aria-label="Tower Bridge with both bascules raised to 86 degrees and the signal flags C E N T A U R flown from the high walkway">
+  <rect x="0" y="290" width="520" height="20" fill="#8FA3B5"/>
+  <!-- side spans and chains -->
+  <rect x="0" y="244" width="80" height="10" fill="#4A5870"/><rect x="440" y="244" width="80" height="10" fill="#4A5870"/>
+  <path d="M80 104 Q30 200 0 232" fill="none" stroke="#4A5870" stroke-width="4"/>
+  <path d="M440 104 Q490 200 520 232" fill="none" stroke="#4A5870" stroke-width="4"/>
+  <!-- piers -->
+  <rect x="68" y="250" width="84" height="50" fill="#3B475C"/><rect x="368" y="250" width="84" height="50" fill="#3B475C"/>
+  <!-- towers -->
+  <rect x="80" y="66" width="60" height="184" fill="#4A5870"/><polygon points="76,68 110,24 144,68" fill="#3B475C"/>
+  <rect x="380" y="66" width="60" height="184" fill="#4A5870"/><polygon points="376,68 410,24 444,68" fill="#3B475C"/>
+  <path d="M100 150v-20a10 10 0 0 1 20 0v20zM100 210v-24a10 10 0 0 1 20 0v24zM400 150v-20a10 10 0 0 1 20 0v20zM400 210v-24a10 10 0 0 1 20 0v24z" fill="#D5D9DD"/>
+  <!-- high-level walkways -->
+  <rect x="140" y="74" width="240" height="6" fill="#4A5870"/><rect x="140" y="86" width="240" height="6" fill="#4A5870"/>
+  <!-- closed position, then the leaves at 86 degrees, hinged at the piers -->
+  <line x1="140" y1="250" x2="380" y2="250" stroke="#3E4C63" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <rect x="140" y="250" width="120" height="11" fill="#2C3A52" transform="rotate(-86 140 250)"/>
+  <rect x="260" y="250" width="120" height="11" fill="#2C3A52" transform="rotate(86 380 250)"/>
+  <path d="M176 250A36 36 0 0 0 142.5 214.1M344 250A36 36 0 0 1 377.5 214.1" fill="none" stroke="#17233A" stroke-width="1.5"/>
+  <!-- the hoist: CENTAUR in International Code flags -->
+  <g stroke="none">
+    <g transform="translate(146 96)"><rect width="30" height="22" fill="#1B4FA8"/><rect y="4.4" width="30" height="4.4" fill="#fff"/><rect y="8.8" width="30" height="4.4" fill="#C8102E"/><rect y="13.2" width="30" height="4.4" fill="#fff"/></g>
+    <g transform="translate(179 96)"><rect width="30" height="11" fill="#1B4FA8"/><rect y="11" width="30" height="11" fill="#C8102E"/></g>
+    <g transform="translate(212 96)"><rect width="30" height="22" fill="#fff"/><path d="M0 0h7.5v5.5H0zM15 0h7.5v5.5H15zM7.5 5.5H15V11H7.5zM22.5 5.5H30V11h-7.5zM0 11h7.5v5.5H0zM15 11h7.5v5.5H15zM7.5 16.5H15V22H7.5zM22.5 16.5H30V22h-7.5z" fill="#1B4FA8"/></g>
+    <g transform="translate(245 96)"><rect width="10" height="22" fill="#C8102E"/><rect x="10" width="10" height="22" fill="#fff"/><rect x="20" width="10" height="22" fill="#1B4FA8"/></g>
+    <g transform="translate(278 96)"><rect width="15" height="22" fill="#fff"/><polygon points="15,0 30,0 22,11 30,22 15,22" fill="#1B4FA8"/></g>
+    <g transform="translate(311 96)"><rect width="30" height="22" fill="#fff"/><rect width="15" height="11" fill="#C8102E"/><rect x="15" y="11" width="15" height="11" fill="#C8102E"/></g>
+    <g transform="translate(344 96)"><rect width="30" height="22" fill="#C8102E"/><rect x="12" width="6" height="22" fill="#F2C200"/><rect y="8.5" width="30" height="5" fill="#F2C200"/></g>
+  </g>
+  <g fill="none" stroke="#17233A" stroke-width="0.75">
+    <rect x="146" y="96" width="30" height="22"/><rect x="179" y="96" width="30" height="22"/><rect x="212" y="96" width="30" height="22"/><rect x="245" y="96" width="30" height="22"/><path d="M278 96h30l-8 11 8 11h-30z"/><rect x="311" y="96" width="30" height="22"/><rect x="344" y="96" width="30" height="22"/>
+  </g>
+</svg>
+<figcaption>The bridge flies <span class="code">CENTAUR</span> from its walkway: the next ship, in signal flags. Bascules drawn at 86°.</figcaption>
+</figure>
+
+<section class="info">
+  <p class="label">Next lift</p>
+  <p class="time">14:20</p>
+  <p class="vessel">Sailing barge Centaur, heading upstream</p>
+  <p class="facts">Road closes about 10 minutes, from 14:15. Bascules open to 86°; 61 m clearance when open.</p>
+  <button type="button">Notify me before it lifts</button>
+</section>
+
+<section class="later">
+  <table><thead><tr><th colspan="3">Later today</th></tr></thead><tbody>
+    <tr><td>16:05</td><td>MV Dixie Queen</td><td>Downstream</td></tr>
+    <tr><td>18:40</td><td>Tall ship Kaskelot</td><td>Upstream</td></tr>
+    <tr><td>20:15</td><td>Thames sailing barge Will</td><td>Downstream</td></tr>
+  </tbody></table>
+</section>
+</main></body></html>

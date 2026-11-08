@@ -1,0 +1,13 @@
+.kit-tooltip {
+  max-inline-size: calc(var(--type-caption-font-size) * 24);
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-ink);
+  color: var(--color-bg);
+  border-radius: var(--radius-control);
+  font-family: var(--type-caption-font-family);
+  font-size: var(--type-caption-font-size);
+  line-height: var(--type-caption-line-height);
+  box-shadow: var(--kit-shadow-overlay);
+  transition: opacity var(--kit-duration) var(--kit-ease);
+}
+.kit-tooltip[data-entering], .kit-tooltip[data-exiting] { opacity: 0; }

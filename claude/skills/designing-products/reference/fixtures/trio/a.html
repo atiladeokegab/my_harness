@@ -1,0 +1,55 @@
+<!doctype html>
+<!-- Trio specimen a. What it plants is in ../key.md, which the judge never gets. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strata Lifts</title>
+<style>
+  :root { --ground: #E6EBE9; --ink: #13202A; --quiet: #4B5A63; --rule: #B9C4C2; --signal: #C2271D; }
+  * { box-sizing: border-box; margin: 0; }
+  ::selection { background: var(--signal); color: #fff; }
+  body { background: var(--ground); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+  header { display: flex; justify-content: space-between; align-items: baseline; padding: 18px 40px; border-bottom: 1px solid var(--rule); }
+  header b { font: 600 17px Georgia, serif; } header span { color: var(--quiet); font-size: 14px; }
+  main { display: grid; grid-template-columns: 5fr 7fr; gap: 32px; padding: 34px 40px 0; align-items: start; }
+  .when { font-size: 15px; color: var(--quiet); }
+  h1 { font: 400 84px/1 Georgia, serif; letter-spacing: -0.02em; color: var(--signal); margin: 6px 0 10px; }
+  .vessel { font-size: 19px; } .vessel small { display: block; color: var(--quiet); font-size: 14px; margin-top: 2px; }
+  button { margin-top: 22px; font: 600 16px system-ui, sans-serif; color: #fff; background: var(--ink); border: 0; border-radius: 6px; padding: 14px 22px; min-height: 48px; cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--signal); outline-offset: 3px; }
+  ol { list-style: none; padding: 0; margin-top: 18px; border-top: 1px solid var(--rule); }
+  li { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--rule); font-size: 15px; }
+  li span:last-child { color: var(--quiet); }
+  svg { width: 100%; height: auto; }
+  .note { color: var(--quiet); font-size: 13px; padding: 10px 40px; }
+  @media (max-width: 700px) {
+    header { padding: 14px 18px; } main { grid-template-columns: 1fr; padding: 18px 18px 0; gap: 8px; }
+    h1 { font-size: 64px; } .draw { order: -1; } .note { padding: 8px 18px; } ol li:nth-child(n+3) { display: none; }
+  }
+</style></head>
+<body>
+<header><b>Strata Lifts</b><span>Tower Bridge, Sunday 2 November</span></header>
+<main>
+  <section>
+    <p class="when">The bridge opens next at</p>
+    <h1>14:20</h1>
+    <p class="vessel">Sailing barge <i>Centaur</i>, heading upstream<small>Road closes about 10 minutes, from 14:15</small></p>
+    <button type="button">Notify me before it lifts</button>
+    <ol><li><span>16:05</span><span>MV Dixie Queen, downstream</span></li><li><span>18:40</span><span>Tall ship Kaskelot, upstream</span></li><li><span>20:15</span><span>Thames sailing barge Will, downstream</span></li></ol>
+  </section>
+  <figure class="draw" aria-label="Elevation of Tower Bridge with both bascules raised to 86 degrees">
+    <svg viewBox="0 0 700 330" fill="none" stroke="#13202A" stroke-width="2">
+      <line x1="0" y1="262" x2="700" y2="262" stroke="#4B5A63"/>
+      <path d="M0 278 Q 50 272 100 278 T 200 278 T 300 278 T 400 278 T 500 278 T 600 278 T 700 278" stroke="#B9C4C2"/>
+      <rect x="170" y="70" width="70" height="192"/><path d="M170 70 L205 30 L240 70"/>
+      <rect x="460" y="70" width="70" height="192"/><path d="M460 70 L495 30 L530 70"/>
+      <line x1="240" y1="96" x2="460" y2="96"/><line x1="240" y1="112" x2="460" y2="112"/>
+      <line x1="0" y1="190" x2="170" y2="150"/><line x1="530" y1="150" x2="700" y2="190"/>
+      <line x1="240" y1="232" x2="252" y2="122" stroke="#C2271D" stroke-width="7"/>
+      <line x1="460" y1="232" x2="448" y2="122" stroke="#C2271D" stroke-width="7"/>
+      <path d="M262 214 A 24 24 0 0 0 252 200" stroke="#4B5A63" stroke-width="1"/>
+      <text x="268" y="210" fill="#4B5A63" stroke="none" font-size="13" font-family="system-ui">86°</text>
+      <text x="322" y="252" fill="#4B5A63" stroke="none" font-size="13" font-family="system-ui">61 m clear</text>
+    </svg>
+  </figure>
+</main>
+<p class="note">Illustrative times for this fixture.</p>
+</body></html>

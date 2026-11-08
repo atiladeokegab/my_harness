@@ -1,0 +1,200 @@
+/* Generated from DESIGN.md by tokens-from-design.mjs. Do not edit: change DESIGN.md and rerun. */
+:root {
+  /* colors */
+  --color-accent-50: #E4FCFF;
+  --color-accent-100: #C5F8FE;
+  --color-accent-200: #AAE7EF;
+  --color-accent-300: #85CFD8;
+  --color-accent-400: #5EB4BE;
+  --color-accent-500: #3C9AA4;
+  --color-accent-600: #0E7C86;
+  --color-accent-700: #00666F;
+  --color-accent-800: #004D54;
+  --color-accent-900: #003237;
+  --color-accent-950: #001518;
+  --color-neutral-50: #F2F8F9;
+  --color-neutral-100: #E7EEEF;
+  --color-neutral-200: #D4DDDE;
+  --color-neutral-300: #B9C3C4;
+  --color-neutral-400: #9CA7A8;
+  --color-neutral-500: #818D8F;
+  --color-neutral-600: #697475;
+  --color-neutral-700: #515C5D;
+  --color-neutral-800: #3D4647;
+  --color-neutral-900: #262D2D;
+  --color-neutral-950: #0F1213;
+  --color-support-50: #FFF3F7;
+  --color-support-100: #FFE5EE;
+  --color-support-200: #FECADD;
+  --color-support-300: #E9ADC3;
+  --color-support-400: #CF8FA7;
+  --color-support-500: #B5748D;
+  --color-support-600: #9A5B74;
+  --color-support-700: #7D455C;
+  --color-support-800: #623246;
+  --color-support-900: #421E2D;
+  --color-support-950: #1D0B12;
+  --color-support-2-50: #FFF4EE;
+  --color-support-2-100: #FFE8D9;
+  --color-support-2-200: #FDD1B4;
+  --color-support-2-300: #E8B593;
+  --color-support-2-400: #CE9771;
+  --color-support-2-500: #B47C55;
+  --color-support-2-600: #99633D;
+  --color-support-2-700: #7D4C28;
+  --color-support-2-800: #623818;
+  --color-support-2-900: #41220A;
+  --color-support-2-950: #1D0D03;
+  --color-bg: #E7EEEF;
+  --color-bg-dark: #0F1213;
+  --color-surface: #F2F8F9;
+  --color-surface-dark: #262D2D;
+  --color-border: #D4DDDE;
+  --color-border-dark: #3D4647;
+  --color-ink: #262D2D;
+  --color-ink-dark: #E7EEEF;
+  --color-muted: #515C5D;
+  --color-muted-dark: #9CA7A8;
+  --color-accent: #0E7C86;
+  --color-on-accent: #F2F8F9;
+  --color-accent-text: #00666F;
+  --color-accent-text-dark: #5EB4BE;
+  --color-success: #007B36;
+  --color-success-dark: #53BE70;
+  --color-warning: #915B00;
+  --color-warning-dark: #DF911A;
+  --color-danger: #AF3D36;
+  --color-danger-dark: #F47C70;
+  --color-info: #006EAE;
+  --color-info-dark: #43ACFB;
+  --color-data-1: #2A78D6;
+  --color-data-2: #EB6834;
+  --color-data-3: #1BAF7A;
+  --color-data-4: #EDA100;
+  --color-data-5: #E87BA4;
+  --color-data-6: #008300;
+  --color-data-7: #6250D6;
+  --color-data-8: #E34948;
+  --color-data-1-dark: #3987E5;
+  --color-data-2-dark: #D95926;
+  --color-data-3-dark: #199E70;
+  --color-data-4-dark: #C98500;
+  --color-data-5-dark: #D55181;
+  --color-data-7-dark: #9085E9;
+  --color-data-8-dark: #E66767;
+  /* typography */
+  --type-caption-font-family: "IBM Plex Sans", sans-serif;
+  --type-caption-font-size: 13px;
+  --type-caption-font-weight: 400;
+  --type-caption-line-height: 1.5;
+  --type-caption-letter-spacing: 0.01em;
+  --type-body-font-family: "IBM Plex Sans", sans-serif;
+  --type-body-font-size: 16px;
+  --type-body-font-weight: 400;
+  --type-body-line-height: 1.5;
+  --type-body-letter-spacing: 0em;
+  --type-label-font-family: "IBM Plex Sans", sans-serif;
+  --type-label-font-size: 16px;
+  --type-label-font-weight: 600;
+  --type-label-line-height: 1.3;
+  --type-label-letter-spacing: 0em;
+  --type-lead-font-family: "IBM Plex Sans", sans-serif;
+  --type-lead-font-size: 20px;
+  --type-lead-font-weight: 400;
+  --type-lead-line-height: 1.4;
+  --type-lead-letter-spacing: 0em;
+  --type-h3-font-family: "IBM Plex Sans", sans-serif;
+  --type-h3-font-size: 25px;
+  --type-h3-font-weight: 600;
+  --type-h3-line-height: 1.3;
+  --type-h3-letter-spacing: -0.005em;
+  --type-h2-font-family: "IBM Plex Sans", sans-serif;
+  --type-h2-font-size: 31px;
+  --type-h2-font-weight: 600;
+  --type-h2-line-height: 1.2;
+  --type-h2-letter-spacing: -0.010em;
+  --type-h1-font-family: "IBM Plex Sans", sans-serif;
+  --type-h1-font-size: 39px;
+  --type-h1-font-weight: 600;
+  --type-h1-line-height: 1.1;
+  --type-h1-letter-spacing: -0.015em;
+  /* rounded */
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  --radius-pill: 999px;
+  /* spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+  /* components */
+  --button-primary-background-color: var(--color-accent);
+  --button-primary-text-color: var(--color-on-accent);
+  --button-primary-typography-font-family: var(--type-label-font-family);
+  --button-primary-typography-font-size: var(--type-label-font-size);
+  --button-primary-typography-font-weight: var(--type-label-font-weight);
+  --button-primary-typography-line-height: var(--type-label-line-height);
+  --button-primary-typography-letter-spacing: var(--type-label-letter-spacing);
+  --button-primary-rounded: var(--radius-control);
+  --card-background-color: var(--color-surface);
+  --card-rounded: var(--radius-panel);
+  --card-padding: 24px;
+  /* breakpoints: the two judge sizes; media queries cannot read these, so write 390px and 1280px there */
+  --bp-phone: 390px;
+  --bp-desktop: 1280px;
+}
+
+[data-theme="dark"] {
+  --color-bg: var(--color-bg-dark);
+  --color-surface: var(--color-surface-dark);
+  --color-border: var(--color-border-dark);
+  --color-ink: var(--color-ink-dark);
+  --color-muted: var(--color-muted-dark);
+  --color-accent-text: var(--color-accent-text-dark);
+  --color-success: var(--color-success-dark);
+  --color-warning: var(--color-warning-dark);
+  --color-danger: var(--color-danger-dark);
+  --color-info: var(--color-info-dark);
+  --color-data-1: var(--color-data-1-dark);
+  --color-data-2: var(--color-data-2-dark);
+  --color-data-3: var(--color-data-3-dark);
+  --color-data-4: var(--color-data-4-dark);
+  --color-data-5: var(--color-data-5-dark);
+  --color-data-7: var(--color-data-7-dark);
+  --color-data-8: var(--color-data-8-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: var(--color-bg-dark);
+    --color-surface: var(--color-surface-dark);
+    --color-border: var(--color-border-dark);
+    --color-ink: var(--color-ink-dark);
+    --color-muted: var(--color-muted-dark);
+    --color-accent-text: var(--color-accent-text-dark);
+    --color-success: var(--color-success-dark);
+    --color-warning: var(--color-warning-dark);
+    --color-danger: var(--color-danger-dark);
+    --color-info: var(--color-info-dark);
+    --color-data-1: var(--color-data-1-dark);
+    --color-data-2: var(--color-data-2-dark);
+    --color-data-3: var(--color-data-3-dark);
+    --color-data-4: var(--color-data-4-dark);
+    --color-data-5: var(--color-data-5-dark);
+    --color-data-7: var(--color-data-7-dark);
+    --color-data-8: var(--color-data-8-dark);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

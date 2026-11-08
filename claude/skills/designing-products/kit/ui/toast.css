@@ -1,0 +1,38 @@
+.kit-toasts {
+  position: fixed;
+  inset-block-end: var(--space-6);
+  inset-inline-end: var(--space-6);
+  z-index: 5; /* under the overlay scrim: an open dialog or sheet dims toasts too */
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--space-2);
+  inline-size: min(calc(100% - var(--space-6) * 2), calc(var(--type-body-font-size) * 28));
+  outline: none;
+}
+.kit-toasts[data-focus-visible] { outline: var(--kit-ring) solid var(--color-accent-text); outline-offset: var(--kit-ring); }
+.kit-toast {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border: var(--kit-hairline) solid var(--color-border);
+  border-radius: var(--radius-panel);
+  /* a border, no shadow: both under one toast is rubric T15 */
+}
+.kit-toast__mark {
+  inline-size: var(--space-2);
+  block-size: var(--space-2);
+  margin-block-start: calc((var(--type-body-font-size) * var(--type-body-line-height) - var(--space-2)) / 2);
+  border-radius: var(--radius-pill);
+}
+.kit-toast--success .kit-toast__mark { background: var(--color-success); }
+.kit-toast--danger .kit-toast__mark { background: var(--color-danger); }
+.kit-toast--info .kit-toast__mark { background: var(--color-info); }
+.kit-toast--pending .kit-toast__mark { inline-size: 1em; block-size: 1em; margin-block-start: 0; color: var(--color-muted); }
+.kit-toast__content { display: grid; gap: var(--space-1); }
+.kit-toast__title { font-family: var(--type-body-font-family); font-size: var(--type-body-font-size); line-height: var(--type-body-line-height); }
+.kit-toast__word { font-weight: var(--type-label-font-weight); }
+.kit-toast__body { color: var(--color-muted); font-size: var(--type-caption-font-size); }

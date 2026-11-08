@@ -1,0 +1,80 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Strata Lifts</title><style>
+:root{--ink:#1B2A44;--muted:#4F5868;--stone:#B9AE98;--water:#DCE3EA;--red:#C4122F;--ground:#FFFFFF;
+--s1:4px;--s2:8px;--s3:16px;--s4:24px;--s5:32px;--s6:48px;--s7:64px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font:16px/1.5 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-variant-numeric:tabular-nums}
+::selection{background:var(--ink);color:#fff}
+main{display:grid;grid-template-columns:1fr 540px;gap:var(--s6);max-width:1280px;height:100svh;min-height:633px;padding:var(--s5) var(--s7)}
+.copy{display:flex;flex-direction:column;min-width:0}
+.top{display:flex;gap:var(--s3);font-size:16px}
+.top b{font-weight:700}.top span{color:var(--muted)}
+h1{font-size:28px;line-height:1.2;font-weight:600;margin:var(--s4) 0 var(--s5);}
+.label{font-size:16px;color:var(--muted);margin:0}
+.time{font-size:128px;line-height:.95;font-weight:700;letter-spacing:-.03em;color:var(--red);margin:0 0 var(--s3)}
+.vessel{font-size:20px;line-height:1.4;margin:0 0 var(--s4);max-width:30ch}
+button{font:inherit;font-size:16px;font-weight:600;min-height:56px;padding:0 var(--s5);border:0;border-radius:8px;background:var(--red);color:#fff;cursor:pointer;align-self:flex-start}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.later{margin-top:var(--s5);border-collapse:collapse;font-size:16px}
+.later caption{text-align:left;font-weight:600;padding-bottom:var(--s2)}
+.later td{padding:var(--s1) var(--s4) var(--s1) 0;border-top:1px solid #E3E6EB}
+.later td:first-child{font-weight:600}
+.note{font-size:14px;color:var(--muted);margin:var(--s3) 0 0}
+figure{margin:0;display:flex;align-items:center;justify-content:center;min-height:0}
+svg{width:100%;height:100%;display:block}
+@media (max-width:700px){
+ main{grid-template-columns:1fr;gap:0;height:auto;min-height:0;padding:var(--s3)}
+ h1{font-size:20px;margin:var(--s2) 0 var(--s2);max-width:none}
+ figure{order:0;height:340px;margin:0 calc(-1 * var(--s3))}
+ .copy{display:contents}
+ .top{order:-2}h1{order:-1}
+ .label,.time,.vessel,button,.later,.note{order:1}
+ .label{margin-top:var(--s2)}
+ .time{font-size:64px;line-height:1;margin-bottom:var(--s2)}
+ .vessel{font-size:16px;margin-bottom:var(--s3);max-width:none}
+ button{align-self:stretch;width:100%}
+}
+</style></head><body><main>
+<div class=copy>
+ <div class=top><b>Strata Lifts</b><span>Tower Bridge, Sunday 2 November</span></div>
+ <h1>When Tower Bridge next opens, and which ship it opens for.</h1>
+ <p class=label>Next lift</p>
+ <p class=time>14:20</p>
+ <p class=vessel>Sailing barge Centaur, heading upstream. Road closes about 10 minutes, from 14:15.</p>
+ <button type=button>Notify me before it lifts</button>
+ <table class=later><caption>Later today</caption>
+  <tr><td>16:05</td><td>MV Dixie Queen</td><td>Downstream</td></tr>
+  <tr><td>18:40</td><td>Tall ship Kaskelot</td><td>Upstream</td></tr>
+  <tr><td>20:15</td><td>Thames sailing barge Will</td><td>Downstream</td></tr>
+ </table>
+ <p class=note>Illustrative times.</p>
+</div>
+<figure aria-label="Tower Bridge with both bascules raised to 86 degrees, 61 metres clearance">
+<svg viewBox="0 0 560 560" role=img>
+ <!-- water -->
+ <rect x=0 y=500 width=560 height=60 fill="#DCE3EA"/>
+ <!-- towers (piers to top) -->
+ <g fill="#B9AE98">
+  <rect x=70 y=96 width=90 height=404 /><polygon points="70,96 115,40 160,96"/>
+  <rect x=400 y=96 width=90 height=404 /><polygon points="400,96 445,40 490,96"/>
+  <!-- high-level walkways -->
+  <rect x=160 y=112 width=240 height=14 /><rect x=160 y=140 width=240 height=14 />
+  <!-- side-span decks -->
+  <rect x=0 y=372 width=70 height=16 /><rect x=490 y=372 width=70 height=16 />
+ </g>
+ <!-- closed position, for reference -->
+ <line x1=160 y1=380 x2=400 y2=380 stroke="#4F5868" stroke-width=2 stroke-dasharray="6 6"/>
+ <!-- bascules at 86deg: hinge at each pier, tips leaning toward each other -->
+ <path d="M160,380 L168.4,260.3" stroke="#1B2A44" stroke-width=30 stroke-linecap=butt fill=none />
+ <path d="M400,380 L391.6,260.3" stroke="#1B2A44" stroke-width=30 stroke-linecap=butt fill=none />
+ <circle cx=160 cy=380 r=7 fill="#fff" stroke="#1B2A44" stroke-width=3 />
+ <circle cx=400 cy=380 r=7 fill="#fff" stroke="#1B2A44" stroke-width=3 />
+ <!-- angle arc on the left leaf: from closed (towards centre) up to open -->
+ <path d="M250,380 A90,90 0 0 0 166.3,290.2" stroke="#1B2A44" stroke-width=3 fill=none />
+ <text x=212 y=345 font-size=64 font-weight=700 fill="#1B2A44" font-family="-apple-system,Segoe UI,Roboto,Helvetica Neue,Arial,sans-serif">86°</text>
+ <!-- clearance -->
+ <line x1=345 y1=158 x2=345 y2=498 stroke="#4F5868" stroke-width=2 />
+ <path d="M338,166 L345,156 L352,166 M338,490 L345,500 L352,490" stroke="#4F5868" stroke-width=2 fill=none />
+ <text x=335 y=470 font-size=20 fill="#4F5868" text-anchor=end font-family="-apple-system,Segoe UI,Roboto,Helvetica Neue,Arial,sans-serif">61 m clearance</text>
+</svg>
+</figure>
+</main></body></html>

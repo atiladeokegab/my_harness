@@ -1,0 +1,64 @@
+/* The kit's one layer over tokens.css. DESIGN.md's frontmatter has no slot for elevation or motion
+   (Impeccable's document.md: they go in the sidecar), so they are set here once, built from the
+   product's own tokens. Every piece reads only var(); this block is the only place a value is written. */
+:root {
+  --kit-hairline: 1px;
+  --kit-ring: 2px;
+  --kit-duration: 140ms;
+  --kit-duration-enter: 220ms;
+  --kit-ease: cubic-bezier(0.2, 0, 0, 1);
+  --kit-disabled: 0.45;
+  --kit-shade: color-mix(in oklab, var(--color-neutral-950) 22%, transparent);
+  --kit-scrim: color-mix(in oklab, var(--color-neutral-950) 72%, transparent);
+  --kit-shadow-overlay: 0 var(--space-1) var(--space-3) var(--kit-shade); /* tight: a wide soft shadow under a 1px border is rubric T15 */
+  --kit-hover: var(--color-bg); /* roles, not mixes: the rendered page holds only DESIGN.md colours at rest */
+  --kit-press: var(--color-border);
+}
+
+/* One focus ring for every piece: the accent's text colour, which palette.mjs holds at 4.5:1 or better. */
+.kit-focus[data-focus-visible],
+.kit-focus:focus-visible {
+  outline: var(--kit-ring) solid var(--color-accent-text);
+  outline-offset: var(--kit-ring);
+}
+
+.kit-spinner {
+  display: inline-block;
+  inline-size: 1em;
+  block-size: 1em;
+  border: var(--kit-ring) solid currentColor;
+  border-inline-end-color: transparent;
+  border-radius: var(--radius-pill);
+  animation: kit-spin calc(var(--kit-duration) * 5) linear infinite;
+}
+@keyframes kit-spin { to { transform: rotate(1turn); } }
+
+/* Identifiers (service names, hashes, IDs): never broken across lines. */
+.kit-id { white-space: nowrap; }
+.kit-visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A square icon-only button (close, dismiss): the control height both ways, so it meets the tap floor. */
+.kit-icon-button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  inline-size: var(--control-height);
+  block-size: var(--control-height);
+  margin: calc(var(--space-3) * -1) calc(var(--space-3) * -1) 0 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--color-muted);
+  cursor: pointer;
+  transition: background-color var(--kit-duration) var(--kit-ease);
+}
+.kit-icon-button svg { inline-size: 1.25em; block-size: 1.25em; fill: none; stroke: currentColor; stroke-width: var(--kit-ring); }
+.kit-icon-button[data-hovered] { background: var(--kit-hover); color: var(--color-ink); }
+.kit-icon-button[data-pressed] { background: var(--kit-press); }

@@ -1,0 +1,95 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strata Lifts</title><style>
+:root{--paper:#ECE3CB;--ink:#1F1B16;--ink2:#4A4238;--red:#A51D17;--cond:"Liberation Sans Narrow","Nimbus Sans Narrow","Arial Narrow","Roboto Condensed",sans-serif;--sans:"Helvetica Neue",Helvetica,Arial,"Liberation Sans",sans-serif;
+/* spacing scale */--s1:4px;--s2:8px;--s3:16px;--s4:24px;--s5:32px;--s6:48px;--s7:64px}
+*{box-sizing:border-box}
+html{background:var(--paper)}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 var(--sans);font-variant-numeric:tabular-nums}
+::selection{background:var(--ink);color:var(--paper)}
+.page{max-width:1280px;margin:0 auto;padding:var(--s4) var(--s7)}
+.mast{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3);padding-bottom:var(--s2);border-bottom:4px double var(--ink)}
+.mast b{font:700 20px/1.2 var(--cond)}
+.mast span{color:var(--ink2)}
+h1{margin:var(--s4) 0;font:700 44px/1.1 var(--cond);letter-spacing:-.01em}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:var(--s6);align-items:start}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-weight:700;font-size:14px;color:var(--ink2);padding:0 var(--s3) var(--s1) 0;border-bottom:2px solid var(--ink)}
+td{padding:var(--s2) var(--s3) var(--s2) 0;border-bottom:1px solid var(--ink);vertical-align:baseline}
+td.t{font:700 20px/1.2 var(--cond);width:200px}
+.dir{color:var(--ink2)}
+tr.next td{vertical-align:middle;padding:var(--s3) var(--s3) var(--s3) 0}
+.stamp{display:inline-block;margin-left:var(--s1);border:4px solid var(--red);color:var(--red);padding:var(--s1) var(--s3) var(--s2);transform:rotate(-4deg);font-family:var(--cond);text-align:center}
+.stamp small{display:block;font:700 16px/1.2 var(--cond);border-bottom:2px solid var(--red);padding-bottom:var(--s1)}
+.stamp strong{display:block;font:700 72px/1 var(--cond)}
+.vessel{font:700 28px/1.15 var(--cond)}
+.road{margin:var(--s1) 0 0}
+.act{display:flex;align-items:center;gap:var(--s4);margin-top:var(--s4)}
+button{min-height:52px;padding:0 var(--s5);background:var(--red);color:var(--paper);border:0;border-radius:2px;font:700 20px/1 var(--sans);cursor:pointer}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.note{font-size:14px;color:var(--ink2)}
+figure{margin:0}
+figure svg{display:block;width:100%;height:auto}
+figcaption{margin-top:var(--s2);padding-top:var(--s2);border-top:1px solid var(--ink)}
+@media (max-width:700px){
+ .page{padding:var(--s3)}
+ .mast{flex-wrap:wrap}
+ h1{font-size:28px;margin:var(--s3) 0}
+ .grid{grid-template-columns:1fr;gap:var(--s5)}
+ table,thead,tbody{display:block}
+ tr{display:grid;grid-template-columns:72px 1fr;border-bottom:1px solid var(--ink)}
+ thead tr{border-bottom:2px solid var(--ink)}
+ th,td{border:0}
+ td.t{width:auto}
+ tr.next{grid-template-columns:1fr}
+ tr.next td{padding:var(--s3) 0 var(--s2) var(--s1)}
+ tr.next td+td{padding-top:0}
+ .stamp strong{font-size:44px}
+ .stamp{padding:var(--s1) var(--s3)}
+ .act{flex-wrap:wrap;gap:var(--s2) var(--s4);margin-top:var(--s3)}
+ button{width:100%}
+}
+</style></head><body><div class="page">
+<header class="mast"><b>Strata Lifts</b><span>Tower Bridge, Sunday 2 November</span></header>
+<h1>When Tower Bridge next opens, and for which ship</h1>
+<div class="grid">
+<section>
+<table>
+<thead><tr><th>Time</th><th>Vessel</th></tr></thead>
+<tbody>
+<tr class="next"><td class="t"><span class="stamp"><small>Next lift</small><strong>14:20</strong></span></td>
+<td><div class="vessel">Sailing barge Centaur</div><p class="road"><span class="dir">Upstream.</span> Road closes about 10 minutes, from 14:15.</p></td></tr>
+<tr><td class="t">16:05</td><td>MV Dixie Queen, <span class="dir">downstream</span></td></tr>
+<tr><td class="t">18:40</td><td>Tall ship Kaskelot, <span class="dir">upstream</span></td></tr>
+<tr><td class="t">20:15</td><td>Thames sailing barge Will, <span class="dir">downstream</span></td></tr>
+</tbody></table>
+<div class="act"><button type="button">Notify me before it lifts</button><span class="note">Illustrative times.</span></div>
+</section>
+<figure>
+<svg viewBox="0 0 400 300" role="img" aria-label="Tower Bridge with both bascules raised to 86 degrees, hinged at the two piers and rising towards each other" fill="none" stroke="#1F1B16" stroke-width="2">
+ <!-- side spans: suspension chains from tower tops to the banks -->
+ <path d="M0 212 L70 212 M330 212 L400 212"/>
+ <path d="M0 150 Q40 200 70 70 M400 150 Q360 200 330 70" stroke-width="2.5"/>
+ <!-- towers on piers -->
+ <path d="M70 250 V70 L95 34 L120 70 V250 Z M280 250 V70 L305 34 L330 70 V250 Z" fill="#ECE3CB" stroke-width="3"/>
+ <path d="M62 250 h66 v24 h-66 Z M272 250 h66 v24 h-66 Z" fill="#1F1B16"/>
+ <!-- high-level walkways -->
+ <path d="M120 70 H280 M120 84 H280" stroke-width="3"/>
+ <!-- closed deck position -->
+ <path d="M120 210 H280" stroke-dasharray="6 6" stroke="#4A4238"/>
+ <!-- bascules raised 86 degrees, hinged at each pier -->
+ <rect x="120" y="204" width="80" height="12" fill="#1F1B16" stroke="none" transform="rotate(-86 120 210)"/>
+ <rect x="200" y="204" width="80" height="12" fill="#1F1B16" stroke="none" transform="rotate(86 280 210)"/>
+ <circle cx="120" cy="210" r="5" fill="#ECE3CB" stroke-width="2.5"/><circle cx="280" cy="210" r="5" fill="#ECE3CB" stroke-width="2.5"/>
+ <!-- angle -->
+ <path d="M160 210 A40 40 0 0 0 122.8 170.1" stroke="#4A4238"/>
+ <text x="166" y="190" fill="#1F1B16" stroke="none" font-family="Liberation Sans Narrow,Arial Narrow,sans-serif" font-weight="700" font-size="20">86°</text>
+ <!-- clearance -->
+ <path d="M200 92 V242 M192 92 h16 M192 242 h16" stroke="#4A4238"/>
+ <text x="210" y="160" fill="#1F1B16" stroke="none" font-family="Liberation Sans Narrow,Arial Narrow,sans-serif" font-weight="700" font-size="20">61 m</text>
+ <!-- river -->
+ <path d="M0 250 H62 M128 250 H272 M338 250 H400"/>
+ <path d="M10 264 h28 M150 262 h30 M220 268 h34 M360 264 h28" stroke="#4A4238"/>
+</svg>
+<figcaption>Bascules open to 86 degrees, hinged at each pier. 61 m clearance when open.</figcaption>
+</figure>
+</div>
+</div></body></html>

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Ledgerline: check a COBOL change before it ships</title>
+  <meta name="description" content="Ledgerline compares the old and new program and signs a certificate.">
+  <style>.bar { width: 100%; } .unlock { color: red; }</style>
+</head>
+<body>
+  <h1>Check a COBOL change before it ships</h1>
+  <p>Ledgerline compares the original program with the changed one and runs 11 checks on the difference.</p>
+  <p>One bank team cut review time by 80% <cite>(source: pilot report, March 2026)</cite>.</p>
+  <div class="bar" style="width: 100%"></div>
+  <!-- copy-ok: the product locks a signed certificate; unlocking it is the real action -->
+  <button type="button">Unlock certificate for editing</button>
+  <a href="/report">Download the signed PDF</a>
+  <h2>A failed check names the line to fix</h2>
+  <p>The certificate names the failing check and the line. Fix the line and run it again.</p>
+  <script>function unlock(state) { return { ...state, seamless: true, ratio: 0.5 * 100 + '%' }; }</script>
+</body>
+</html>

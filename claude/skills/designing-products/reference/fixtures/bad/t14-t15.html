@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- Deliberately bad fixture: T14 (at 390 wide: horizontal overflow, 12px body text, tap targets under 44px, two labels overlapping) + T15 (cards nested in cards, a kicker above a heading, a 4px coloured side stripe, grey text on a coloured surface). Synthetic product. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shipwise orders</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: system-ui, sans-serif; background: #eef1f5; color: #1e293b; padding: 18px; font-size: 12px; }
+  .kicker { font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: #64748b; }
+  h1 { font-size: 26px; margin: 4px 0 14px; }
+  .card { background: #fff; border-radius: 14px; padding: 14px; box-shadow: 0 6px 20px rgba(15,23,42,.08); margin-bottom: 12px; }
+  .card .card { background: #f8fafc; }
+  .card .card .card { background: #fff; }
+  .stripe { border-left: 4px solid #f97316; }
+  .banner { background: #2563eb; color: #94a3b8; padding: 12px; border-radius: 10px; margin-bottom: 12px; }
+  table { width: 760px; border-collapse: collapse; }
+  td, th { padding: 6px 8px; text-align: left; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+  .tiny a { display: inline-block; font-size: 11px; padding: 2px 6px; border: 1px solid #cbd5e1; border-radius: 4px; color: #334155; text-decoration: none; }
+  .stage { position: relative; height: 34px; }
+  .stage span { position: absolute; top: 8px; font-weight: 600; }
+  .stage .a { left: 0; } .stage .b { left: 40%; }
+  .tools { display: flex; gap: 8px; width: 520px; }
+</style></head>
+<body>
+<div class="kicker">Operations</div>
+<h1>Orders</h1>
+<div class="banner">3 shipments are delayed at the Rotterdam hub. Carrier updates are pending for today.</div>
+<div class="tools tiny"><a href="#">Filter</a><a href="#">Sort</a><a href="#">Export CSV</a><a href="#">Columns</a><a href="#">Bulk edit</a><a href="#">Archive</a></div>
+<div class="card" style="margin-top:12px">
+  <div class="kicker">This week</div><b>Shipments</b>
+  <div class="card stripe">
+    <div class="stage"><span class="a">Dispatched from warehouse</span><span class="b">Awaiting carrier pickup</span></div>
+    <div class="card">
+      <table><tr><th>Order</th><th>Customer</th><th>Destination</th><th>Carrier</th><th>Status</th><th>ETA</th></tr>
+      <tr><td>#40211</td><td>Harbour Supply Co</td><td>Rotterdam, NL</td><td>Northline</td><td>Delayed</td><td>4 Nov</td></tr>
+      <tr><td>#40212</td><td>Kestrel Outdoor</td><td>Leeds, UK</td><td>Northline</td><td>In transit</td><td>3 Nov</td></tr>
+      <tr><td>#40213</td><td>Mill Lane Bakery</td><td>Bristol, UK</td><td>Parcelway</td><td>Delivered</td><td>2 Nov</td></tr></table>
+    </div>
+  </div>
+</div>
+</body></html>

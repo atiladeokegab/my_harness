@@ -1,0 +1,33 @@
+.kit-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: var(--kit-scrim);
+  transition: opacity var(--kit-duration-enter) var(--kit-ease);
+}
+.kit-scrim[data-entering], .kit-scrim[data-exiting] { opacity: 0; }
+.kit-dialog {
+  inline-size: min(100%, calc(var(--space-8) * 12));
+  max-block-size: calc(100dvh - var(--space-8));
+  overflow: auto;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border: var(--kit-hairline) solid var(--color-border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--kit-shadow-overlay);
+  transition: transform var(--kit-duration-enter) var(--kit-ease);
+}
+.kit-dialog[data-entering] { transform: translateY(var(--space-2)); }
+.kit-dialog__inner { display: grid; gap: var(--space-4); padding: var(--space-6); outline: none; }
+.kit-dialog__title {
+  margin: 0;
+  font-family: var(--type-h3-font-family);
+  font-size: var(--type-h3-font-size);
+  font-weight: var(--type-h3-font-weight);
+  line-height: var(--type-h3-line-height);
+  letter-spacing: var(--type-h3-letter-spacing);
+}
+.kit-dialog__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }

@@ -1,0 +1,119 @@
+/* Generated from DESIGN.md by tokens-from-design.mjs. Do not edit: change DESIGN.md and rerun. */
+:root {
+  /* colors */
+  --color-accent-50: #E4FFEA;
+  --color-accent-100: #C0FFCE;
+  --color-accent-200: #8DF6AA;
+  --color-accent-300: #5AE086;
+  --color-accent-400: #00D46A;
+  --color-accent-500: #00A652;
+  --color-accent-600: #008942;
+  --color-accent-700: #006C33;
+  --color-accent-800: #005225;
+  --color-accent-900: #003616;
+  --color-accent-950: #001706;
+  --color-neutral-50: #F3F8F4;
+  --color-neutral-100: #E9EEEA;
+  --color-neutral-200: #D6DDD7;
+  --color-neutral-300: #BCC3BD;
+  --color-neutral-400: #9FA7A0;
+  --color-neutral-500: #858D86;
+  --color-neutral-600: #6C746D;
+  --color-neutral-700: #545C56;
+  --color-neutral-800: #3F4641;
+  --color-neutral-900: #282D29;
+  --color-neutral-950: #101210;
+  --color-bg: #101210;
+  --color-surface: #282D29;
+  --color-border: #3F4641;
+  --color-ink: #E9EEEA;
+  --color-muted: #9FA7A0;
+  --color-accent: #00D46A;
+  --color-on-accent: #101210;
+  --color-accent-text: #00D46A;
+  --color-success: #53BE70;
+  --color-warning: #DF911A;
+  --color-danger: #F47C70;
+  --color-info: #43ACFB;
+  --color-data-1: #3987E5;
+  --color-data-2: #D95926;
+  --color-data-3: #199E70;
+  --color-data-4: #C98500;
+  --color-data-5: #D55181;
+  --color-data-6: #008300;
+  --color-data-7: #9085E9;
+  --color-data-8: #E66767;
+  /* typography */
+  --type-caption-font-family: Inter, sans-serif;
+  --type-caption-font-size: 13px;
+  --type-caption-font-weight: 400;
+  --type-caption-line-height: 1.5;
+  --type-caption-letter-spacing: 0.01em;
+  --type-body-font-family: Inter, sans-serif;
+  --type-body-font-size: 16px;
+  --type-body-font-weight: 400;
+  --type-body-line-height: 1.5;
+  --type-body-letter-spacing: 0em;
+  --type-label-font-family: Inter, sans-serif;
+  --type-label-font-size: 16px;
+  --type-label-font-weight: 600;
+  --type-label-line-height: 1.3;
+  --type-label-letter-spacing: 0em;
+  --type-lead-font-family: Inter, sans-serif;
+  --type-lead-font-size: 20px;
+  --type-lead-font-weight: 400;
+  --type-lead-line-height: 1.4;
+  --type-lead-letter-spacing: 0em;
+  --type-h3-font-family: "Work Sans", sans-serif;
+  --type-h3-font-size: 25px;
+  --type-h3-font-weight: 400;
+  --type-h3-line-height: 1.3;
+  --type-h3-letter-spacing: -0.005em;
+  --type-h2-font-family: "Work Sans", sans-serif;
+  --type-h2-font-size: 31px;
+  --type-h2-font-weight: 400;
+  --type-h2-line-height: 1.2;
+  --type-h2-letter-spacing: -0.010em;
+  --type-h1-font-family: "Work Sans", sans-serif;
+  --type-h1-font-size: 39px;
+  --type-h1-font-weight: 400;
+  --type-h1-line-height: 1.1;
+  --type-h1-letter-spacing: -0.015em;
+  /* rounded */
+  --radius-control: 6px;
+  --radius-panel: 12px;
+  --radius-pill: 100px;
+  /* spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+  /* components */
+  --button-primary-background-color: var(--color-accent);
+  --button-primary-text-color: var(--color-on-accent);
+  --button-primary-typography-font-family: var(--type-label-font-family);
+  --button-primary-typography-font-size: var(--type-label-font-size);
+  --button-primary-typography-font-weight: var(--type-label-font-weight);
+  --button-primary-typography-line-height: var(--type-label-line-height);
+  --button-primary-typography-letter-spacing: var(--type-label-letter-spacing);
+  --button-primary-rounded: var(--radius-control);
+  --card-background-color: var(--color-surface);
+  --card-rounded: var(--radius-panel);
+  --card-padding: var(--space-8);
+  /* breakpoints: the two judge sizes; media queries cannot read these, so write 390px and 1280px there */
+  --bp-phone: 390px;
+  --bp-desktop: 1280px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

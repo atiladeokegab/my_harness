@@ -1,0 +1,48 @@
+# check-copy.mjs reads this: `phrase | reason`, one per line. Case does not matter; a space or hyphen
+# matches either; a trailing * matches any ending (unlock* finds unlocks, unlocking). A product appends
+# its own lines to its copy. A real use (a vault that unlocks) takes `copy-ok: <reason>` on its line.
+# Hype: rubric T7, the lead's list.
+revolution* | hype; say what changed and for whom
+seamless* | hype; name the step that disappeared
+unlock* | metaphor; say what the user can now do
+game changer | hype; say what changed, with a number and its source
+game changing | hype; say what changed, with a number and its source
+harness the power | filler; name the thing and what it does
+elevate* | metaphor; say what gets better and by how much
+supercharg* | hype; say what gets faster and by how much
+effortless* | an unprovable claim; show the steps instead
+in today's fast paced | filler opener; start with the product
+powerful | says nothing checkable; name what it can do
+reimagin* | hype; say what is different
+unleash* | metaphor; say what the user can now do
+cutting edge | hype; name the technique
+next generation | hype; name what is new
+best in class | an unsourced ranking; cite the comparison or cut it
+world class | an unsourced ranking; cite the comparison or cut it
+state of the art | an unsourced ranking; name the method and its result
+to the next level | filler; say what improves
+look no further | filler opener
+one stop shop | metaphor (GOV.UK metaphors to avoid); list the jobs it does
+all in one | abstraction; list the jobs it does
+ai powered | says how, not what; say what it does to what
+blazing* | hype; give the time
+lightning fast | hype; give the time
+magic* | hides what happens; say what it does
+delve* | filler verb; say what you will show
+# Abstractions: GOV.UK style guide, "Words to avoid".
+leverag* | abstraction (GOV.UK words to avoid); say "use"
+empower* | abstraction (GOV.UK words to avoid); say what the user can do
+facilitat* | abstraction (GOV.UK words to avoid); say what you do
+robust | abstraction (GOV.UK words to avoid); say what it survives
+streamlin* | abstraction (GOV.UK words to avoid); say which steps go
+utilis* | long word (GOV.UK words to avoid); say "use"
+utiliz* | long word (GOV.UK words to avoid); say "use"
+synerg* | abstraction; say who works with whom on what
+solution | abstraction; name the product or what it does
+solutions | abstraction; name the product or what it does
+# Hedges: plain-language guidance, active and direct.
+can help | hedge; say what it does
+may help | hedge; say what it does
+helps to | hedge; say what it does
+simply | hedge; if it is simple the steps show it
+arguably | hedge; make the claim with its source or cut it

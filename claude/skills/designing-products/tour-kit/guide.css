@@ -1,0 +1,55 @@
+/* The judge tour's card and ring (Guide.jsx). Position, width and max height are set every frame by guide.js
+   cardPlace: inside the stage the chrome leaves clear, at the edge farthest from the spot. Map the --guide-* tokens
+   to the product's tokens.css; the fallbacks are a neutral dark glass. */
+.guide-card {
+  --g-bg: var(--guide-bg, rgba(18, 18, 20, .88)); --g-ink: var(--guide-ink, #f4f4f5); --g-muted: var(--guide-muted, #a1a1aa);
+  --g-line: var(--guide-line, rgba(255, 255, 255, .14)); --g-accent: var(--guide-accent, #f4f4f5); --g-on-accent: var(--guide-on-accent, #111);
+  position: fixed; z-index: 1000; box-sizing: border-box; overflow: auto; padding: 16px 20px 14px;
+  border: 1px solid var(--g-line); border-radius: 16px; background: var(--g-bg); color: var(--g-ink);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+  font-size: 15px; line-height: 1.45; font-family: var(--guide-font, inherit); animation: guide-in .4s cubic-bezier(.2, .8, .2, 1) both;
+}
+.guide-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.guide-count { margin: 0; font-size: 12px; letter-spacing: .04em; color: var(--g-muted); }
+.guide-skip { flex: none; height: 32px; padding: 0 12px; border: 1px solid var(--g-line); border-radius: 999px; background: transparent;
+  color: var(--g-ink); font-family: inherit; font-size: 13px; font-weight: 500; line-height: 1; cursor: pointer; }
+.guide-card h2 { margin: 0 0 4px; font-family: var(--guide-heading-font, inherit); font-size: 19px; font-weight: 600; line-height: 1.25; letter-spacing: -.01em; color: var(--g-ink); }
+.guide-card p { margin: 0; }
+.guide-caption { overflow-wrap: anywhere; }
+.guide-readout { margin-top: 6px !important; color: var(--g-muted); overflow-wrap: anywhere; }
+.guide-body { animation: guide-fade .3s ease both; }
+.guide-stops { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.guide-stops button { height: 32px; padding: 0 12px; border: 1px solid var(--g-line); border-radius: 999px; background: transparent; color: var(--g-ink); font: inherit; cursor: pointer; }
+.guide-stops button.on { background: var(--g-accent); color: var(--g-on-accent); border-color: var(--g-accent); }
+.guide-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 12px; }
+.guide-dots { display: flex; min-width: 0; }
+.guide-dots button { flex: none; width: 11px; height: 24px; padding: 0; border: 0; background: none; display: grid; place-items: center; cursor: pointer; }
+.guide-dots button::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--g-line); }
+.guide-dots button.done::before { background: var(--g-muted); }
+.guide-dots button.on { width: 24px; }
+.guide-dots button.on::before { width: 18px; border-radius: 3px; background: var(--g-ink); }
+.guide-nav { display: flex; gap: 8px; flex: none; margin-left: auto; }
+.guide-nav button { height: 36px; padding: 0 16px; border-radius: 999px; font-family: inherit; font-size: 14px; font-weight: 600; line-height: 1; cursor: pointer; }
+.guide-back { border: 1px solid var(--g-line); background: transparent; color: var(--g-ink); }
+.guide-next { min-width: 88px; border: 1px solid var(--g-accent); background: var(--g-accent); color: var(--g-on-accent); }
+.guide-card button:focus-visible { outline: 2px solid var(--g-ink); outline-offset: 2px; }
+
+[data-guide-hidden] { visibility: hidden !important; } /* the phone's spare chrome while a card is up (guide.js) */
+
+.guide-spot { position: fixed; z-index: 999; pointer-events: none; opacity: 0; border-radius: 14px;
+  box-shadow: 0 0 0 2px var(--guide-ring, #f4f4f5), 0 0 0 6px rgba(255, 255, 255, .35);
+  transition: left .3s, top .3s, width .3s, height .3s, opacity .3s; animation: guide-pulse 2.4s ease-in-out infinite; }
+
+@media (max-width: 900px) { /* keep in step with tour.json's phone width */
+  .guide-card { padding: 12px 14px 10px; font-size: 14px; }
+  .guide-card h2 { font-size: 17px; }
+  .guide-foot { margin-top: 8px; }
+  .guide-dots button { width: 8px; }
+  .guide-dots button::before { width: 5px; height: 5px; }
+  .guide-dots button.on { width: 16px; }
+  .guide-dots button.on::before { width: 12px; }
+}
+@keyframes guide-in { from { opacity: 0; transform: translateY(10px); } }
+@keyframes guide-fade { from { opacity: 0; } }
+@keyframes guide-pulse { 50% { box-shadow: 0 0 0 2px var(--guide-ring, #f4f4f5), 0 0 0 9px rgba(255, 255, 255, .2); } }
+@media (prefers-reduced-motion: reduce) { .guide-card, .guide-body, .guide-spot { animation: none; transition: none; } }

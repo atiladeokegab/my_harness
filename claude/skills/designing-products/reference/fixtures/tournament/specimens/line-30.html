@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Strata Lifts</title>
+<style>
+/* type: 14 16 22 44 80; space: 4 8 16 24 32 48 */
+:root{--ground:#F2F4F6;--ink:#20262E;--muted:#4A5562;--rule:#D3DAE1;--bridge:#5E7E9E;--water:#D3DDE6;--hull:#000;--accent:#C2410C}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--ground);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-variant-numeric:tabular-nums;min-height:100vh;position:relative;overflow-x:hidden}
+::selection{background:var(--ink);color:var(--ground)}
+header{display:flex;justify-content:space-between;gap:16px;padding:16px 48px;border-bottom:1px solid var(--rule)}
+header b{margin-right:8px}
+header span{color:var(--muted)}
+.info{position:relative;z-index:1;padding:32px 48px 0;max-width:520px}
+h1{font:400 80px/1 Georgia,"Times New Roman",serif;letter-spacing:-.02em;margin:0}
+.kind{font-size:22px;line-height:1.3;margin:8px 0 24px}
+.when{display:flex;align-items:center;gap:16px;margin-bottom:24px}
+.time{font-size:44px;line-height:1;font-weight:600;color:var(--accent);letter-spacing:-.01em}
+.when p{margin:0;color:var(--muted)}
+button{font-family:inherit;font-size:16px;font-weight:600;line-height:1.4;color:#fff;background:var(--accent);border:0;border-radius:8px;min-height:52px;padding:0 24px;cursor:pointer}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+table{border-collapse:collapse;margin-top:32px}
+caption{text-align:left;font-weight:600;padding-bottom:4px}
+caption span{font-weight:400;font-size:14px;color:var(--muted);margin-left:8px}
+td{padding:4px 16px 4px 0;border-top:1px solid var(--rule);vertical-align:top}
+td:last-child{color:var(--muted);padding-right:0}
+.scene{position:absolute;right:0;bottom:0;width:800px;height:460px;overflow:visible}
+.scene text{font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:2.8px;fill:var(--muted)}
+.river{position:absolute;left:0;right:0;bottom:0;height:65px;background:var(--water)}
+@media (max-width:700px){
+  body{display:flex;flex-direction:column}
+  header{display:block;padding:16px}
+  .river{display:none}
+  .scene{position:static;order:1;width:100%;height:198px;display:block}
+  .scene text{font-size:5.75px}
+  .info{order:2;padding:16px 16px 0;max-width:none}
+  .kind{margin:8px 0 16px}
+  .when{margin-bottom:16px}
+  button{width:100%}
+  table{margin-top:16px;width:100%}
+}
+</style></head>
+<body>
+<header><div><b>Strata Lifts</b>When Tower Bridge next opens, and for which ship.</div><span>Sunday 2 November</span></header>
+
+<div class="river" aria-hidden="true"></div>
+
+<svg class="scene" viewBox="0 18 160 92" preserveAspectRatio="xMidYMax slice" role="img" aria-label="Side view of Tower Bridge with both bascules raised to 86 degrees and the sailing barge Centaur passing between them, heading upstream">
+  <defs><pattern id="lat" width="3.05" height="2" patternUnits="userSpaceOnUse" x="49.5" y="52.5"><path d="M0 2L1.525 0L3.05 2" fill="none" stroke="#5E7E9E" stroke-width=".35"/></pattern></defs>
+  <rect x="-200" y="97" width="400" height="20" fill="#D3DDE6"/>
+  <g fill="#5E7E9E">
+    <!-- approach spans run off the left and right -->
+    <rect x="-120" y="87" width="152" height="2"/><rect x="128" y="87" width="80" height="2"/>
+    <path d="M33.5 52Q14 80-10 86.5" fill="none" stroke="#5E7E9E" stroke-width="1"/>
+    <path d="M126.5 52Q146 80 170 86.5" fill="none" stroke="#5E7E9E" stroke-width="1"/>
+    <!-- piers -->
+    <rect x="30" y="88" width="24" height="9"/><rect x="106" y="88" width="24" height="9"/>
+    <!-- towers -->
+    <g id="tw">
+      <path d="M33.5 88V42h16v46h-3.5v-7a4.5 4.5 0 0 0-9 0v7Z"/>
+      <rect x="33.5" y="37" width="3" height="5"/><rect x="46.5" y="37" width="3" height="5"/>
+      <path d="M33.5 37l1.5-5 1.5 5ZM46.5 37l1.5-5 1.5 5ZM37 42l4.5-12 4.5 12Z"/>
+    </g>
+    <use href="#tw" transform="translate(77 0)"/>
+    <!-- high walkways -->
+    <rect x="49.5" y="51.5" width="61" height="1"/><rect x="49.5" y="54.5" width="61" height="1"/>
+    <rect x="49.5" y="52.5" width="61" height="2" fill="url(#lat)"/>
+    <!-- bascules: hinged at the piers, raised to 86 degrees, leaning towards each other -->
+    <path d="M50 88L52.13 57.57L53.73 57.46L53.19 87.78Z"/>
+    <path d="M110 88L107.87 57.57L106.27 57.46L106.81 87.78Z"/>
+  </g>
+  <g fill="#F2F4F6">
+    <path d="M39.5 72v-12a2 2 0 0 1 4 0v12ZM116.5 72v-12a2 2 0 0 1 4 0v12Z"/>
+    <path d="M39.5 50v-3a2 2 0 0 1 4 0v3ZM116.5 50v-3a2 2 0 0 1 4 0v3Z"/>
+  </g>
+  <!-- Centaur, sailing barge, bow to the left: upstream -->
+  <g fill="#000" stroke="#000" stroke-linejoin="round">
+    <path d="M70.3 66.5V77.5L83.5 75Z" fill-opacity=".85" stroke-width=".2"/>
+    <path d="M70.3 78V92.5L85 92.8L83.5 75.2Z" fill-opacity=".85" stroke-width=".2"/>
+    <path d="M69.6 74L61.8 93.4H69.4Z" fill-opacity=".85" stroke-width=".2"/>
+    <path d="M89.4 86V93.6L93 93.4Z" fill-opacity=".85" stroke-width=".2"/>
+    <path d="M70 94V65.5M89 94.5V85M61 93.8L56.5 92.6M70.6 91L84 74.6" fill="none" stroke-width=".6"/>
+    <path d="M61 93.6L88.5 94.4L90.5 94.9L89.3 97.4H63Z" stroke-width=".2"/>
+  </g>
+  <path d="M91 98.2H101M93 99.4H99" stroke="#F2F4F6" stroke-width=".35"/>
+  <!-- annotations -->
+  <g fill="none" stroke="#4A5562" stroke-width=".3">
+    <path d="M110 88H101" stroke-dasharray="1 .8"/>
+    <path d="M102 88A8 8 0 0 1 109.44 80.02"/>
+    <path d="M49.5 47H110.5M49.5 45.5V48.5M110.5 45.5V48.5"/>
+  </g>
+  <text x="100.5" y="81.5" text-anchor="end">86°</text>
+  <text x="80" y="45.4" text-anchor="middle">61 m clearance</text>
+</svg>
+
+<main class="info">
+  <h1>Centaur</h1>
+  <p class="kind">Sailing barge, heading upstream</p>
+  <div class="when">
+    <span class="time">14:20</span>
+    <p>Next lift. Road closes from 14:15, about 10 minutes.</p>
+  </div>
+  <button type="button">Notify me before it lifts</button>
+  <table>
+    <caption>Later today<span>Illustrative times.</span></caption>
+    <tr><td>16:05</td><td>MV Dixie Queen</td><td>downstream</td></tr>
+    <tr><td>18:40</td><td>Tall ship Kaskelot</td><td>upstream</td></tr>
+    <tr><td>20:15</td><td>Thames sailing barge Will</td><td>downstream</td></tr>
+  </table>
+</main>
+</body></html>

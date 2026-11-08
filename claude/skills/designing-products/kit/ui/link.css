@@ -1,0 +1,13 @@
+.kit-link {
+  color: var(--color-accent-text);
+  text-decoration: underline;
+  text-decoration-thickness: var(--kit-hairline);
+  text-underline-offset: 0.2em;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: text-decoration-thickness var(--kit-duration) var(--kit-ease);
+}
+.kit-link[data-hovered] { text-decoration-thickness: var(--kit-ring); }
+.kit-link[data-pressed] { color: var(--color-ink); }
+/* Disabled still reads as a link, plainly off: muted, with a dotted underline. */
+.kit-link[data-disabled] { color: var(--color-muted); text-decoration-style: dotted; cursor: not-allowed; }

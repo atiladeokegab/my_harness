@@ -1,0 +1,14 @@
+.kit-scrim--sheet { place-items: stretch end; padding: 0; }
+.kit-sheet {
+  inline-size: min(100% - var(--space-8), calc(var(--space-8) * 11)); /* the scrim always shows at the edge */
+  block-size: 100dvh;
+  overflow: auto;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border-inline-start: var(--kit-hairline) solid var(--color-border);
+  box-shadow: var(--kit-shadow-overlay);
+  transition: transform var(--kit-duration-enter) var(--kit-ease);
+}
+.kit-sheet[data-entering], .kit-sheet[data-exiting] { transform: translateX(100%); }
+.kit-sheet__inner { align-content: start; min-block-size: 100%; }
+.kit-sheet__head { display: flex; align-items: start; justify-content: space-between; gap: var(--space-3); }

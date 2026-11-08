@@ -1,0 +1,22 @@
+{
+  "pass": {
+    "product": "Hub (fixtures/hub/DESIGN.md)",
+    "seed": "#0E7C86",
+    "harmony": "split",
+    "why": "a teal whose luminance sits inside the narrow band where it is a control on both grounds and carries a label"
+  },
+  "darkOnly": {
+    "product": "Refinery (fixtures/refinery-dark/DESIGN.md, themes: [dark])",
+    "seed": "#00D46A",
+    "harmony": "tonal",
+    "themes": ["dark"],
+    "why": "a product that commits to the dark theme is checked on dark only: the green is 9.52:1 on its ground"
+  },
+  "reject": {
+    "product": "Refinery's green with both themes declared",
+    "seed": "#00D46A",
+    "harmony": "tonal",
+    "why": "a dark-theme accent: as a control on the light page it is 1.68:1, under WCAG 1.4.11's 3:1",
+    "fails": [["light", "accent", "bg"]]
+  }
+}

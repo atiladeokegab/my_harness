@@ -1,0 +1,106 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strata Lifts</title><style>
+@font-face{font-family:"IBM Plex Sans";font-style:normal;font-weight:400;font-display:block;src:url("../fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Sans";font-style:normal;font-weight:600;font-display:block;src:url("../fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Sans";font-style:normal;font-weight:700;font-display:block;src:url("../fonts/ibm-plex-sans-latin-700-normal.woff2") format("woff2")}
+:root{--paper:#F6F8FA;--ink:#1F2328;--ink2:#4A525C;--rule:#1F2328;--hair:#C9CFD6;--red:#B3161B;
+--sans:"IBM Plex Sans",sans-serif;scrollbar-color:var(--ink2) var(--paper)}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);font:400 16px/1.5 var(--sans);font-variant-numeric:tabular-nums;caret-color:var(--red)}
+::selection{background:var(--ink);color:var(--paper)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.sheet{margin:16px;min-height:calc(100svh - 32px);border:2px solid var(--rule);display:grid;grid-template-columns:1fr 440px;
+grid-template-areas:"draw next" "draw later" "draw meta";grid-template-rows:auto 1fr auto}
+.draw{grid-area:draw;padding:16px 24px 16px;display:flex;flex-direction:column;min-width:0}
+.bar{display:flex;justify-content:space-between;font-size:16px}
+.bar b{font-weight:700}
+h1{margin:16px 0 0;font-size:28px;line-height:1.2;font-weight:600;letter-spacing:-.015em}
+h2{margin:0 0 8px;font-size:14px;font-weight:700;color:var(--ink2)}
+svg.fig{display:block;width:100%;flex:1;min-height:0;margin-top:8px}
+svg.m{display:none}
+.later,.next,.meta{border-left:2px solid var(--rule);padding:16px 24px}
+.later{grid-area:later;border-top:2px solid var(--rule)}
+.next{grid-area:next}
+.meta{grid-area:meta;border-top:1px solid var(--rule);display:flex;justify-content:space-between;font-size:14px;color:var(--ink2);padding-top:12px;padding-bottom:12px}
+table{border-collapse:collapse;width:100%}
+td{padding:4px 0;border-top:1px solid var(--hair);font-size:16px;vertical-align:baseline}
+td.t{font-weight:600;width:72px}
+td.dir{color:var(--ink2);text-align:right}
+tr.unc td.t{color:var(--ink2)}
+.unc-note{display:block;font-size:14px;font-weight:600;color:var(--ink2)}
+tr.end td{color:var(--ink2);font-size:14px;padding-top:8px}
+.time{margin:0;font:600 64px/1 var(--sans);color:var(--red);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+svg text{font-family:var(--sans);font-variant-numeric:tabular-nums}
+.next p{margin:0}
+.vessel{margin-top:12px!important;font-size:20px;font-weight:600;line-height:1.3}
+.road,.checked{color:var(--ink2)}
+.checked{font-size:14px;margin-top:4px!important}
+a{color:inherit;text-decoration-thickness:1px;text-underline-offset:4px}
+a.row{display:flex;align-items:center;min-height:44px}
+a.back{display:inline-flex;align-items:center;min-height:44px;font-weight:600;margin-top:4px}
+.btn{display:flex;align-items:center;justify-content:center;margin-top:16px;width:100%;min-height:52px;border:0;border-radius:4px;background:var(--red);color:#fff;font:700 20px/1.2 var(--sans);text-align:center;text-decoration:none;cursor:pointer;padding:8px 16px;text-wrap:balance}
+.btn.alt{background:transparent;color:var(--ink);border:2px solid var(--ink)}
+.btn:focus-visible,a:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.facts{margin:16px 0 0;display:grid;grid-template-columns:auto 1fr;gap:0 16px}
+.facts dt,.facts dd{margin:0;padding:6px 0;border-top:1px solid var(--hair)}
+.facts dt{font-size:14px;font-weight:700;color:var(--ink2);padding-top:8px}
+.sub{font-size:20px;line-height:1.35;margin-top:12px!important}
+@media (max-width:700px){
+.sheet{margin:8px;min-height:0;grid-template-columns:1fr;grid-template-areas:"draw" "next" "later" "meta";grid-template-rows:auto}
+.draw{padding:12px 16px 8px}
+h1{margin-top:12px}
+svg.d{display:none}svg.m{display:block;flex:none;height:auto}
+.later,.next,.meta{border-left:0;padding:16px}
+.later{border-top:1px solid var(--rule)}
+.next{border-top:0}
+.meta{flex-direction:column}
+.facts{grid-template-columns:1fr}.facts dd{border-top:0;padding-top:0}
+}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0 1L10 5L0 9z" fill="#B3161B"/></marker>
+<marker id="tk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0 1L10 5L0 9z" fill="#1F2328"/></marker>
+<g id="bridge" fill="none" stroke="#1F2328" stroke-width="1.5">
+ <path d="M0 430H846" stroke-width="1"/><path d="M20 442h40M110 448h30M300 442h50M470 448h40M690 442h40M780 448h40" stroke="#8A939E" stroke-width="1"/>
+ <path d="M150 470V70l22-26h46l22 26v400M150 70h90M150 380h90"/>
+ <path d="M606 470V70l22-26h46l22 26v400M606 70h90M606 380h90"/>
+ <path d="M172 44l23-16 23 16M628 44l23-16 23 16"/>
+ <path d="M178 110v40M195 110v40M212 110v40M178 220v40M195 220v40M212 220v40M634 110v40M651 110v40M668 110v40M634 220v40M651 220v40M668 220v40" stroke-width="1"/>
+ <path d="M240 100H606M240 128H606"/>
+ <path d="M240 128l18-28 18 28 18-28 18 28 18-28 18 28 18-28 18 28 18-28 18 28 18-28 18 28 18-28 18 28 18-28 18 28 18-28 18 28 18-28 18 28" stroke-width="1"/>
+ <path d="M0 380H150M0 392H150M696 380H846M696 392H846"/>
+ <path d="M150 150Q92 392 30 290M696 150Q754 392 816 290"/>
+ <path d="M0 470V290h30v180M846 470V290h-30v180"/>
+ <path d="M60 380V344M90 380V362M120 380V330M786 380V344M756 380V362M726 380V330" stroke-width="1"/>
+</g>
+<g id="raised" fill="none" stroke="#1F2328" stroke-width="1.5">
+ <path d="M240 380H423M606 380H423" stroke-dasharray="14 4 2 4" stroke-width="1"/>
+ <g transform="rotate(-86 240 380)"><rect x="240" y="368" width="183" height="22" fill="#1F2328" stroke="none"/><rect x="180" y="373" width="60" height="14" stroke-dasharray="5 3" stroke-width="1"/></g>
+ <g transform="rotate(86 606 380)"><rect x="423" y="368" width="183" height="22" fill="#1F2328" stroke="none"/><rect x="606" y="373" width="60" height="14" stroke-dasharray="5 3" stroke-width="1"/></g>
+ <circle cx="240" cy="380" r="4" fill="#F6F8FA"/><circle cx="606" cy="380" r="4" fill="#F6F8FA"/>
+ <path d="M340 380A100 100 0 0 0 247 280.2" stroke="#B3161B" stroke-width="2.5" marker-start="url(#ah)" marker-end="url(#ah)"/>
+</g>
+<g id="dim" fill="none" stroke="#1F2328" stroke-width="1">
+ <path d="M240 400v26M606 400v26"/><path d="M242 418H604" marker-start="url(#tk)" marker-end="url(#tk)"/>
+</g>
+<g id="closed" fill="none" stroke="#1F2328" stroke-width="1.5">
+ <rect x="240" y="368" width="183" height="22" fill="#1F2328" stroke="none"/><rect x="423" y="368" width="183" height="22" fill="#1F2328" stroke="none"/>
+ <rect x="180" y="373" width="60" height="14" stroke-dasharray="5 3" stroke-width="1"/><rect x="606" y="373" width="60" height="14" stroke-dasharray="5 3" stroke-width="1"/>
+ <path d="M423 368v22" stroke="#F6F8FA" stroke-width="2"/>
+ <circle cx="240" cy="380" r="4" fill="#F6F8FA"/><circle cx="606" cy="380" r="4" fill="#F6F8FA"/>
+</g>
+</defs></svg>
+<main class="sheet">
+ <section class="draw">
+  <div class="bar"><b>Strata Lifts</b><span>Sunday 2 November</span></div>
+  <h1>No more lifts today.</h1>
+  <svg class="fig d" viewBox="0 20 846 460" role="img" aria-label="Elevation of Tower Bridge with both bascules down and the road open"><use href="#bridge"/><use href="#closed"/></svg>
+  <svg class="fig m" viewBox="0 20 846 460" role="img" aria-label="Elevation of Tower Bridge with both bascules down and the road open"><use href="#bridge"/><use href="#closed"/></svg>
+ </section>
+ <section class="next" style="grid-area:next / next / later / later">
+  <h2>Next lift</h2>
+  <p class="sub">Monday 3 November, 07:50, MV Balmoral, heading downstream.</p>
+  <button class="btn" type="button">Notify me 15 minutes before it lifts</button>
+ </section>
+<footer class="meta"><span>Illustrative times.</span></footer>
+</main>
+</body></html>

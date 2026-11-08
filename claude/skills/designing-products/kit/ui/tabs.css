@@ -1,0 +1,39 @@
+.kit-tabs { display: grid; gap: var(--space-4); }
+.kit-tablist {
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  border-block-end: var(--kit-hairline) solid var(--color-border);
+}
+.kit-tab {
+  position: relative;
+  min-block-size: var(--control-height);
+  display: inline-flex;
+  align-items: center;
+  padding-inline: var(--space-3);
+  color: var(--color-muted);
+  font-family: var(--type-label-font-family);
+  font-size: var(--type-label-font-size);
+  font-weight: var(--type-label-font-weight);
+  white-space: nowrap;
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+  cursor: pointer;
+  transition: color var(--kit-duration) var(--kit-ease), background-color var(--kit-duration) var(--kit-ease);
+}
+.kit-tab::after {
+  content: '';
+  position: absolute;
+  inset-inline: var(--space-3);
+  inset-block-end: calc(var(--kit-hairline) * -1);
+  block-size: var(--kit-ring);
+  background: transparent;
+  transition: background-color var(--kit-duration) var(--kit-ease);
+}
+.kit-tab[data-hovered] { color: var(--color-ink); background: var(--kit-hover); }
+.kit-tab[data-pressed] { background: var(--kit-press); }
+.kit-tab[data-selected] { color: var(--color-ink); }
+.kit-tab[data-selected]::after { background: var(--color-accent); }
+.kit-tab[data-disabled] { opacity: var(--kit-disabled); cursor: not-allowed; }
+.kit-tab[data-focus-visible] { outline-offset: calc(var(--kit-ring) * -1); }
+.kit-tabpanel { border-radius: var(--radius-control); }
+.kit-tabpanel[aria-busy] { display: grid; place-items: center; min-block-size: calc(var(--control-height) * 2); color: var(--color-muted); }

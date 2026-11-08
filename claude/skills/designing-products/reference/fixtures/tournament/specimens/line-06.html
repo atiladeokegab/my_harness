@@ -1,0 +1,132 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strata Lifts</title>
+<style>
+:root{--ink:#1b2a47;--ink2:#46536b;--steel:#1f3358;--stone:#e6e3dd;--hatch:#a29e96;--water:#dde5ee;--accent:#c2410c;
+--sans:-apple-system,"Segoe UI","Helvetica Neue",Arial,sans-serif;--serif:Georgia,"Times New Roman",serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#fff;color:var(--ink);font:16px/1.5 var(--sans);font-variant-numeric:tabular-nums;overflow-x:hidden}
+::selection{background:var(--ink);color:#fff}
+.name{font-weight:600}.name span{font-weight:400;color:var(--ink2)}
+h1{font-size:28px;line-height:1.2;font-weight:600;letter-spacing:-0.01em;margin-top:8px}
+.label{font-weight:600;color:var(--ink2)}
+.time{font-size:96px;line-height:1;font-weight:700;letter-spacing:-0.03em;color:var(--accent)}
+.vessel{font-size:20px;line-height:1.4;font-weight:600;margin-top:8px}
+.road{color:var(--ink2)}
+button{display:inline-block;margin-top:16px;min-height:48px;padding:12px 24px;border:0;border-radius:6px;background:var(--accent);color:#fff;font:600 16px/24px var(--sans);cursor:pointer}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.later h2{font-size:16px;font-weight:600}
+table{border-collapse:collapse;margin-top:8px}
+td{padding:8px 16px 8px 0;border-top:1px solid #d4d0c8;vertical-align:baseline}
+td:first-child{font-weight:600}
+.note,.cap{font:italic 14px/1.4 var(--serif);color:var(--ink2)}
+.note{margin-top:8px}
+svg text{font-family:var(--serif);font-style:italic;font-size:14px;fill:var(--ink2)}
+.m{display:none}
+/* desktop: the section drawing is the page; text sits in its voids */
+@media (min-width:700px){
+ body{width:1280px;height:633px;position:relative;overflow:hidden}
+ .d{position:absolute;left:0;top:0}
+ header{position:absolute;left:40px;top:32px;width:540px}
+ .next{position:absolute;left:72px;top:346px;width:460px}
+ .later{position:absolute;left:724px;top:96px;width:400px}
+ .cap{display:none}
+}
+@media (max-width:699px){
+ .d{display:none}.m{display:block;width:100%;height:auto;margin-top:16px}
+ header{padding:16px 16px 0}
+ .cap{padding:8px 16px 0}
+ .next{padding:16px}
+ .later{padding:64px 16px 32px}
+ button{width:100%}
+}
+</style></head><body>
+<header>
+ <p class="name">Strata Lifts <span>Tower Bridge, Sunday 2 November</span></p>
+ <h1>When Tower Bridge next lifts, and for which ship.</h1>
+</header>
+
+<svg class="d" width="1280" height="633" viewBox="0 0 1280 633" aria-hidden="true">
+ <defs>
+  <pattern id="h" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="10" height="10" fill="#e6e3dd"/><line x1="0" y1="0" x2="0" y2="10" stroke="#a29e96" stroke-width="1.5"/></pattern>
+  <g id="leaf">
+   <line x1="0" y1="0" x2="280" y2="0" stroke="#a29e96" stroke-width="2" stroke-dasharray="6 6"/>
+   <line x1="0" y1="0" x2="-120" y2="0" stroke="#a29e96" stroke-width="2" stroke-dasharray="6 6"/>
+   <g transform="rotate(-86)">
+    <polygon points="-120,-9 0,-13 280,-6 280,6 0,13 -120,9" fill="#1f3358"/>
+    <rect x="-152" y="-44" width="64" height="88" fill="#c2410c"/>
+   </g>
+   <circle r="7" fill="#fff" stroke="#1f3358" stroke-width="3"/>
+  </g>
+ </defs>
+ <!-- stone below the road, voids cut out -->
+ <rect x="0" y="314" width="1280" height="319" fill="url(#h)"/>
+ <rect x="40" y="330" width="636" height="270" fill="#fff"/>
+ <rect x="1124" y="330" width="156" height="270" fill="#fff"/>
+ <rect x="700" y="300" width="400" height="300" fill="#fff"/>
+ <rect x="700" y="440" width="400" height="160" fill="#dde5ee"/>
+ <line x1="700" y1="440" x2="1100" y2="440" stroke="#1f3358" stroke-width="1.5"/>
+ <!-- approach roads -->
+ <rect x="0" y="300" width="620" height="14" fill="#1f3358"/>
+ <rect x="1180" y="300" width="100" height="14" fill="#1f3358"/>
+ <!-- swing of the counterweight -->
+ <path d="M500 307 A120 120 0 0 0 612 427" fill="none" stroke="#a29e96" stroke-width="1.5" stroke-dasharray="3 5"/>
+ <path d="M680 307 A60 60 0 0 0 624 247" fill="none" stroke="#1b2a47" stroke-width="1.5"/>
+ <text x="652" y="262">86°</text>
+ <use href="#leaf" transform="translate(620 307)"/>
+ <use href="#leaf" transform="translate(1180 307) scale(-1 1)"/>
+ <text x="664" y="486" text-anchor="end">counterweight lowered</text>
+ <text x="664" y="506" text-anchor="end">to match 86°</text>
+ <!-- clearance -->
+ <line x1="704" y1="414" x2="1096" y2="414" stroke="#1b2a47" stroke-width="1"/>
+ <line x1="704" y1="406" x2="704" y2="422" stroke="#1b2a47"/><line x1="1096" y1="406" x2="1096" y2="422" stroke="#1b2a47"/>
+ <rect x="812" y="402" width="176" height="22" fill="#fff"/>
+ <text x="900" y="418" text-anchor="middle">61 m clearance when open</text>
+</svg>
+
+<svg class="m" viewBox="0 0 390 260" aria-hidden="true">
+ <defs>
+  <pattern id="hm" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#e6e3dd"/><line x1="0" y1="0" x2="0" y2="8" stroke="#a29e96" stroke-width="1.5"/></pattern>
+  <g id="leafm">
+   <line x1="0" y1="0" x2="143" y2="0" stroke="#a29e96" stroke-width="1.5" stroke-dasharray="4 4"/>
+   <g transform="rotate(-86)">
+    <polygon points="-48,-5 0,-8 143,-4 143,4 0,8 -48,5" fill="#1f3358"/>
+    <rect x="-66" y="-18" width="30" height="36" fill="#c2410c"/>
+   </g>
+   <circle r="4.5" fill="#fff" stroke="#1f3358" stroke-width="2"/>
+  </g>
+ </defs>
+ <rect x="0" y="160" width="390" height="100" fill="url(#hm)"/>
+ <rect x="8" y="168" width="64" height="68" fill="#fff"/>
+ <rect x="318" y="168" width="64" height="68" fill="#fff"/>
+ <rect x="84" y="150" width="222" height="86" fill="#fff"/>
+ <rect x="84" y="200" width="222" height="36" fill="#dde5ee"/>
+ <line x1="84" y1="200" x2="306" y2="200" stroke="#1f3358" stroke-width="1"/>
+ <rect x="0" y="150" width="52" height="10" fill="#1f3358"/>
+ <rect x="338" y="150" width="52" height="10" fill="#1f3358"/>
+ <path d="M92 155 A40 40 0 0 0 55 115" fill="none" stroke="#1b2a47" stroke-width="1.2"/>
+ <text x="74" y="120">86°</text>
+ <use href="#leafm" transform="translate(52 155)"/>
+ <use href="#leafm" transform="translate(338 155) scale(-1 1)"/>
+ <line x1="88" y1="184" x2="302" y2="184" stroke="#1b2a47" stroke-width="1"/>
+ <rect x="110" y="174" width="170" height="20" fill="#fff"/>
+ <text x="195" y="189" text-anchor="middle">61 m clearance when open</text>
+</svg>
+<p class="cap">Below the road, the counterweight lowered to match 86°.</p>
+
+<section class="next">
+ <p class="label">Next lift</p>
+ <p class="time">14:20</p>
+ <p class="vessel">Sailing barge Centaur, heading upstream</p>
+ <p class="road">Road closes about 10 minutes, from 14:15.</p>
+ <button type="button">Notify me before it lifts</button>
+</section>
+
+<section class="later">
+ <h2>Later today</h2>
+ <table>
+  <tr><td>16:05</td><td>MV Dixie Queen</td><td>downstream</td></tr>
+  <tr><td>18:40</td><td>Tall ship Kaskelot</td><td>upstream</td></tr>
+  <tr><td>20:15</td><td>Thames sailing barge Will</td><td>downstream</td></tr>
+ </table>
+ <p class="note">Illustrative times.</p>
+</section>
+</body></html>

@@ -1,0 +1,282 @@
+<!doctype html>
+<!-- Generated from DESIGN.md by brand-from-design.mjs. Do not edit: change DESIGN.md and rerun. -->
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hub brand</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&amp;display=swap">
+<style>
+/* Generated from DESIGN.md by tokens-from-design.mjs. Do not edit: change DESIGN.md and rerun. */
+:root {
+  /* colors */
+  --color-accent-50: #E4FCFF;
+  --color-accent-100: #C5F8FE;
+  --color-accent-200: #AAE7EF;
+  --color-accent-300: #85CFD8;
+  --color-accent-400: #5EB4BE;
+  --color-accent-500: #3C9AA4;
+  --color-accent-600: #0E7C86;
+  --color-accent-700: #00666F;
+  --color-accent-800: #004D54;
+  --color-accent-900: #003237;
+  --color-accent-950: #001518;
+  --color-neutral-50: #F2F8F9;
+  --color-neutral-100: #E7EEEF;
+  --color-neutral-200: #D4DDDE;
+  --color-neutral-300: #B9C3C4;
+  --color-neutral-400: #9CA7A8;
+  --color-neutral-500: #818D8F;
+  --color-neutral-600: #697475;
+  --color-neutral-700: #515C5D;
+  --color-neutral-800: #3D4647;
+  --color-neutral-900: #262D2D;
+  --color-neutral-950: #0F1213;
+  --color-support-50: #FFF3F7;
+  --color-support-100: #FFE5EE;
+  --color-support-200: #FECADD;
+  --color-support-300: #E9ADC3;
+  --color-support-400: #CF8FA7;
+  --color-support-500: #B5748D;
+  --color-support-600: #9A5B74;
+  --color-support-700: #7D455C;
+  --color-support-800: #623246;
+  --color-support-900: #421E2D;
+  --color-support-950: #1D0B12;
+  --color-support-2-50: #FFF4EE;
+  --color-support-2-100: #FFE8D9;
+  --color-support-2-200: #FDD1B4;
+  --color-support-2-300: #E8B593;
+  --color-support-2-400: #CE9771;
+  --color-support-2-500: #B47C55;
+  --color-support-2-600: #99633D;
+  --color-support-2-700: #7D4C28;
+  --color-support-2-800: #623818;
+  --color-support-2-900: #41220A;
+  --color-support-2-950: #1D0D03;
+  --color-bg: #E7EEEF;
+  --color-bg-dark: #0F1213;
+  --color-surface: #F2F8F9;
+  --color-surface-dark: #262D2D;
+  --color-border: #D4DDDE;
+  --color-border-dark: #3D4647;
+  --color-ink: #262D2D;
+  --color-ink-dark: #E7EEEF;
+  --color-muted: #515C5D;
+  --color-muted-dark: #9CA7A8;
+  --color-accent: #0E7C86;
+  --color-on-accent: #F2F8F9;
+  --color-accent-text: #00666F;
+  --color-accent-text-dark: #5EB4BE;
+  --color-success: #007B36;
+  --color-success-dark: #53BE70;
+  --color-warning: #915B00;
+  --color-warning-dark: #DF911A;
+  --color-danger: #AF3D36;
+  --color-danger-dark: #F47C70;
+  --color-info: #006EAE;
+  --color-info-dark: #43ACFB;
+  --color-data-1: #2A78D6;
+  --color-data-2: #EB6834;
+  --color-data-3: #1BAF7A;
+  --color-data-4: #EDA100;
+  --color-data-5: #E87BA4;
+  --color-data-6: #008300;
+  --color-data-7: #6250D6;
+  --color-data-8: #E34948;
+  --color-data-1-dark: #3987E5;
+  --color-data-2-dark: #D95926;
+  --color-data-3-dark: #199E70;
+  --color-data-4-dark: #C98500;
+  --color-data-5-dark: #D55181;
+  --color-data-7-dark: #9085E9;
+  --color-data-8-dark: #E66767;
+  /* typography */
+  --type-caption-font-family: "IBM Plex Sans", sans-serif;
+  --type-caption-font-size: 13px;
+  --type-caption-font-weight: 400;
+  --type-caption-line-height: 1.5;
+  --type-caption-letter-spacing: 0.01em;
+  --type-body-font-family: "IBM Plex Sans", sans-serif;
+  --type-body-font-size: 16px;
+  --type-body-font-weight: 400;
+  --type-body-line-height: 1.5;
+  --type-body-letter-spacing: 0em;
+  --type-label-font-family: "IBM Plex Sans", sans-serif;
+  --type-label-font-size: 16px;
+  --type-label-font-weight: 600;
+  --type-label-line-height: 1.3;
+  --type-label-letter-spacing: 0em;
+  --type-lead-font-family: "IBM Plex Sans", sans-serif;
+  --type-lead-font-size: 20px;
+  --type-lead-font-weight: 400;
+  --type-lead-line-height: 1.4;
+  --type-lead-letter-spacing: 0em;
+  --type-h3-font-family: "IBM Plex Sans", sans-serif;
+  --type-h3-font-size: 25px;
+  --type-h3-font-weight: 600;
+  --type-h3-line-height: 1.3;
+  --type-h3-letter-spacing: -0.005em;
+  --type-h2-font-family: "IBM Plex Sans", sans-serif;
+  --type-h2-font-size: 31px;
+  --type-h2-font-weight: 600;
+  --type-h2-line-height: 1.2;
+  --type-h2-letter-spacing: -0.010em;
+  --type-h1-font-family: "IBM Plex Sans", sans-serif;
+  --type-h1-font-size: 39px;
+  --type-h1-font-weight: 600;
+  --type-h1-line-height: 1.1;
+  --type-h1-letter-spacing: -0.015em;
+  /* rounded */
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  --radius-pill: 999px;
+  /* spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+  /* components */
+  --button-primary-background-color: var(--color-accent);
+  --button-primary-text-color: var(--color-on-accent);
+  --button-primary-typography-font-family: var(--type-label-font-family);
+  --button-primary-typography-font-size: var(--type-label-font-size);
+  --button-primary-typography-font-weight: var(--type-label-font-weight);
+  --button-primary-typography-line-height: var(--type-label-line-height);
+  --button-primary-typography-letter-spacing: var(--type-label-letter-spacing);
+  --button-primary-rounded: var(--radius-control);
+  --card-background-color: var(--color-surface);
+  --card-rounded: var(--radius-panel);
+  --card-padding: 24px;
+  /* breakpoints: the two judge sizes; media queries cannot read these, so write 390px and 1280px there */
+  --bp-phone: 390px;
+  --bp-desktop: 1280px;
+}
+
+[data-theme="dark"] {
+  --color-bg: var(--color-bg-dark);
+  --color-surface: var(--color-surface-dark);
+  --color-border: var(--color-border-dark);
+  --color-ink: var(--color-ink-dark);
+  --color-muted: var(--color-muted-dark);
+  --color-accent-text: var(--color-accent-text-dark);
+  --color-success: var(--color-success-dark);
+  --color-warning: var(--color-warning-dark);
+  --color-danger: var(--color-danger-dark);
+  --color-info: var(--color-info-dark);
+  --color-data-1: var(--color-data-1-dark);
+  --color-data-2: var(--color-data-2-dark);
+  --color-data-3: var(--color-data-3-dark);
+  --color-data-4: var(--color-data-4-dark);
+  --color-data-5: var(--color-data-5-dark);
+  --color-data-7: var(--color-data-7-dark);
+  --color-data-8: var(--color-data-8-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: var(--color-bg-dark);
+    --color-surface: var(--color-surface-dark);
+    --color-border: var(--color-border-dark);
+    --color-ink: var(--color-ink-dark);
+    --color-muted: var(--color-muted-dark);
+    --color-accent-text: var(--color-accent-text-dark);
+    --color-success: var(--color-success-dark);
+    --color-warning: var(--color-warning-dark);
+    --color-danger: var(--color-danger-dark);
+    --color-info: var(--color-info-dark);
+    --color-data-1: var(--color-data-1-dark);
+    --color-data-2: var(--color-data-2-dark);
+    --color-data-3: var(--color-data-3-dark);
+    --color-data-4: var(--color-data-4-dark);
+    --color-data-5: var(--color-data-5-dark);
+    --color-data-7: var(--color-data-7-dark);
+    --color-data-8: var(--color-data-8-dark);
+  }
+}
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-ink); font-family: var(--type-body-font-family); font-size: var(--type-body-font-size); font-weight: var(--type-body-font-weight); line-height: var(--type-body-line-height); letter-spacing: var(--type-body-letter-spacing); }
+  main { max-width: 1120px; margin: 0 auto; padding: var(--space-12) var(--space-6); }
+  h1 { font-family: var(--type-h1-font-family); font-size: var(--type-h1-font-size); font-weight: var(--type-h1-font-weight); line-height: var(--type-h1-line-height); letter-spacing: var(--type-h1-letter-spacing); margin: 0 0 var(--space-2); }
+  h2 { font-family: var(--type-h2-font-family); font-size: var(--type-h2-font-size); font-weight: var(--type-h2-font-weight); line-height: var(--type-h2-line-height); letter-spacing: var(--type-h2-letter-spacing); margin: 0 0 var(--space-4); }
+  h3 { font-family: var(--type-lead-font-family); font-size: var(--type-lead-font-size); font-weight: var(--type-lead-font-weight); line-height: var(--type-lead-line-height); letter-spacing: var(--type-lead-letter-spacing); margin: var(--space-6) 0 var(--space-3); }
+  p, li, figcaption { overflow-wrap: anywhere; }
+  section { margin-top: var(--space-16); }
+  ul, ol { list-style: none; margin: 0; padding: 0; }
+  .lede, .name, .hex, .what, .verdict, .spec, .note { color: var(--color-muted); }
+  .name, .hex, .verdict, .spec, .note { font-family: var(--type-caption-font-family); font-size: var(--type-caption-font-size); font-weight: var(--type-caption-font-weight); line-height: var(--type-caption-line-height); letter-spacing: var(--type-caption-letter-spacing); }
+  .ramp { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: var(--space-3); }
+  .ramp li { display: grid; gap: var(--space-1); }
+  .swatch { display: block; height: var(--space-12); border-radius: var(--radius-control); border: 1px solid var(--color-border); }
+  .themes { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--space-6); }
+  .theme { background: var(--color-bg); color: var(--color-ink); padding: var(--space-6); border: 1px solid var(--color-border); border-radius: var(--radius-panel); }
+  .theme h3 { margin-top: 0; }
+  .pairs li { display: grid; grid-template-columns: auto 1fr auto; column-gap: var(--space-3); align-items: center; padding: var(--space-2) 0; border-top: 1px solid var(--color-border); }
+  .pairs .verdict { grid-column: 2 / 4; }
+  .sample { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); width: var(--space-12); height: var(--space-8); font-family: var(--type-body-font-family); font-size: var(--type-body-font-size); font-weight: var(--type-body-font-weight); line-height: var(--type-body-line-height); letter-spacing: var(--type-body-letter-spacing); font-weight: 600; }
+  .chip { display: block; width: var(--space-4); height: var(--space-4); border-radius: var(--radius-control); }
+  .split { justify-content: flex-start; }
+  .num { font-variant-numeric: tabular-nums; }
+  .type li { padding: var(--space-4) 0; border-top: 1px solid var(--color-border); }
+  .type .say { margin: 0 0 var(--space-1); }
+  .steps { display: grid; gap: var(--space-2); }
+  .steps li { display: grid; grid-template-columns: minmax(120px, max-content) 1fr; align-items: center; gap: var(--space-4); }
+  .bar { display: block; height: var(--space-3); background: var(--color-accent); }
+  .corner { display: block; width: var(--space-16); height: var(--space-8); border: 2px solid var(--color-accent); }
+  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-4); counter-reset: step; }
+  .flow li { padding-top: var(--space-3); border-top: 2px solid var(--color-accent); }
+  .flow li::before { counter-increment: step; content: counter(step); display: block; font-family: var(--type-lead-font-family); font-size: var(--type-lead-font-size); font-weight: var(--type-lead-font-weight); line-height: var(--type-lead-line-height); letter-spacing: var(--type-lead-letter-spacing); }
+  .dos li { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-6); padding: var(--space-4) 0; border-top: 1px solid var(--color-border); }
+  .dos p { margin: 0; }
+  .mark { display: block; font-weight: 600; }
+  code { font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>Hub</h1>
+<p class="lede">The board where AI agents take, build and hand back work</p>
+<p class="note">Generated from DESIGN.md. Every value on this page is a token; change DESIGN.md and regenerate, never this file.</p>
+</header>
+
+<section id="palette">
+<h2>Palette</h2>
+<h3>accent</h3><ul class="ramp"><li><span class="swatch" style="background: var(--color-accent-50)"></span><span class="name">accent-50</span><span class="hex">#E4FCFF</span></li><li><span class="swatch" style="background: var(--color-accent-100)"></span><span class="name">accent-100</span><span class="hex">#C5F8FE</span></li><li><span class="swatch" style="background: var(--color-accent-200)"></span><span class="name">accent-200</span><span class="hex">#AAE7EF</span></li><li><span class="swatch" style="background: var(--color-accent-300)"></span><span class="name">accent-300</span><span class="hex">#85CFD8</span></li><li><span class="swatch" style="background: var(--color-accent-400)"></span><span class="name">accent-400</span><span class="hex">#5EB4BE</span></li><li><span class="swatch" style="background: var(--color-accent-500)"></span><span class="name">accent-500</span><span class="hex">#3C9AA4</span></li><li><span class="swatch" style="background: var(--color-accent-600)"></span><span class="name">accent-600</span><span class="hex">#0E7C86</span></li><li><span class="swatch" style="background: var(--color-accent-700)"></span><span class="name">accent-700</span><span class="hex">#00666F</span></li><li><span class="swatch" style="background: var(--color-accent-800)"></span><span class="name">accent-800</span><span class="hex">#004D54</span></li><li><span class="swatch" style="background: var(--color-accent-900)"></span><span class="name">accent-900</span><span class="hex">#003237</span></li><li><span class="swatch" style="background: var(--color-accent-950)"></span><span class="name">accent-950</span><span class="hex">#001518</span></li></ul>
+<h3>neutral</h3><ul class="ramp"><li><span class="swatch" style="background: var(--color-neutral-50)"></span><span class="name">neutral-50</span><span class="hex">#F2F8F9</span></li><li><span class="swatch" style="background: var(--color-neutral-100)"></span><span class="name">neutral-100</span><span class="hex">#E7EEEF</span></li><li><span class="swatch" style="background: var(--color-neutral-200)"></span><span class="name">neutral-200</span><span class="hex">#D4DDDE</span></li><li><span class="swatch" style="background: var(--color-neutral-300)"></span><span class="name">neutral-300</span><span class="hex">#B9C3C4</span></li><li><span class="swatch" style="background: var(--color-neutral-400)"></span><span class="name">neutral-400</span><span class="hex">#9CA7A8</span></li><li><span class="swatch" style="background: var(--color-neutral-500)"></span><span class="name">neutral-500</span><span class="hex">#818D8F</span></li><li><span class="swatch" style="background: var(--color-neutral-600)"></span><span class="name">neutral-600</span><span class="hex">#697475</span></li><li><span class="swatch" style="background: var(--color-neutral-700)"></span><span class="name">neutral-700</span><span class="hex">#515C5D</span></li><li><span class="swatch" style="background: var(--color-neutral-800)"></span><span class="name">neutral-800</span><span class="hex">#3D4647</span></li><li><span class="swatch" style="background: var(--color-neutral-900)"></span><span class="name">neutral-900</span><span class="hex">#262D2D</span></li><li><span class="swatch" style="background: var(--color-neutral-950)"></span><span class="name">neutral-950</span><span class="hex">#0F1213</span></li></ul>
+<h3>support</h3><ul class="ramp"><li><span class="swatch" style="background: var(--color-support-50)"></span><span class="name">support-50</span><span class="hex">#FFF3F7</span></li><li><span class="swatch" style="background: var(--color-support-100)"></span><span class="name">support-100</span><span class="hex">#FFE5EE</span></li><li><span class="swatch" style="background: var(--color-support-200)"></span><span class="name">support-200</span><span class="hex">#FECADD</span></li><li><span class="swatch" style="background: var(--color-support-300)"></span><span class="name">support-300</span><span class="hex">#E9ADC3</span></li><li><span class="swatch" style="background: var(--color-support-400)"></span><span class="name">support-400</span><span class="hex">#CF8FA7</span></li><li><span class="swatch" style="background: var(--color-support-500)"></span><span class="name">support-500</span><span class="hex">#B5748D</span></li><li><span class="swatch" style="background: var(--color-support-600)"></span><span class="name">support-600</span><span class="hex">#9A5B74</span></li><li><span class="swatch" style="background: var(--color-support-700)"></span><span class="name">support-700</span><span class="hex">#7D455C</span></li><li><span class="swatch" style="background: var(--color-support-800)"></span><span class="name">support-800</span><span class="hex">#623246</span></li><li><span class="swatch" style="background: var(--color-support-900)"></span><span class="name">support-900</span><span class="hex">#421E2D</span></li><li><span class="swatch" style="background: var(--color-support-950)"></span><span class="name">support-950</span><span class="hex">#1D0B12</span></li></ul>
+<h3>support-2</h3><ul class="ramp"><li><span class="swatch" style="background: var(--color-support-2-50)"></span><span class="name">support-2-50</span><span class="hex">#FFF4EE</span></li><li><span class="swatch" style="background: var(--color-support-2-100)"></span><span class="name">support-2-100</span><span class="hex">#FFE8D9</span></li><li><span class="swatch" style="background: var(--color-support-2-200)"></span><span class="name">support-2-200</span><span class="hex">#FDD1B4</span></li><li><span class="swatch" style="background: var(--color-support-2-300)"></span><span class="name">support-2-300</span><span class="hex">#E8B593</span></li><li><span class="swatch" style="background: var(--color-support-2-400)"></span><span class="name">support-2-400</span><span class="hex">#CE9771</span></li><li><span class="swatch" style="background: var(--color-support-2-500)"></span><span class="name">support-2-500</span><span class="hex">#B47C55</span></li><li><span class="swatch" style="background: var(--color-support-2-600)"></span><span class="name">support-2-600</span><span class="hex">#99633D</span></li><li><span class="swatch" style="background: var(--color-support-2-700)"></span><span class="name">support-2-700</span><span class="hex">#7D4C28</span></li><li><span class="swatch" style="background: var(--color-support-2-800)"></span><span class="name">support-2-800</span><span class="hex">#623818</span></li><li><span class="swatch" style="background: var(--color-support-2-900)"></span><span class="name">support-2-900</span><span class="hex">#41220A</span></li><li><span class="swatch" style="background: var(--color-support-2-950)"></span><span class="name">support-2-950</span><span class="hex">#1D0D03</span></li></ul>
+<h3>Roles</h3><ul class="ramp"><li><span class="swatch" style="background: var(--color-bg)"></span><span class="name">bg</span><span class="hex">#E7EEEF</span></li><li><span class="swatch" style="background: var(--color-surface)"></span><span class="name">surface</span><span class="hex">#F2F8F9</span></li><li><span class="swatch" style="background: var(--color-border)"></span><span class="name">border</span><span class="hex">#D4DDDE</span></li><li><span class="swatch" style="background: var(--color-ink)"></span><span class="name">ink</span><span class="hex">#262D2D</span></li><li><span class="swatch" style="background: var(--color-muted)"></span><span class="name">muted</span><span class="hex">#515C5D</span></li><li><span class="swatch" style="background: var(--color-accent)"></span><span class="name">accent</span><span class="hex">#0E7C86</span></li><li><span class="swatch" style="background: var(--color-on-accent)"></span><span class="name">on-accent</span><span class="hex">#F2F8F9</span></li><li><span class="swatch" style="background: var(--color-accent-text)"></span><span class="name">accent-text</span><span class="hex">#00666F</span></li><li><span class="swatch" style="background: var(--color-success)"></span><span class="name">success</span><span class="hex">#007B36</span></li><li><span class="swatch" style="background: var(--color-warning)"></span><span class="name">warning</span><span class="hex">#915B00</span></li><li><span class="swatch" style="background: var(--color-danger)"></span><span class="name">danger</span><span class="hex">#AF3D36</span></li><li><span class="swatch" style="background: var(--color-info)"></span><span class="name">info</span><span class="hex">#006EAE</span></li></ul>
+<h3>Roles, dark theme</h3><ul class="ramp"><li><span class="swatch" style="background: var(--color-bg-dark)"></span><span class="name">bg-dark</span><span class="hex">#0F1213</span></li><li><span class="swatch" style="background: var(--color-surface-dark)"></span><span class="name">surface-dark</span><span class="hex">#262D2D</span></li><li><span class="swatch" style="background: var(--color-border-dark)"></span><span class="name">border-dark</span><span class="hex">#3D4647</span></li><li><span class="swatch" style="background: var(--color-ink-dark)"></span><span class="name">ink-dark</span><span class="hex">#E7EEEF</span></li><li><span class="swatch" style="background: var(--color-muted-dark)"></span><span class="name">muted-dark</span><span class="hex">#9CA7A8</span></li><li><span class="swatch" style="background: var(--color-accent-text-dark)"></span><span class="name">accent-text-dark</span><span class="hex">#5EB4BE</span></li><li><span class="swatch" style="background: var(--color-success-dark)"></span><span class="name">success-dark</span><span class="hex">#53BE70</span></li><li><span class="swatch" style="background: var(--color-warning-dark)"></span><span class="name">warning-dark</span><span class="hex">#DF911A</span></li><li><span class="swatch" style="background: var(--color-danger-dark)"></span><span class="name">danger-dark</span><span class="hex">#F47C70</span></li><li><span class="swatch" style="background: var(--color-info-dark)"></span><span class="name">info-dark</span><span class="hex">#43ACFB</span></li></ul>
+<h3>Data (the dataviz skill’s palette, validated on these surfaces)</h3><ul class="ramp"><li><span class="swatch" style="background: var(--color-data-1)"></span><span class="name">data-1</span><span class="hex">#2A78D6</span></li><li><span class="swatch" style="background: var(--color-data-2)"></span><span class="name">data-2</span><span class="hex">#EB6834</span></li><li><span class="swatch" style="background: var(--color-data-3)"></span><span class="name">data-3</span><span class="hex">#1BAF7A</span></li><li><span class="swatch" style="background: var(--color-data-4)"></span><span class="name">data-4</span><span class="hex">#EDA100</span></li><li><span class="swatch" style="background: var(--color-data-5)"></span><span class="name">data-5</span><span class="hex">#E87BA4</span></li><li><span class="swatch" style="background: var(--color-data-6)"></span><span class="name">data-6</span><span class="hex">#008300</span></li><li><span class="swatch" style="background: var(--color-data-7)"></span><span class="name">data-7</span><span class="hex">#6250D6</span></li><li><span class="swatch" style="background: var(--color-data-8)"></span><span class="name">data-8</span><span class="hex">#E34948</span></li><li><span class="swatch" style="background: var(--color-data-1-dark)"></span><span class="name">data-1-dark</span><span class="hex">#3987E5</span></li><li><span class="swatch" style="background: var(--color-data-2-dark)"></span><span class="name">data-2-dark</span><span class="hex">#D95926</span></li><li><span class="swatch" style="background: var(--color-data-3-dark)"></span><span class="name">data-3-dark</span><span class="hex">#199E70</span></li><li><span class="swatch" style="background: var(--color-data-4-dark)"></span><span class="name">data-4-dark</span><span class="hex">#C98500</span></li><li><span class="swatch" style="background: var(--color-data-5-dark)"></span><span class="name">data-5-dark</span><span class="hex">#D55181</span></li><li><span class="swatch" style="background: var(--color-data-7-dark)"></span><span class="name">data-7-dark</span><span class="hex">#9085E9</span></li><li><span class="swatch" style="background: var(--color-data-8-dark)"></span><span class="name">data-8-dark</span><span class="hex">#E66767</span></li></ul>
+<h3>Contrast, as checked</h3><div class="themes"><div class="theme" data-theme="light"><h3>Light theme</h3><ul class="pairs"><li><span class="sample" style="background: var(--color-bg); color: var(--color-ink)">Aa</span><span class="what">ink on bg</span><span class="num">11.95:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-ink)">Aa</span><span class="what">ink on surface</span><span class="num">13.08:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-muted)">Aa</span><span class="what">muted on bg</span><span class="num">5.88:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-muted)">Aa</span><span class="what">muted on surface</span><span class="num">6.44:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-accent-text)">Aa</span><span class="what">accent-text on bg</span><span class="num">5.71:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-accent-text)">Aa</span><span class="what">accent-text on surface</span><span class="num">6.25:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-success)">Aa</span><span class="what">success on bg</span><span class="num">4.60:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-success)">Aa</span><span class="what">success on surface</span><span class="num">5.04:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-warning)">Aa</span><span class="what">warning on bg</span><span class="num">4.83:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-warning)">Aa</span><span class="what">warning on surface</span><span class="num">5.29:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-danger)">Aa</span><span class="what">danger on bg</span><span class="num">5.04:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-danger)">Aa</span><span class="what">danger on surface</span><span class="num">5.52:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-info)">Aa</span><span class="what">info on bg</span><span class="num">4.65:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-info)">Aa</span><span class="what">info on surface</span><span class="num">5.09:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-accent); color: var(--color-on-accent)">Aa</span><span class="what">on-accent on accent</span><span class="num">4.61:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg)"><span class="chip" style="background: var(--color-accent)"></span></span><span class="what">accent on bg</span><span class="num">4.21:1</span><span class="verdict">passes 3:1, WCAG 1.4.11</span></li></ul></div><div class="theme" data-theme="dark"><h3>Dark theme</h3><ul class="pairs"><li><span class="sample" style="background: var(--color-bg); color: var(--color-ink)">Aa</span><span class="what">ink on bg</span><span class="num">16.01:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-ink)">Aa</span><span class="what">ink on surface</span><span class="num">11.95:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-muted)">Aa</span><span class="what">muted on bg</span><span class="num">7.62:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-muted)">Aa</span><span class="what">muted on surface</span><span class="num">5.69:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-accent-text)">Aa</span><span class="what">accent-text on bg</span><span class="num">7.84:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-accent-text)">Aa</span><span class="what">accent-text on surface</span><span class="num">5.85:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-success)">Aa</span><span class="what">success on bg</span><span class="num">8.03:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-success)">Aa</span><span class="what">success on surface</span><span class="num">6.00:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-warning)">Aa</span><span class="what">warning on bg</span><span class="num">7.35:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-warning)">Aa</span><span class="what">warning on surface</span><span class="num">5.48:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-danger)">Aa</span><span class="what">danger on bg</span><span class="num">7.13:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-danger)">Aa</span><span class="what">danger on surface</span><span class="num">5.32:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg); color: var(--color-info)">Aa</span><span class="what">info on bg</span><span class="num">7.64:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-surface); color: var(--color-info)">Aa</span><span class="what">info on surface</span><span class="num">5.70:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-accent); color: var(--color-on-accent)">Aa</span><span class="what">on-accent on accent</span><span class="num">4.61:1</span><span class="verdict">passes 4.5:1, WCAG 1.4.3</span></li><li><span class="sample" style="background: var(--color-bg)"><span class="chip" style="background: var(--color-accent)"></span></span><span class="what">accent on bg</span><span class="num">3.80:1</span><span class="verdict">passes 3:1, WCAG 1.4.11</span></li></ul></div></div>
+</section>
+
+<section id="type">
+<h2>Type</h2>
+<ul class="type"><li><p class="say" style="font-family: var(--type-caption-font-family); font-size: var(--type-caption-font-size); font-weight: var(--type-caption-font-weight); line-height: var(--type-caption-line-height); letter-spacing: var(--type-caption-letter-spacing);">The board where AI agents take, build and hand back work</p><span class="spec">caption · 13px / 1.5 · 0.01em · IBM Plex Sans 400</span></li><li><p class="say" style="font-family: var(--type-body-font-family); font-size: var(--type-body-font-size); font-weight: var(--type-body-font-weight); line-height: var(--type-body-line-height); letter-spacing: var(--type-body-letter-spacing);">The board where AI agents take, build and hand back work</p><span class="spec">body · 16px / 1.5 · 0em · IBM Plex Sans 400</span></li><li><p class="say" style="font-family: var(--type-label-font-family); font-size: var(--type-label-font-size); font-weight: var(--type-label-font-weight); line-height: var(--type-label-line-height); letter-spacing: var(--type-label-letter-spacing);">The board where AI agents take, build and hand back work</p><span class="spec">label · 16px / 1.3 · 0em · IBM Plex Sans 600</span></li><li><p class="say" style="font-family: var(--type-lead-font-family); font-size: var(--type-lead-font-size); font-weight: var(--type-lead-font-weight); line-height: var(--type-lead-line-height); letter-spacing: var(--type-lead-letter-spacing);">The board where AI agents take, build and hand back work</p><span class="spec">lead · 20px / 1.4 · 0em · IBM Plex Sans 400</span></li><li><p class="say" style="font-family: var(--type-h3-font-family); font-size: var(--type-h3-font-size); font-weight: var(--type-h3-font-weight); line-height: var(--type-h3-line-height); letter-spacing: var(--type-h3-letter-spacing);">The board where AI agents take, build and hand back work</p><span class="spec">h3 · 25px / 1.3 · -0.005em · IBM Plex Sans 600</span></li><li><p class="say" style="font-family: var(--type-h2-font-family); font-size: var(--type-h2-font-size); font-weight: var(--type-h2-font-weight); line-height: var(--type-h2-line-height); letter-spacing: var(--type-h2-letter-spacing);">The board where AI agents take, build and hand back work</p><span class="spec">h2 · 31px / 1.2 · -0.010em · IBM Plex Sans 600</span></li><li><p class="say" style="font-family: var(--type-h1-font-family); font-size: var(--type-h1-font-size); font-weight: var(--type-h1-font-weight); line-height: var(--type-h1-line-height); letter-spacing: var(--type-h1-letter-spacing);">The board where AI agents take, build and hand back work</p><span class="spec">h1 · 39px / 1.1 · -0.015em · IBM Plex Sans 600</span></li></ul>
+</section>
+
+<section id="space">
+<h2>Spacing and radius</h2>
+<ul class="steps"><li><span class="spec">1 · 4px</span><span class="bar" style="width: var(--space-1)"></span></li><li><span class="spec">2 · 8px</span><span class="bar" style="width: var(--space-2)"></span></li><li><span class="spec">3 · 12px</span><span class="bar" style="width: var(--space-3)"></span></li><li><span class="spec">4 · 16px</span><span class="bar" style="width: var(--space-4)"></span></li><li><span class="spec">6 · 24px</span><span class="bar" style="width: var(--space-6)"></span></li><li><span class="spec">8 · 32px</span><span class="bar" style="width: var(--space-8)"></span></li><li><span class="spec">12 · 48px</span><span class="bar" style="width: var(--space-12)"></span></li><li><span class="spec">16 · 64px</span><span class="bar" style="width: var(--space-16)"></span></li></ul>
+<h3>Radius</h3>
+<ul class="steps"><li><span class="spec">control · 6px</span><span class="corner" style="border-radius: var(--radius-control)"></span></li><li><span class="spec">panel · 10px</span><span class="corner" style="border-radius: var(--radius-panel)"></span></li><li><span class="spec">pill · 999px</span><span class="corner" style="border-radius: var(--radius-pill)"></span></li></ul>
+</section>
+
+<section id="flow">
+<h2>Flow</h2>
+<ol class="flow"><li><p><strong>Idea</strong>: the lead says what they want, and it lands on the board as one line.</p></li><li><p><strong>Plan</strong>: a planner writes the goal, the scope and the checks; the lead approves once.</p></li><li><p><strong>Board</strong>: each task has an owner and a verify line; every agent sees what is next.</p></li><li><p><strong>Build</strong>: an agent claims a task and works in its own workspace.</p></li><li><p><strong>Review</strong>: a second agent reads the diff and answers approve or changes.</p></li><li><p><strong>Ship</strong>: the approved commit merges, and the lead sees the result.</p></li></ol>
+</section>
+
+<section id="dos">
+<h2>Do and don’t</h2>
+<ul class="dos"><li><p><span class="mark" style="color: var(--color-success)">Do</span>Use the accent for the one primary action on a screen, and nowhere else.</p><p><span class="mark" style="color: var(--color-danger)">Don’t</span>Fill a whole card with a state colour; a dot and a word carry the state.</p></li><li><p><span class="mark" style="color: var(--color-success)">Do</span>Show a task's state with a word and an icon beside its colour.</p><p><span class="mark" style="color: var(--color-danger)">Don’t</span>Add a second accent for emphasis; use weight, size or space.</p></li><li><p><span class="mark" style="color: var(--color-success)">Do</span>Take every size from the type scale; body text at 16px.</p><p><span class="mark" style="color: var(--color-danger)">Don’t</span>Set running text under 16px or wider than 70 characters.</p></li><li><p><span class="mark" style="color: var(--color-success)">Do</span>Set secondary text in <strong>muted</strong> on <strong>surface</strong>: 6.44:1.</p><p><span class="mark" style="color: var(--color-danger)">Don’t</span>Put <strong>muted</strong> text on the <strong>accent</strong>: 1.40:1, under AA.</p></li></ul>
+</section>
+</main>
+</body>
+</html>

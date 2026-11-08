@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- Deliberately bad fixture: T1 (gradient hero, gradient text) + T4 (centred hero, three equal cards), with T3 emoji icons and T7 filler. Synthetic product. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nimbly</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: system-ui, sans-serif; color: #e7e7f5; background: #0d0b1f; }
+  nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 6vw; }
+  nav b { font-size: 20px; }
+  nav a { color: #c4c0ff; text-decoration: none; margin-left: 24px; font-size: 15px; }
+  .hero { text-align: center; padding: 56px 6vw 40px;
+    background: linear-gradient(135deg, #6d28d9 0%, #4f46e5 40%, #06b6d4 100%); border-radius: 0 0 32px 32px; }
+  .hero h1 { font-size: clamp(34px, 5vw, 60px); font-weight: 800; line-height: 1.08; }
+  .grad { background: linear-gradient(90deg, #f0abfc, #67e8f9); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero p { max-width: 620px; margin: 18px auto 26px; font-size: 18px; color: #ede9fe; }
+  .btn { display: inline-block; padding: 14px 28px; border-radius: 999px; background: #fff; color: #4f46e5; font-weight: 700; text-decoration: none; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; padding: 40px 6vw; }
+  .card { background: #1a1736; border-radius: 24px; padding: 28px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.1); }
+  .card .i { font-size: 34px; }
+  .card h3 { margin: 12px 0 8px; font-size: 19px; }
+  .card p { color: #a5a3c9; font-size: 15px; line-height: 1.5; }
+  @media (max-width: 600px) { .cards { grid-template-columns: 1fr; } nav a { display: none; } }
+</style></head>
+<body>
+<nav><b>✨ Nimbly AI</b><span><a href="#">Features</a><a href="#">Pricing</a><a href="#">Login</a></span></nav>
+<section class="hero">
+  <h1>Supercharge your workflow with <span class="grad">next-gen AI</span></h1>
+  <p>Unlock seamless, powerful, effortless productivity. Harness the power of AI to revolutionize the way your team works.</p>
+  <a class="btn" href="#">Get started free</a>
+</section>
+<section class="cards">
+  <div class="card"><div class="i">🚀</div><h3>Lightning fast</h3><p>Elevate your team with blazing speed and seamless integrations.</p></div>
+  <div class="card"><div class="i">🧠</div><h3>Smart insights</h3><p>AI-powered analytics that unlock game-changing decisions.</p></div>
+  <div class="card"><div class="i">🔒</div><h3>Secure by design</h3><p>Enterprise-grade security you can trust, effortlessly.</p></div>
+</section>
+</body></html>

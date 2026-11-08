@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "designing-products/tour-kit/tour.schema.json",
+  "title": "tour",
+  "description": "A product's judge tour: the step list in story order (judge-tour.md). guide.js reads it, shots.mjs checks it on screen.",
+  "type": "object",
+  "required": ["app", "chrome", "default", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "app": { "description": "Short name: the harness waits on window.__<app>.settled; the seen flag is <app>.guide.seen.", "type": "string", "pattern": "^[a-z][a-z0-9]*$" },
+    "phone": { "description": "At or below this viewport width the phone layout applies.", "type": "integer", "default": 900 },
+    "chrome": { "description": "Selectors of the app's bars, dock, panel and sheet. The card never covers them and the subject is framed into the stage they leave clear.", "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "credits": { "description": "Selectors of attribution and licence lines: the card avoids them like chrome, and they never hide.", "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "labels": { "description": "Selectors of overlay labels and callouts, hidden while a card is up unless the step keeps them.", "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "default": { "description": "The app state every step starts from; a step's view is laid over it, so Back and Next are clean.", "type": "object" },
+    "steps": { "type": "array", "minItems": 3, "items": { "$ref": "#/$defs/step" } }
+  },
+  "$defs": {
+    "words4": { "type": "string", "pattern": "^\\S+(\\s+\\S+){0,3}$" },
+    "words22": { "type": "string", "pattern": "^\\S+(\\s+\\S+){0,21}$" },
+    "action": {
+      "description": "What the step performs live: an app action by name, or typing into a real input (cleared when the step is left).",
+      "oneOf": [
+        { "type": "object", "required": ["do"], "additionalProperties": false, "properties": { "do": { "type": "string" }, "arg": {} } },
+        { "type": "object", "required": ["type", "text"], "additionalProperties": false, "properties": { "type": { "type": "string" }, "text": { "type": "string" }, "submit": { "type": "boolean" } } }
+      ]
+    },
+    "subject": {
+      "description": "What must stay uncovered: a selector, or a scene bounding box [[x,y,z],[x,y,z]] the app projects.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "object", "required": ["box"], "additionalProperties": false, "properties": { "box": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } } } } }
+      ]
+    },
+    "step": {
+      "type": "object",
+      "required": ["id", "title", "beat", "shows", "subject"],
+      "anyOf": [{ "required": ["caption"] }, { "required": ["captionFrom"] }],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "title": { "$ref": "#/$defs/words4" },
+        "beat": { "description": "Its place in the story: problem, the wow, a feature, the proof, the ask.", "enum": ["problem", "wow", "feature", "proof", "ask"] },
+        "shows": {
+          "type": "object", "required": ["claim", "criterion"], "additionalProperties": false,
+          "properties": {
+            "claim": { "type": "string", "minLength": 1 },
+            "criterion": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+            "number": { "description": "The one number the first 20 s land (on the problem or the wow step); it must appear in that step's caption or title.", "type": "string", "minLength": 1 }
+          }
+        },
+        "caption": { "$ref": "#/$defs/words22" },
+        "captionFrom": { "description": "An app readout name: a live line derived from the same store value the UI shows, never a hard-coded string.", "type": "string" },
+        "view": { "description": "App state for this step (a camera key, route or toggles); anything not named returns to default.", "type": "object" },
+        "spot": { "description": "Selector of the control the step is about; the ring follows it.", "type": "string", "minLength": 1 },
+        "subject": { "$ref": "#/$defs/subject" },
+        "action": { "$ref": "#/$defs/action" },
+        "stops": {
+          "description": "A multi-stop step: chips the card plays through on their own, each with its own hold. A stop's words come from captionFrom, never a string here.",
+          "type": "array", "minItems": 2,
+          "items": {
+            "type": "object", "required": ["label", "action"], "additionalProperties": false,
+            "properties": { "label": { "type": "string", "pattern": "^\\S+(\\s\\S+)?$" }, "action": { "$ref": "#/$defs/action" }, "hold": { "type": "number", "exclusiveMinimum": 0 } }
+          }
+        },
+        "hold": { "description": "Seconds on screen when auto-playing and in the film.", "type": "number", "exclusiveMinimum": 0, "default": 6 },
+        "when": { "description": "Selector that must exist for the step to show (its panel has content, its lazy feature loaded).", "type": "string", "minLength": 1 },
+        "keepLabels": { "description": "Keep overlay labels up on this step; they must then pass the harness's overlap rule.", "type": "boolean" },
+        "last": { "description": "The call to action; its button reads Start exploring.", "const": true }
+      },
+      "if": { "required": ["stops"] }, "then": { "required": ["captionFrom"] }
+    }
+  }
+}

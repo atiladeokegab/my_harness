@@ -1,0 +1,104 @@
+/* Generated from DESIGN.md by tokens-from-design.mjs. Do not edit: change DESIGN.md and rerun. */
+:root {
+  /* colors */
+  --color-ground: #09090B;
+  --color-surface: #18181B;
+  --color-surface-2: #1F1F23;
+  --color-border: #27272A;
+  --color-ink: #F4F4F5;
+  --color-muted: #A1A1AA;
+  --color-tertiary: #71717A;
+  --color-green: #00D46A;
+  --color-error: #EF4444;
+  /* typography */
+  --type-hero-font-family: "Work Sans", sans-serif;
+  --type-hero-font-size: 60px;
+  --type-hero-font-weight: 400;
+  --type-hero-line-height: 0.97;
+  --type-hero-letter-spacing: -0.04em;
+  --type-cta-heading-font-family: "Work Sans", sans-serif;
+  --type-cta-heading-font-size: 56px;
+  --type-cta-heading-font-weight: 400;
+  --type-cta-heading-line-height: 1.05;
+  --type-cta-heading-letter-spacing: -0.03em;
+  --type-section-heading-font-family: "Work Sans", sans-serif;
+  --type-section-heading-font-size: 40px;
+  --type-section-heading-font-weight: 400;
+  --type-section-heading-line-height: 1.1;
+  --type-section-heading-letter-spacing: -0.025em;
+  --type-minor-heading-font-family: "Work Sans", sans-serif;
+  --type-minor-heading-font-size: 32px;
+  --type-minor-heading-font-weight: 400;
+  --type-minor-heading-line-height: 1.15;
+  --type-minor-heading-letter-spacing: -0.02em;
+  --type-card-title-font-family: "Work Sans", sans-serif;
+  --type-card-title-font-size: 22px;
+  --type-card-title-font-weight: 400;
+  --type-card-title-line-height: 1.3;
+  --type-card-title-letter-spacing: -0.01em;
+  --type-subhead-font-family: Inter, sans-serif;
+  --type-subhead-font-size: 20px;
+  --type-subhead-font-weight: 400;
+  --type-subhead-line-height: 1.5;
+  --type-body-font-family: Inter, sans-serif;
+  --type-body-font-size: 16px;
+  --type-body-font-weight: 400;
+  --type-body-line-height: 1.5;
+  --type-card-body-font-family: Inter, sans-serif;
+  --type-card-body-font-size: 14px;
+  --type-card-body-font-weight: 400;
+  --type-card-body-line-height: 1.6;
+  --type-nav-link-font-family: Inter, sans-serif;
+  --type-nav-link-font-size: 15px;
+  --type-nav-link-font-weight: 500;
+  --type-button-font-family: Inter, sans-serif;
+  --type-button-font-size: 14px;
+  --type-button-font-weight: 600;
+  --type-legal-font-family: Inter, sans-serif;
+  --type-legal-font-size: 12px;
+  --type-legal-font-weight: 400;
+  --type-legal-line-height: 1.5;
+  /* rounded */
+  --radius-badge: 4px;
+  --radius-button: 6px;
+  --radius-card: 8px;
+  --radius-competitor: 10px;
+  --radius-panel: 12px;
+  --radius-pill: 100px;
+  /* spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-14: 56px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-30: 120px;
+  /* components */
+  --button-primary-background-color: var(--color-green);
+  --button-primary-text-color: var(--color-ground);
+  --button-primary-typography-font-family: var(--type-button-font-family);
+  --button-primary-typography-font-size: var(--type-button-font-size);
+  --button-primary-typography-font-weight: var(--type-button-font-weight);
+  --button-primary-rounded: var(--radius-button);
+  --card-background-color: var(--color-surface);
+  --card-rounded: var(--radius-card);
+  --card-padding: 32px;
+  /* breakpoints: the two judge sizes; media queries cannot read these, so write 390px and 1280px there */
+  --bp-phone: 390px;
+  --bp-desktop: 1280px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

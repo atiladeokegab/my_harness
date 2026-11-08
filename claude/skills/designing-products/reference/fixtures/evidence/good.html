@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Evidence fixture</title>
+<!-- Passes every evidence.mjs check; evidence.test.mjs breaks one check at a time by editing this text. -->
+<style>
+:root{--ground:#F6F8FA;--ink:#1F2328;--accent:#B3161B}
+html{scrollbar-color:var(--ink) var(--ground)}
+body{margin:0;padding:16px;background:var(--ground);color:var(--ink);font:16px/1.5 sans-serif;caret-color:var(--accent)}
+::selection{background:var(--ink);color:var(--ground)}
+h1{font-size:32px;letter-spacing:-0.02em}
+p{max-width:65ch}
+td{padding:4px 8px;font-variant-numeric:tabular-nums}
+a.nav,button{display:inline-block;min-width:44px;min-height:48px;padding:12px 16px;box-sizing:border-box}
+button{background:var(--accent);color:#fff;border:0}
+:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+.mark{animation:slide 2s infinite}
+@keyframes slide{to{transform:translateX(20px)}}
+@media (prefers-reduced-motion:reduce){.mark{animation:none}}
+</style></head><body>
+<h1><span class="mark">Next lift</span> at 14:20</h1>
+<p>The bridge lifts for a sailing barge heading upstream. The road over it closes for about ten minutes while
+the two bascules rise and fall again. Read <a href="#t">the timetable</a> for the rest of the day. It lists every
+ship that needs the bridge open and the direction each one is heading, so you can plan the walk across.</p>
+<table id="t"><tr><td>16:05</td><td>MV Dixie Queen</td></tr><tr><td>18:40</td><td>Tall ship Kaskelot</td></tr></table>
+<a class="nav" href="#t">All lifts today</a>
+<button type="button">Notify me 15 minutes before it lifts</button>
+</body></html>

@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- Deliberately bad fixture: T5 (eyebrows above every heading, one accented word, mono data labels) + T8 (cream #F4F1EA with a serif and terracotta #D97757, middle-dot meta strings, "WORD — fragment" labels, an arrow on every link). Synthetic product. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fieldnote</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #F4F1EA; color: #1f1b16; font-family: Georgia, "Times New Roman", serif; padding: 28px 7vw; }
+  .eyebrow { font-family: system-ui, sans-serif; font-size: 11px; letter-spacing: .22em; text-transform: uppercase; color: #D97757; margin-bottom: 10px; }
+  .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #6b6259; }
+  header { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid #d9d2c3; padding-bottom: 14px; }
+  header a, .links a { color: #D97757; text-decoration: none; font-family: system-ui, sans-serif; font-size: 14px; margin-left: 18px; }
+  h1 { font-size: clamp(34px, 4.6vw, 56px); font-weight: 400; line-height: 1.1; margin: 34px 0 14px; max-width: 16ch; }
+  h1 em { color: #D97757; }
+  .lede { font-size: 18px; max-width: 54ch; line-height: 1.55; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px; margin-top: 34px; }
+  h2 { font-size: 22px; font-weight: 400; margin-bottom: 6px; }
+  .grid p { font-size: 15px; line-height: 1.5; margin: 6px 0 10px; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; gap: 22px; } header a { margin-left: 10px; } }
+</style></head>
+<body>
+<header><strong>Fieldnote</strong><span><a href="#">Journal →</a><a href="#">About →</a></span></header>
+<div class="eyebrow" style="margin-top:30px">Introducing Fieldnote</div>
+<h1>Research notes, <em>beautifully</em> organised</h1>
+<p class="lede">A calm place for your interviews, highlights and themes.</p>
+<p class="mono" style="margin-top:12px">v2.4 · 1,204 teams · Updated weekly</p>
+<div class="grid">
+  <div><div class="eyebrow">Capture</div><h2>CAPTURE — every interview</h2><p class="mono">12 sources · 3 formats · auto</p><p>Drop in recordings and transcripts.</p><div class="links"><a href="#" style="margin:0">Learn more →</a></div></div>
+  <div><div class="eyebrow">Synthesise</div><h2>THEMES — found for you</h2><p class="mono">48 tags · 9 themes · live</p><p>Cluster highlights into themes.</p><div class="links"><a href="#" style="margin:0">See how →</a></div></div>
+  <div><div class="eyebrow">Share</div><h2>REPORTS — in one click</h2><p class="mono">PDF · Link · Slides</p><p>Send findings to the whole team.</p><div class="links"><a href="#" style="margin:0">Read the guide →</a></div></div>
+</div>
+</body></html>

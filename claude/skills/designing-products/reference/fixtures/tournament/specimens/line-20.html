@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Strata Lifts</title>
+<style>
+/* type: 14 16 20 32 48; space: 4 8 12 16 24 32 */
+:root{--buff:#efe5c8;--water:#c4dbe3;--ink:#000;--muted:#4a4333;--mag:#a3107a;--sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--chart:Georgia,"Times New Roman",serif}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--buff)}
+body{color:var(--ink);font:16px/1.5 var(--sans);font-variant-numeric:tabular-nums;display:grid;grid-template-columns:440px 1fr;height:100vh;min-height:633px}
+.panel{padding:32px;display:flex;flex-direction:column;border-right:1px solid var(--ink)}
+.hd{display:flex;justify-content:space-between;font-size:16px}
+.hd b{font-weight:700}
+h1{font-size:32px;line-height:1.2;font-weight:700;margin-top:24px;letter-spacing:-.01em}
+.time{font-size:48px;line-height:1.1;font-weight:700;color:var(--mag);margin-top:4px}
+.para{font-size:20px;line-height:1.4;margin-top:16px}
+button{font:700 20px/1 var(--sans);background:var(--mag);color:#fff;border:0;border-radius:4px;height:56px;padding:0 24px;margin-top:24px;cursor:pointer;align-self:flex-start}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.later{margin-top:auto;list-style:none;border-top:1px solid var(--ink);padding-top:12px}
+.later h2{font-size:14px;font-weight:700;margin-bottom:4px}
+.later li{display:grid;grid-template-columns:56px 1fr;gap:8px;font-size:16px;line-height:1.6}
+.later li b{font-weight:700}
+.note{font-size:14px;color:var(--muted);margin-top:8px}
+.chart{position:relative;overflow:hidden}
+.map{position:absolute;inset:0}
+.map svg{display:block;width:100%;height:100%}
+.map svg *{vector-effect:non-scaling-stroke}
+.lb{position:absolute;font-size:14px;line-height:1.2;white-space:nowrap}
+.pl{font-family:var(--chart);font-style:italic;font-weight:400}
+.pl.big{font-size:20px;letter-spacing:.06em}
+.vs{font-weight:700}
+.eta{color:var(--mag);font-weight:700;font-size:20px}
+.inset{position:absolute;right:16px;bottom:16px;width:226px;background:var(--buff);border:1px solid var(--ink);padding:12px}
+.inset svg{display:block;width:100%;height:auto}
+.inset p{font-size:14px;line-height:1.4;margin-top:8px}
+@media (max-width:600px){
+  body{display:flex;flex-direction:column;height:auto;min-height:0}
+  .panel{display:contents}
+  .hd{order:1;margin:16px 16px 0}
+  h1{order:2;font-size:20px;margin:16px 16px 0}
+  .time{order:3;margin:0 16px}
+  .chart{order:4;margin-top:12px;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink)}
+  .map{position:relative;inset:auto;aspect-ratio:840/633}
+  .lb.pl.big{font-size:16px}
+  .eta{font-size:16px}
+  .inset{position:static;width:auto;border:0;border-top:1px solid var(--ink);display:grid;grid-template-columns:132px 1fr;gap:12px;align-items:center;padding:8px 16px}
+  .inset p{margin:0}
+  .para{order:5;font-size:16px;margin:12px 16px 0}
+  button{order:6;margin:16px 16px 0;align-self:stretch}
+  .later{order:7;margin:24px 16px 0}
+  .note{order:8;margin:8px 16px 24px}
+}
+</style>
+</head>
+<body>
+<main class="panel">
+  <div class="hd"><b>Strata Lifts</b><span>Sunday 2 November</span></div>
+  <h1>Tower Bridge lifts next at</h1>
+  <p class="time">14:20</p>
+  <p class="para">For the sailing barge Centaur, heading upstream. The road closes for about 10 minutes, from 14:15.</p>
+  <button type="button">Notify me before it lifts</button>
+  <section class="later" aria-label="Later today">
+    <h2>Later today</h2>
+    <ul style="list-style:none">
+      <li><b>16:05</b><span>MV Dixie Queen, downstream</span></li>
+      <li><b>18:40</b><span>tall ship Kaskelot, upstream</span></li>
+      <li><b>20:15</b><span>Thames sailing barge Will, downstream</span></li>
+    </ul>
+  </section>
+  <p class="note">Illustrative times.</p>
+</main>
+
+<figure class="chart" aria-label="Chart of the Pool of London: Centaur approaching Tower Bridge from downstream, due at 14:20">
+  <div class="map">
+    <svg viewBox="0 0 840 633" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <!-- river, flowing west (upstream, left) to east -->
+      <path d="M0 214C200 204 400 222 600 200S800 184 840 186V402C800 400 720 398 600 410S200 426 0 418Z" fill="#c4dbe3"/>
+      <g fill="none" stroke="#000" stroke-width="2">
+        <path d="M0 214C200 204 400 222 600 200S800 184 840 186"/>
+        <path d="M840 402C800 400 720 398 600 410S200 426 0 418"/>
+      </g>
+      <!-- channel limit, dashed as on a chart -->
+      <g fill="none" stroke="#000" stroke-width="1" stroke-dasharray="2 5">
+        <path d="M0 262C200 254 400 268 600 250S800 236 840 238"/>
+        <path d="M840 352C800 350 720 350 600 360S200 374 0 368"/>
+      </g>
+      <!-- Tower Bridge in plan: approaches, side spans, two piers, the opening span between them -->
+      <g fill="none" stroke="#000" stroke-width="2">
+        <path d="M318 96V500M342 96V500"/>
+      </g>
+      <rect x="300" y="252" width="60" height="30" fill="#000"/>
+      <rect x="300" y="346" width="60" height="30" fill="#000"/>
+      <rect x="318" y="282" width="24" height="64" fill="#efe5c8" stroke="#000" stroke-width="2"/>
+      <path d="M318 314H342" stroke="#000" stroke-width="2"/>
+      <!-- past track -->
+      <path d="M840 286L676 300" fill="none" stroke="#000" stroke-width="1.5" stroke-dasharray="3 5"/>
+      <!-- ETA line, magenta as on real charts -->
+      <path d="M610 302L342 314" fill="none" stroke="#a3107a" stroke-width="5" stroke-dasharray="14 8"/>
+      <circle cx="330" cy="314" r="18" fill="none" stroke="#a3107a" stroke-width="4"/>
+      <!-- Centaur, heading upstream (west) -->
+      <path d="M612 302L638 286H676V316H638Z" fill="#000"/>
+      <!-- north mark -->
+      <g stroke="#000" stroke-width="2" fill="none"><path d="M800 92V40M800 40L792 56M800 40L808 56"/></g>
+    </svg>
+    <span class="lb pl big" style="left:4%;top:51.5%">Pool of London</span>
+    <span class="lb pl" style="left:42%;top:14%">Tower Bridge</span>
+    <span class="lb pl" style="left:4%;top:28%">upstream</span>
+    <span class="lb pl" style="right:2%;top:28%">downstream</span>
+    <span class="lb" style="left:95.2%;top:15.5%;transform:translateX(-50%)">N</span>
+    <span class="lb vs" style="left:72.5%;top:51.5%">Centaur</span>
+    <span class="lb eta" style="right:65%;top:44%">14:20</span>
+  </div>
+  <div class="inset">
+    <svg viewBox="0 0 200 116" aria-label="Tower Bridge elevation, bascules raised to 86 degrees">
+      <path d="M0 104H200" stroke="#000" stroke-width="2"/>
+      <path d="M0 104H200" stroke="#c4dbe3" stroke-width="10" transform="translate(0 6)"/>
+      <!-- piers and towers -->
+      <rect x="16" y="14" width="24" height="90" fill="#000"/>
+      <rect x="160" y="14" width="24" height="90" fill="#000"/>
+      <path d="M40 18H160" stroke="#000" stroke-width="3"/>
+      <!-- closed position -->
+      <path d="M40 94H100M160 94H100" stroke="#000" stroke-width="1.5" stroke-dasharray="3 4" fill="none"/>
+      <!-- bascules: hinge at each pier, raised 86 degrees towards each other -->
+      <path d="M40 94L44.2 34.1M160 94L155.8 34.1" stroke="#000" stroke-width="7" stroke-linecap="butt" fill="none"/>
+      <path d="M62 94A22 22 0 0 0 41.5 72.1" stroke="#000" stroke-width="1.5" fill="none"/>
+      <text x="64" y="80" font-family="system-ui,sans-serif" font-size="14" font-weight="700">86°</text>
+    </svg>
+    <p>Bascules open to 86 degrees; 61 m clearance when open.</p>
+  </div>
+</figure>
+</body>
+</html>
