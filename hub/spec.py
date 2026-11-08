@@ -1,4 +1,4 @@
-"""hub spec: the PRD tree (HUB.md, "Spec Tree").
+"""hub spec: the PRD tree (docs/hub/living-spec.md).
 
 The PRD (projects/<project>/spec/prd.json, or legacy requirements.json) is the root. An approved change
 (spec/changes/C-NNN.json)
