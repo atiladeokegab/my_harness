@@ -1,0 +1,26 @@
+name: Design skill feedback
+description: Something in designing-products or design-system that should work better.
+title: "design: "
+labels: [design-feedback]
+body:
+  - type: dropdown
+    id: skill
+    attributes:
+      label: Skill
+      options: [designing-products, design-system, examples/refinery-design, other]
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened or what's missing
+      description: The step, file or rule, and what you expected instead.
+    validations: { required: true }
+  - type: textarea
+    id: suggest
+    attributes:
+      label: Suggested change
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or output
+      description: Drag images in, or paste command output.
