@@ -13,6 +13,7 @@ Python + Next.js product; the lesson in each generalises.
 |---|---|
 | [`agents-die-on-unattended-upgrade.md`](agents-die-on-unattended-upgrade.md) | Every agent and sub-agent dies at once on a Linux host with no reboot: unattended-upgrades restarted logind and linger was off. |
 | [`codex-sandbox-blocks-hub.md`](codex-sandbox-blocks-hub.md) | A Codex agent reads the board but cannot claim/finish tasks, always reports peers `asleep`, or exits instantly on launch. |
+| [`permission-prompts-stall-agents.md`](permission-prompts-stall-agents.md) | An agent sits at a permission or question dialog (`-> permission prompt`, `handed to ...: you were permission prompt`). 14-day stall counts, proposed allow rules, what must keep prompting. |
 | [`subagent-misses-background-notice.md`](subagent-misses-background-notice.md) | A background sub-agent waits hours on a `run_in_background` job that already finished; wait in the foreground in bounded slices instead. |
 | [`worktree-hooks-leak-git-dir.md`](worktree-hooks-leak-git-dir.md) | History in the main repo changes after a commit in a linked worktree: hooks get an absolute `GIT_DIR`. |
 | [`install-factory-timers.md`](install-factory-timers.md) | Switching on the factory: factory.json, the dispatcher/watch/snapshot/weekly timers, the snapshot bucket and the heartbeat hooks. |

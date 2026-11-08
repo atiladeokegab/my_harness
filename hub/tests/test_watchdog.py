@@ -43,9 +43,9 @@ class WatchTest(Factory):
     def test_permission_prompt_is_logged_and_alerted_once(self):
         self.pane("hub-hermes", CLAUDE_PERMISSION)
         out = self.run_cmd("watch")
-        self.assertIn("Hermes: permission prompt", out)
+        self.assertIn("Hermes: at a prompt", out)
         [line] = self.log_lines()
-        self.assertRegex(line, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ Hermes: healthy -> permission prompt")
+        self.assertRegex(line, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ Hermes: healthy -> at a prompt")
         self.assertEqual(len(self.zeus_inbox()), 1)
         self.assertIn("never relaunches a live session", self.zeus_inbox()[0])
         self.assertEqual(self.calls("lead-alert"), [])  # only limits and Zeus reach the lead
@@ -54,7 +54,7 @@ class WatchTest(Factory):
         self.assertEqual(len(self.zeus_inbox()), 1)
         self.pane("hub-hermes", CLAUDE_IDLE)
         self.run_cmd("watch")
-        self.assertIn("permission prompt -> healthy", self.log_lines()[-1])
+        self.assertIn("at a prompt -> healthy", self.log_lines()[-1])
         self.assertEqual(self.zeus_inbox(), [])  # recovered: the stale alert is withdrawn
 
     def test_alerts_collapse_to_one_per_agent_and_a_relaunch_clears_them(self):
@@ -66,7 +66,7 @@ class WatchTest(Factory):
         self.pane("hub-hermes", CLAUDE_PERMISSION)
         self.run_cmd("watch")
         [alert] = self.zeus_inbox()
-        self.assertIn("Hermes: stuck -> permission prompt", alert)
+        self.assertIn("Hermes: stuck -> at a prompt", alert)
         (self.panes / "hub-hermes").unlink()  # the session dies; the relaunch loop brings it back
         self.run_cmd("watch")
         self.assertEqual(len(self.zeus_inbox()), 1)
@@ -74,6 +74,56 @@ class WatchTest(Factory):
         self.beat(1)
         self.run_cmd("watch")
         self.assertEqual(self.zeus_inbox(), [])
+
+    def test_a_hubwaked_dialog_marker_is_at_a_prompt_naming_the_command(self):
+        """T-1061: a dialog only hubwaked's markers know (Codex's hooks review) alerts with what it asks."""
+        self.assertIn("Hooks need review", dispatch.MARKERS)  # read from hubwaked, not copied
+        self.pane("hub-hermes", "• Ran make check\n  Hooks need review\n  ~/.codex/hooks/pre-run.sh\n"
+                                "  enter confirm · esc skip\n")
+        self.assertIn("Hermes: at a prompt", self.run_cmd("watch"))
+        [alert] = [json.loads(m)["text"] for m in self.zeus_inbox()]
+        self.assertIn("healthy -> at a prompt", alert)
+        self.assertIn("~/.codex/hooks/pre-run.sh", alert)
+
+    def test_a_permission_alert_quotes_the_command_not_just_yes(self):
+        self.pane("hub-hermes", CLAUDE_PERMISSION)
+        self.run_cmd("watch")
+        [alert] = [json.loads(m)["text"] for m in self.zeus_inbox()]
+        self.assertIn("Bash command · rm -rf build · Do you want to proceed? · 1. Yes", alert)
+        self.pane("hub-hermes", CLAUDE_PERMISSION.replace("rm -rf build", "git push --force"))
+        self.run_cmd("watch")  # a new dialog under the same cause replaces the alert
+        [alert] = [json.loads(m)["text"] for m in self.zeus_inbox()]
+        self.assertIn("git push --force", alert)
+
+    def test_a_question_is_asking_a_question(self):
+        pane = ("☐ Branch\n\nWhich branch should the fix land on?\n\n❯ 1. main (Recommended)\n"
+                "     The live branch.\n  2. environment-v2\n  3. Type something.\n\n"
+                "Enter to select · ↑/↓ to navigate · Esc to cancel\n")
+        cause, line = dispatch.classify(pane)
+        self.assertEqual(cause, "asking a question")
+        self.assertIn("Which branch should the fix land on?", line)
+
+    def test_any_agent_at_a_prompt_for_3_min_alerts_the_lead_every_15(self):
+        self.pane("hub-hermes", CLAUDE_PERMISSION)
+        self.run_cmd("watch")
+        self.assertEqual(self.calls("lead-alert"), [])  # not yet: most prompts are answered within a minute
+        state = json.loads((self.hub / "state" / "watch.json").read_text())
+        state["Hermes"]["prompt_since"] = time.time() - 181
+        self.write_state("watch.json", state)
+        self.run_cmd("watch")
+        [call] = self.calls("lead-alert")
+        self.assertIn("Hermes has been at a prompt for 3 min", call[-1])
+        self.assertIn("rm -rf build", call[-1])
+        self.run_cmd("watch")
+        self.assertEqual(len(self.calls("lead-alert")), 1)
+        state = json.loads((self.hub / "state" / "watch.json").read_text())
+        state["Hermes"]["lead_told"] = time.time() - 901
+        self.write_state("watch.json", state)
+        self.run_cmd("watch")
+        self.assertEqual(len(self.calls("lead-alert")), 2)
+        self.pane("hub-hermes", CLAUDE_IDLE)
+        self.run_cmd("watch")
+        self.assertNotIn("prompt_since", json.loads((self.hub / "state" / "watch.json").read_text())["Hermes"])
 
     def test_rate_limit_trips_the_breaker_alerts_the_lead_and_stops_wakes(self):
         self.board([task("T-002", owner="Prometheus")])
@@ -300,7 +350,7 @@ class WatchTest(Factory):
     def test_dry_run_only_prints(self):
         self.pane("hub-hermes", CLAUDE_PERMISSION)
         out = self.run_cmd("watch", "--dry-run")
-        self.assertIn("would log 'Hermes: healthy -> permission prompt", out)
+        self.assertIn("would log 'Hermes: healthy -> at a prompt", out)
         self.assertEqual(self.log_lines(), [])
         self.assertEqual(self.zeus_inbox(), [])
         self.assertFalse((self.hub / "state" / "watch.json").exists())
@@ -393,6 +443,29 @@ class SnapshotTest(Factory):
         self.assertEqual(cp[-3:], [str(self.hub / "board.json"), str(self.hub / "events.jsonl"), "gs://b/live/"])
 
 
+class WakedLogTest(unittest.TestCase):
+    """T-1061: hubwaked.log rotates by day and keeps 14 days."""
+
+    def test_rotates_by_day_and_keeps_14_days(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "hubwaked.log"
+            log.write_text("yesterday\n")
+            for name, age in (("hubwaked.log.2026-01-01", 20), ("hubwaked.log.2026-01-15", 5)):
+                (Path(d) / name).write_text("old\n")
+                subprocess.run(["touch", "-d", f"{age} days ago", str(Path(d) / name)], check=True)
+            subprocess.run(["touch", "-d", "1 day ago", str(log)], check=True)
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            script = (f'LOG={log}; KEEP_LOG_DAYS=14; eval "$(sed -n \'/^rotate_log() {{/,/^}}/p\' {HUB / "hubwaked"})"; '
+                      'rotate_log; echo today >> "$LOG"; rotate_log')
+            subprocess.run(["bash", "-c", script], check=True)
+            self.assertEqual(sorted(p.name for p in Path(d).iterdir()),
+                             ["hubwaked.log", "hubwaked.log.2026-01-15", f"hubwaked.log.{yesterday}"])
+            self.assertEqual((Path(d) / f"hubwaked.log.{yesterday}").read_text(), "yesterday\n")
+            self.assertEqual(log.read_text(), "today\n")
+
+
 class ChromeTest(unittest.TestCase):
     """T-508 (Hermes review of dfb1b24): numbered lists, quoted errors and table rows are not chrome."""
 
@@ -407,7 +480,7 @@ class ChromeTest(unittest.TestCase):
     def test_real_dialogs_and_errors_still_count(self):
         esc_dialog = "│ Do you want to make this edit?\n│ ❯ 1. Yes\n│   2. Yes, allow all edits\n│ Esc to cancel\n"
         for label, pane, cause in (("prometheus limit, live capture", PROMETHEUS_LIMIT_LIVE, "rate limited"),
-                                   ("dialog ending in Esc to cancel", esc_dialog, "permission prompt")):
+                                   ("dialog ending in Esc to cancel", esc_dialog, "at a prompt")):
             with self.subTest(label):
                 self.assertEqual(dispatch.classify(pane)[0], cause)
 

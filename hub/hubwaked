@@ -36,8 +36,8 @@ PIDFILE="$WAKE_DIR/hubwaked.pid"
 HEARTBEAT="$WAKE_DIR/hubwaked.heartbeat"
 CONFIRM_POLLS=48
 CONFIRM_POLL_SECONDS=0.25
-MAX_LOG_BYTES=$((256 * 1024))
-KEEP_LOG_BYTES=$((128 * 1024))
+# One log per day, hubwaked.log.YYYY-MM-DD, 14 days kept: deferred-dialog lines are the evidence for a stalled agent.
+KEEP_LOG_DAYS=14
 STALE_AFTER_SECONDS=10
 RECEIPT_RETENTION_SECONDS=$((24 * 60 * 60))
 BUSY_RETRY_SECONDS=15
@@ -59,10 +59,13 @@ mkdir -p "$WAKE_DIR" "$DELIVERED_DIR" "$FAILED_DIR" "$INFLIGHT_DIR" "$DEFERRED_D
 # the queue private to this user rather than world-readable.
 chmod 700 "$WAKE_DIR" "$DELIVERED_DIR" "$FAILED_DIR" "$INFLIGHT_DIR" "$DEFERRED_DIR" 2>/dev/null || true
 rotate_log() {
-    local size=0
-    [ -f "$LOG" ] && size="$(stat -c %s "$LOG" 2>/dev/null || echo 0)"
-    if [ "$size" -gt "$MAX_LOG_BYTES" ]; then
-        tail -c "$KEEP_LOG_BYTES" "$LOG" > "$LOG.tmp.$$" && mv "$LOG.tmp.$$" "$LOG"
+    local day
+    [ -f "$LOG" ] || return 0
+    day="$(date -r "$LOG" +%F 2>/dev/null)" || return 0
+    if [ "$day" != "$(date +%F)" ]; then
+        cat "$LOG" >> "$LOG.$day" && rm -f "$LOG"  # append: a second rotation that day never overwrites
+        find "$(dirname "$LOG")" -maxdepth 1 -name "$(basename "$LOG").????-??-??" \
+            -mtime "+$((KEEP_LOG_DAYS - 1))" -delete 2>/dev/null || true
     fi
 }
 

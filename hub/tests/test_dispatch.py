@@ -168,14 +168,14 @@ class ClassifyTest(unittest.TestCase):
             "claude idle": (CLAUDE_IDLE, None, False),
             "claude busy": (CLAUDE_BUSY, None, True),
             "codex busy": (CODEX_BUSY, None, True),
-            "claude permission": (CLAUDE_PERMISSION, "permission prompt", False),
+            "claude permission": (CLAUDE_PERMISSION, "at a prompt", False),
             "claude limit": (CLAUDE_LIMIT, "rate limited", False),
             "codex limit": (CODEX_LIMIT, "rate limited", False),
             "codex low-usage warning is not a limit": (CODEX_WARNING_IDLE, None, False),
             "claude logged out": (CLAUDE_LOGGED_OUT, "logged out", False),
             "prometheus limit, live capture": (PROMETHEUS_LIMIT_LIVE, "rate limited", False),
-            "claude permission, no box": (CLAUDE_PERMISSION_UNBOXED, "permission prompt", False),
-            "codex approval": (CODEX_APPROVAL, "permission prompt", False),
+            "claude permission, no box": (CLAUDE_PERMISSION_UNBOXED, "at a prompt", False),
+            "codex approval": (CODEX_APPROVAL, "at a prompt", False),
         }
         for label, (pane, cause, busy) in cases.items():
             with self.subTest(label):
@@ -209,9 +209,9 @@ class ClassifyTest(unittest.TestCase):
             "idle": (AGY["idle"], None, False),
             "idle after a turn": (AGY["idle-after-turn"], None, False),
             "busy": (AGY["busy-generating"], None, True),
-            "run command dialog": (AGY["dialog-run-command"], "permission prompt", True),
-            "create file dialog": (AGY["dialog-create-file"], "permission prompt", True),  # esc to cancel
-            "trust dialog": (AGY["dialog-trust-folder"], "permission prompt", False),
+            "run command dialog": (AGY["dialog-run-command"], "at a prompt", True),
+            "create file dialog": (AGY["dialog-create-file"], "at a prompt", True),  # esc to cancel
+            "trust dialog": (AGY["dialog-trust-folder"], "at a prompt", False),
             "quota exhausted": (AGY_LIMIT, "rate limited", False),
             "individual quota": ("⎿  Individual quota reached, try again later\n" + AGY["idle"], "rate limited", False),
             "authentication expired": (AGY_LOGGED_OUT, "logged out", False),
@@ -284,7 +284,7 @@ class TickTest(Factory):
     def test_agents_that_are_not_idle_are_never_woken(self):
         cases = {
             "holds a claimed task": lambda: self.board([task("T-002"), task("T-003", status="claimed")]),
-            "permission prompt": lambda: self.pane("hub-hermes", CLAUDE_PERMISSION),
+            "at a prompt": lambda: self.pane("hub-hermes", CLAUDE_PERMISSION),
             "working": lambda: self.pane("hub-hermes", CLAUDE_BUSY),
             "logged out": lambda: self.pane("hub-hermes", CLAUDE_LOGGED_OUT),
             "no session": lambda: (self.panes / "hub-hermes").unlink(),
@@ -316,7 +316,7 @@ class TickTest(Factory):
             "also holds real work": lambda: self.board([task("T-002"), task("T-003", status="claimed", tags=["standing"]),
                                                         task("T-004", status="claimed")]),
             "working": lambda: self.pane("hub-hermes", CLAUDE_BUSY),
-            "permission prompt": lambda: self.pane("hub-hermes", CLAUDE_PERMISSION),
+            "at a prompt": lambda: self.pane("hub-hermes", CLAUDE_PERMISSION),
             "rate-limit breaker on": lambda: self.write_state(
                 "watch.json", {"Hermes": {"limited": {"until": time.time() + 3600, "line": "x"}}}),
             "offer pending": lambda: self.write_state(

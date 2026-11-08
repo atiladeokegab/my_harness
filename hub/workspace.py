@@ -79,9 +79,10 @@ def create(task, home=Path.home()):
             return path
         branch = change_branch(task)
         base = f"origin/{branch}" if branch else "origin/integration"
-        if not branch and git(clone, "show-ref", "--verify", "--quiet", "refs/remotes/origin/integration",
-                              check=False).returncode:
-            base = "origin/HEAD"
+        has = lambda ref: not git(clone, "show-ref", "--verify", "--quiet", f"refs/remotes/{ref}", check=False).returncode
+        if not branch and not has("origin/integration"):
+            # A repo's GitHub default can be a retired line (refinery: environment-v2); main is the live one.
+            base = "origin/main" if has("origin/main") else "origin/HEAD"
         sha = git(clone, "rev-parse", "--verify", base).stdout.strip()
         path.parent.mkdir(parents=True, exist_ok=True)
         git(clone, "worktree", "add", "--detach", str(path), sha)

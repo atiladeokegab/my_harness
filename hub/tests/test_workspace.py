@@ -86,6 +86,18 @@ class WorkspaceTest(unittest.TestCase):
                          self.git(self.clone, "rev-parse", "origin/integration"))
         self.assertEqual((generated / ".env").read_text(), "TOKEN=local-only\n")
 
+    def test_without_integration_plain_task_starts_at_main_not_a_stale_default(self):
+        self.git(self.clone, "push", "-q", "origin", "integration:main", "integration:retired")
+        self.git(self.origin, "symbolic-ref", "HEAD", "refs/heads/retired")
+        self.git(self.clone, "push", "-q", "origin", "--delete", "integration")
+        self.git(self.clone, "switch", "-qc", "retired-work")
+        (self.clone / "README").write_text("retired\n")
+        self.git(self.clone, "commit", "-qam", "retired")
+        self.git(self.clone, "push", "-q", "-f", "origin", "retired-work:retired")
+        self.git(self.clone, "remote", "set-head", "origin", "retired")
+        path = workspace.create(self.task("T-3"), self.home)
+        self.assertEqual(self.git(path, "rev-parse", "HEAD"), self.git(self.clone, "rev-parse", "origin/main"))
+
     def test_failed_fetch_builds_from_the_local_ref_or_returns_none_without_one(self):
         self.git(self.clone, "remote", "set-url", "origin", str(self.home / "unreachable.git"))
         missing = {**self.task("T-2"), "detail": "Work on branch change/C-404."}

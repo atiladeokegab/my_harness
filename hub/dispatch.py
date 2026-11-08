@@ -60,9 +60,33 @@ ERROR_CHROME = r"^(?:[⎿■✗⚠]\s*)*"
 # Esc: agy's lowercase "esc to cancel" is its busy footer, under any reply, not a dialog's.
 DIALOG_YES = re.compile(CHROME + r"1\.\s+Yes\b", re.I)
 DIALOG_NO = re.compile(CHROME + r"(?:\d\.\s+No\b|(?-i:Esc to cancel))", re.I)
+# A numbered option list ending in a select footer is a question (Claude's AskUserQuestion), not a permission.
+OPTION_1 = re.compile(CHROME + r"1\.\s+\S")
+QUESTION_FOOTER = re.compile(r"(?-i:Esc to cancel|Enter to select|enter select)")
+PROMPT_CAUSES = ("at a prompt", "asking a question")
+# Prose and quotes that may repeat a dialog's words: a reply, a tool result, a quoted line.
+NOT_DIALOG = re.compile(r"^[●⏺•>⎿]")
+
+
+def waked_markers():
+    """hubwaked's dialog markers (its MODAL_MARKERS and the arrays spliced in), so the two never drift."""
+    try:
+        text = (HERE / "hubwaked").read_text()
+    except OSError:
+        return []
+    text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    out = []
+    for name in ("MODAL_MARKERS", "AGY_DIALOG_MARKERS", "LOST_WAKE_MARKERS"):
+        m = re.search(rf"^{name}=\((.*?)\)\s*$", text, re.S | re.M)
+        out += re.findall(r'"([^"$]+)"', m.group(1)) if m else []
+    return out
+
+
+MARKERS = waked_markers()
+
 CAUSES = (
     # Codex's trust and command-center screens swallow typed text.
-    ("permission prompt", re.compile(CHROME + r"(?:Do you trust|Trust this folder|Agent command center)", re.I)),
+    ("at a prompt", re.compile(CHROME + r"(?:Do you trust|Trust this folder|Agent command center)", re.I)),
     # Not Codex's "5h limit: only 5% left" warning: that agent still works.
     ("rate limited", re.compile(ERROR_CHROME + r"(?:API Error: 429|Claude (?:AI )?usage limit reached|"
                                 r"You[’']ve (?:hit|reached) your (?:usage )?limit|\d+-hour limit reached|"
@@ -240,14 +264,35 @@ def tail(pane):
 def classify(pane):
     """(cause, the line that shows it); cause None means nothing wrong is on screen."""
     lines = tail(pane)
-    yes = next((line for line in lines if DIALOG_YES.search(line)), None)
-    if yes and any(DIALOG_NO.search(line) for line in lines):
-        return "permission prompt", yes
+    first = next((i for i, line in enumerate(lines) if OPTION_1.search(line)), None)
+    if first is not None:
+        after = lines[first + 1:]
+        if any("(Recommended)" in line for line in lines[first:]) or (
+                not DIALOG_YES.search(lines[first]) and any(QUESTION_FOOTER.search(line) for line in after)):
+            return "asking a question", asked(lines, first)
+        if DIALOG_YES.search(lines[first]) and any(DIALOG_NO.search(line) for line in after):
+            return "at a prompt", asked(lines, first)
+    if any("has a question" in line for line in lines[-12:]):  # agy's AskUserQuestion
+        return "asking a question", asked(lines, len(lines) - 1)
     for cause, pattern in CAUSES:
         for line in lines:
             if pattern.search(line):
                 return cause, line
+    if not busy(pane):  # hubwaked's wider check: any dialog it would not type into
+        for i in range(len(lines) - 1, max(len(lines) - 12, 0) - 1, -1):
+            if not NOT_DIALOG.match(lines[i]) and any(m in lines[i] for m in MARKERS):
+                return "at a prompt", asked(lines, i)
     return None, ""
+
+
+def asked(lines, at):
+    """What a dialog asks: up to four lines above its first option (the command, the question), then that line."""
+    shown = []
+    for line in lines[max(at - 4, 0):at + 1]:
+        line = re.sub(r"^[│╭╰❯›>\s]+|[│╮╯\s]+$", "", line)
+        if line.strip("─━═ ·"):
+            shown.append(line)
+    return " · ".join(shown)[:300]
 
 
 def busy(pane):
@@ -595,12 +640,38 @@ def report(name, before, cause, line, dry, lead, key=None):
                        env={**os.environ, "HUB_AGENT": "Watchdog"}, capture_output=True, text=True, timeout=30)
     if r.returncode:
         print(f"  notify failed: {r.stderr.strip()}", file=sys.stderr)
-    argv = lead_alert() if lead else None
+    if lead:
+        alert_lead(text)
+
+
+def alert_lead(text):
+    argv = lead_alert()
     if argv:
         try:  # best effort: the lead's channel may be down or rate limited
             subprocess.run([*argv, text], capture_output=True, timeout=45)
         except (OSError, subprocess.TimeoutExpired):
             pass
+
+
+def prompt_waits(name, cur, cause, line, now, intervals, dry):
+    """Any agent at a prompt or asking a question for 3 min: the lead hears through lead_alert, again every 15 min."""
+    if cause not in PROMPT_CAUSES:
+        cur.pop("prompt_since", None)
+        cur.pop("lead_told", None)
+        return
+    since = cur.setdefault("prompt_since", now)
+    waited = now - since
+    if waited < intervals.get("prompt_lead_minutes", 3) * 60:
+        return
+    if now - cur.get("lead_told", 0) < intervals.get("prompt_repeat_minutes", 15) * 60:
+        return
+    text = (f"[watchdog] {name} has been {cause} for {int(waited // 60)} min: {line}. "
+            f"Answer it in tmux hub-{name.lower()}.")
+    if dry:
+        print(f"  would alert the lead: {text}")
+        return
+    alert_lead(text)
+    cur["lead_told"] = now
 
 
 def watch(dry):
@@ -643,13 +714,17 @@ def watch(dry):
         print(f"{name}: {cause}" + (f": {line}" if line else "")
               + (f" [breaker on until {datetime.fromtimestamp(until, timezone.utc):%Y-%m-%d %H:%MZ}]" if until else ""))
         before = cur.get("cause", "healthy")
-        if cause != before:
-            # The lead hears of a limit once per reset window (the breaker's life), and of the lead agent's trouble.
-            lead = (not cur["limited"]["told"]) if cause == "rate limited" else (cause != "healthy" and name == LEAD)
+        # A new dialog under the same cause is news too: the alert names what is being asked.
+        if cause != before or (cause in PROMPT_CAUSES and line != cur.get("line")):
+            # The lead hears of a limit once per reset window (the breaker's life), and of the lead agent's other trouble;
+            # of prompts, through prompt_waits once one has waited 3 minutes.
+            lead = (not cur["limited"]["told"]) if cause == "rate limited" else (
+                cause not in ("healthy", *PROMPT_CAUSES) and name == LEAD)
             report(name, before, cause, line, dry, lead)
             if cause == "rate limited" and not dry:
                 cur["limited"]["told"] = True
-        cur["cause"] = cause
+        prompt_waits(name, cur, cause, line, now, intervals, dry)
+        cur["cause"], cur["line"] = cause, line
     budgets(agents, all_tasks, state, now, dry)
     if not dry:
         save("watch.json", state)

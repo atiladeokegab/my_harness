@@ -144,6 +144,19 @@ class BoardCase(BoardHelpers):
         self.assertTrue([e for e in self.events() if e["event"] == "edited" and e.get("forced")])
         self.assert_ok(self.run_hub("claim", "1", agent="Prometheus"))
 
+    def test_untrusted_task_is_not_offered_or_claimable_until_cleared(self):
+        self.assert_ok(self.run_hub("new", "designer note", "--owner", "Prometheus", "--tag", "untrusted"))
+        self.assert_ok(self.run_hub("new", "ready", "--owner", "Prometheus"))
+        nxt = self.run_hub("next", agent="Prometheus")
+        self.assertTrue(nxt.stdout.startswith("T-002  ready"), nxt.stdout)
+        for flags in ((), ("--force",)):
+            claim = self.run_hub("claim", "1", *flags, agent="Prometheus")
+            self.assertNotEqual(claim.returncode, 0)
+            self.assertIn("is untrusted: it waits for Zeus to clear it", claim.stderr)
+        self.assertEqual(self.read_board()["tasks"][0]["status"], "open")
+        self.assert_ok(self.run_hub("edit", "1", "--untag", "untrusted", "--yes"))
+        self.assert_ok(self.run_hub("claim", "1", agent="Prometheus"))
+
     def test_next_falls_through_stale_in_scope_and_elsewhere(self):
         for title, project in (("stale here", "p"), ("ready here", "p"),
                                ("stale there", "q"), ("ready there", "q")):

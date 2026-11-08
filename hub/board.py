@@ -1084,13 +1084,15 @@ def next_candidates(tasks, agent, project=None):
     # Strict: an unscoped task is not this project's work either. Without this an agent that
     # clears its own queue falls through to unrelated tasks, which is the whole reason project
     # scoping exists.
-    pool = [t for t in tasks if t["status"] == "open" and "stale" not in (t.get("tags") or [])
+    # untrusted waits for Zeus's clear (hub edit --untag untrusted), like stale waits for hub spec.
+    held = lambda t: bool({"stale", "untrusted"} & set(t.get("tags") or []))
+    pool = [t for t in tasks if t["status"] == "open" and not held(t)
             and (not project or (t.get("project") or "") == project)]
     # Scope keeps an agent out of unrelated FREE work; it must not hide work someone assigned to
     # it by name. A project-scoped Prometheus was offered T-078 and never shown T-101..T-103,
     # which Zeus had assigned it under project hub/testbed.
     elsewhere = [t for t in tasks if t["status"] == "open" and project
-                 and "stale" not in (t.get("tags") or [])
+                 and not held(t)
                  and (t.get("project") or "") != project and (actor(t) or "").lower() == me]
     out = []
     for group, scoped in (([t for t in pool if (actor(t) or "").lower() == me], True),
@@ -1103,7 +1105,7 @@ def next_candidates(tasks, agent, project=None):
                 out.append(t)  # an ordinary task, or a vertical that still needs its breakdown
             for child in children:
                 who = actor(child)
-                if (child["status"] == "open" and "stale" not in (child.get("tags") or [])
+                if (child["status"] == "open" and not held(child)
                         and child.get("project") == t.get("project")
                         and (who or scoped) and (not who or who.lower() == me)
                         and not unmet_deps(data, child)):
@@ -1147,6 +1149,8 @@ def cmd_claim(a):
         t = resolve(data, a.id, which_project(getattr(a, "project", None)))
         if "stale" in (t.get("tags") or []):
             sys.exit(f"{label(t)} superseded: hub spec regenerates it")
+        if "untrusted" in (t.get("tags") or []):
+            sys.exit(f"{label(t)} is untrusted: it waits for Zeus to clear it (hub edit {t['id']} --untag untrusted)")
         missing = unmet_deps(data, t)
         if missing and not a.force:
             by_id = {x["id"]: x for x in data["tasks"]}
@@ -1866,6 +1870,7 @@ def main():
     import autonomy
     autonomy.register(sub)
     import map as _map; _map.register(sub)
+    import harness_sync; harness_sync.register(sub)
 
     sh = sub.add_parser("sh", help="run a long or noisy command: full output to a log, "
                         "a header and the tail to you, its exit code kept")

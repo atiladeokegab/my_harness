@@ -160,7 +160,8 @@ log tail. An issue from an author without write access is wrapped in `<untrusted
 because `verify` runs in a shell and the text came from GitHub.
 
 **The health watch** (`dispatch.py watch`). Reads the bottom of each live pane and classifies it:
-permission prompt, rate limited, logged out, or stuck. It matches the CLIs' own chrome, never
+at a prompt (a permission dialog, or any screen hubwaked's dialog markers match; the alert quotes
+what it asks), asking a question (a numbered choice), rate limited, logged out, or stuck. It matches the CLIs' own chrome, never
 prose, so an agent quoting an error is not flagged. Stuck means a claimed task and no heartbeat for
 30 minutes; `heartbeat.sh`, a `UserPromptSubmit`, `PostToolUse` and `Stop` hook, writes
 `state/<agent>.json`. Claude seats run it from `settings.json`, a Codex seat from `~/.codex/hooks.json`
@@ -168,7 +169,8 @@ with `--agent <Name>`. Without a Codex heartbeat, stuck for a Codex agent means 
 for 30 minutes.
 A rate limit trips a breaker until the reset time shown, and the dispatcher wakes nobody behind it.
 Changes go to `watchdog.log` and to the lead agent; the human hears of a limit once per reset window
-through the optional `lead_alert` command. It never kills or relaunches a session.
+through the optional `lead_alert` command, and of any agent at a prompt or asking for 3 minutes,
+again every 15 minutes until it is answered. It never kills or relaunches a session.
 
 **Weekly** (`dispatch.py weekly`). Two tasks for the lead: a cleanup of stale tasks, branches and
 worktrees, and a promotion of the week's `rule candidate:` lines from the reviewer into rules,
