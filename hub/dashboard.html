@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hub dashboard</title>
+  <style>
+    :root { color-scheme: light; font: 15px system-ui, sans-serif; background: #f7f8fa; color: #202a35;
+      --surface: #fff; --line: #dce1e6; --muted: #586574; --hover: #edf2f6; }
+    @media (prefers-color-scheme: dark) {
+      :root { color-scheme: dark; background: #151b22; color: #e4e9ee;
+        --surface: #1d252e; --line: #394550; --muted: #aab7c4; --hover: #273440; }
+    }
+    body { max-width: 1100px; margin: 0 auto; padding: 1rem; }
+    h1 { margin: 0; font-size: 1.6rem; }
+    h2 { font-size: 1.1rem; margin-bottom: .5rem; }
+    section { margin: 1.25rem 0; }
+    .banner { padding: .65rem .8rem; background: #9f1c25; color: white; }
+    .item, .agent, .task-detail { border-bottom: 1px solid var(--line); padding: .45rem .6rem; background: var(--surface); }
+    .expandable { cursor: pointer; }
+    .expandable:hover, tbody tr[data-detail]:hover { background: var(--hover); }
+    .chip { display: inline-block; border-radius: 1rem; padding: .08rem .5rem; font-size: .8rem; font-weight: 650; text-transform: capitalize; }
+    .waiting { background: #fbd4d5; color: #8f1820; }
+    .blocked { background: #ffe7b0; color: #754700; }
+    .stopped { background: #e2e5e9; color: #404a55; }
+    .silent { background: #dbe8f5; color: #24547c; }
+    .dot { display: inline-block; width: .55rem; height: .55rem; border-radius: 50%; margin: 0 .4rem 0 .1rem; background: #a1aab4; }
+    .dot.running { background: #25855b; }
+    .muted { color: var(--muted); }
+    .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+      overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .expanded .clamp { display: block; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid var(--line); padding: .45rem .55rem; text-align: left; vertical-align: top; }
+    th:first-child, tr[data-detail] > td:first-child { white-space: nowrap; }
+    tbody tr[data-detail] { cursor: pointer; }
+    .detail td { background: var(--surface); }
+    ul { margin: .35rem 0 0 1.25rem; }
+    select { margin-left: .5rem; }
+    @media (prefers-color-scheme: dark) {
+      .waiting { background: #56252b; color: #ffd5d7; }
+      .blocked { background: #523e21; color: #ffe2a9; }
+      .stopped { background: #37424e; color: #dde5ed; }
+      .silent { background: #253e53; color: #c6e5ff; }
+      .dot.running { background: #6fd6a4; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Hub dashboard</h1>
+  <div id="banner" class="banner" hidden></div>
+  <main>
+    <section id="needs-section">
+      <h2>Needs you</h2>
+      <div id="needs"></div>
+    </section>
+    <section id="since-section" hidden>
+      <h2>Since you last looked</h2>
+      <div id="since"></div>
+    </section>
+    <section>
+      <h2>Agents</h2>
+      <div id="agents"></div>
+    </section>
+    <section>
+      <h2>Tasks</h2>
+      <label>Project<select id="project-filter"></select></label>
+      <table>
+        <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Owner</th><th>Dependencies</th></tr></thead>
+        <tbody id="tasks"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Recent</h2>
+      <div id="recent"></div>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const LAST_LOOKED = 'hub-dashboard-last-looked';
+      const PROJECT = 'hub-dashboard-project';
+      const $ = (id) => document.getElementById(id);
+      let lastGood = null;
+      let lastUpdate = null;
+      let projects = [];
+      const expanded = new Set();
+
+      function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+      function add(parent, tag, value, className) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (value !== undefined && value !== null) node.textContent = String(value);
+        parent.appendChild(node);
+        return node;
+      }
+      function expandable(node, key) {
+        node.classList.add('expandable'); node.tabIndex = 0;
+        if (node.tagName === 'DIV') node.setAttribute('role', 'button');
+        node.classList.toggle('expanded', expanded.has(key));
+        node.setAttribute('aria-expanded', String(expanded.has(key)));
+        const toggle = () => {
+          const open = node.classList.toggle('expanded');
+          node.setAttribute('aria-expanded', String(open));
+          if (open) expanded.add(key); else expanded.delete(key);
+        };
+        node.addEventListener('click', toggle);
+        node.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); }
+        });
+      }
+      function relative(iso) {
+        if (!iso) return 'never';
+        const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 60000));
+        if (minutes < 1) return 'just now';
+        if (minutes < 60) return `${minutes}m ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
+        return `${Math.floor(hours / 24)}d ago`;
+      }
+      function renderNeeds(items) {
+        const box = $('needs'); clear(box);
+        if (!items.length) { add(box, 'p', 'Nothing needs you.', 'muted'); return; }
+        items.forEach((item) => {
+          const row = add(box, 'div', undefined, 'item');
+          add(row, 'span', item.kind, `chip ${['waiting', 'blocked', 'stopped', 'silent'].includes(item.kind) ? item.kind : ''}`);
+          add(row, 'span', ` — ${item.task || 'no task'}${item.agent ? ` · ${item.agent}` : ''}`);
+          if (item.title) add(row, 'div', item.title, 'clamp');
+          if (item.why) add(row, 'div', item.why, 'muted clamp');
+          expandable(row, `need:${item.kind}:${item.task}:${item.agent}`);
+        });
+      }
+      function renderSince(items) {
+        const section = $('since-section'); clear($('since'));
+        const previous = localStorage.getItem(LAST_LOOKED);
+        if (!previous) { section.hidden = true; return; }
+        const fresh = items.filter((item) => item.at && Date.parse(item.at) > Date.parse(previous));
+        section.hidden = fresh.length === 0;
+        fresh.forEach((item) => {
+          const row = add($('since'), 'div', undefined, 'item');
+          add(row, 'span', `${item.event} · ${item.by || 'unknown'}`, 'kind');
+          add(row, 'span', ` — ${item.task || ''}`);
+          if (item.text) { add(row, 'div', item.text, 'clamp'); expandable(row, `since:${item.at}:${item.event}:${item.task}`); }
+        });
+      }
+      function renderAgents(items) {
+        const box = $('agents'); clear(box);
+        items.forEach((agent) => {
+          const row = add(box, 'div', undefined, 'agent');
+          add(row, 'span', undefined, `dot${agent.running ? ' running' : ''}`);
+          add(row, 'strong', agent.name);
+          add(row, 'span', agent.running ? ' · running' : ' · not running', 'muted');
+          add(row, 'span', ` · ${agent.tasks.join(', ') || 'no tasks'} · ${relative(agent.last_event_at)}`, 'muted clamp');
+          const cost = agent.cost_usd == null ? '—' : `$${agent.cost_usd.toFixed(2)}`;
+          add(row, 'div', `This week: ${agent.done_this_week} tasks done · ${agent.prs_merged ?? '—'} PRs merged · ${agent.runs} runs · ${cost} known cost · ${agent.attempts} attempts`, 'muted');
+          expandable(row, `agent:${agent.name}`);
+        });
+      }
+      function renderTasks(items) {
+        const selected = $('project-filter').value;
+        const body = $('tasks'); clear(body);
+        items.filter((task) => !selected || selected === 'All' || task.project === selected).forEach((task) => {
+          const row = document.createElement('tr'); row.dataset.detail = task.id; row.tabIndex = 0;
+          add(row, 'td', task.id); add(add(row, 'td'), 'div', task.title, 'clamp'); add(row, 'td', task.status);
+          add(row, 'td', task.owner || '—'); add(row, 'td', (task.deps || []).join(', ') || '—');
+          const detail = document.createElement('tr'); detail.className = 'detail';
+          const key = `task:${task.id}`; detail.hidden = !expanded.has(key);
+          row.classList.toggle('expanded', !detail.hidden);
+          row.setAttribute('aria-expanded', String(!detail.hidden));
+          const cell = document.createElement('td'); cell.colSpan = 5; detail.appendChild(cell);
+          add(cell, 'div', task.detail || '', 'task-detail clamp');
+          if (task.notes && task.notes.length) {
+            const list = add(cell, 'ul');
+            task.notes.forEach((note) => add(list, 'li', `${note.at || ''} · ${note.by || ''}: ${note.text || ''}`, 'clamp'));
+          }
+          expandable(cell, `detail:${task.id}`);
+          const toggle = () => {
+            detail.hidden = !detail.hidden;
+            row.classList.toggle('expanded', !detail.hidden);
+            row.setAttribute('aria-expanded', String(!detail.hidden));
+            if (detail.hidden) expanded.delete(key); else expanded.add(key);
+          };
+          row.addEventListener('click', toggle);
+          row.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); } });
+          body.appendChild(row); body.appendChild(detail);
+        });
+      }
+      function renderRecent(items) {
+        const box = $('recent'); clear(box);
+        if (!items.length) { add(box, 'p', 'No recent activity.', 'muted'); return; }
+        items.forEach((item) => {
+          const row = add(box, 'div', undefined, 'item');
+          add(row, 'span', `${item.event} · ${item.by || 'unknown'}`, 'kind');
+          add(row, 'span', ` — ${item.task || ''}`);
+          if (item.text) { add(row, 'div', item.text, 'clamp'); expandable(row, `recent:${item.at}:${item.event}:${item.task}`); }
+        });
+      }
+      function updateFilter(items) {
+        const found = Array.from(new Set(items.map((task) => task.project).filter(Boolean))).sort();
+        if (found.join('\u0000') === projects.join('\u0000')) return;
+        projects = found;
+        const saved = localStorage.getItem(PROJECT) || 'All';
+        clear($('project-filter')); add($('project-filter'), 'option', 'All').value = 'All';
+        found.forEach((project) => add($('project-filter'), 'option', project).value = project);
+        $('project-filter').value = found.includes(saved) ? saved : 'All';
+      }
+      function render(data) {
+        updateFilter(data.tasks || []);
+        renderNeeds(data.needs_you || []); renderSince(data.recent || []);
+        renderAgents(data.agents || []); renderTasks(data.tasks || []); renderRecent(data.recent || []);
+      }
+      async function poll() {
+        try {
+          const response = await fetch('/state.json', { cache: 'no-store' });
+          if (response.status === 503) {
+            const error = await response.json(); $('banner').hidden = false; $('banner').textContent = error.error || 'Board unavailable';
+            if (lastGood) render(lastGood);
+          } else if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          else {
+            lastGood = await response.json(); lastUpdate = new Date(); $('banner').hidden = true; render(lastGood);
+          }
+        } catch (error) {
+          $('banner').hidden = false;
+          $('banner').textContent = `Disconnected, last update ${lastUpdate ? lastUpdate.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : 'never'}`;
+          if (lastGood) render(lastGood);
+        }
+      }
+      $('project-filter').addEventListener('change', (event) => { localStorage.setItem(PROJECT, event.target.value); if (lastGood) renderTasks(lastGood.tasks || []); });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') localStorage.setItem(LAST_LOOKED, new Date().toISOString()); });
+      poll(); setInterval(poll, 5000);
+    })();
+  </script>
+</body>
+</html>

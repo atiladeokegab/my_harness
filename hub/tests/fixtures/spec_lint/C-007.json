@@ -1,0 +1,11 @@
+{
+  "id": "C-007",
+  "base_version": 7,
+  "added": [
+    {"id": "R-9", "title": "Reverse endpoint: returns text backwards", "needs": [],
+     "acceptance": [{"id": "A-9.1", "text": "GET /api/reverse?msg=<text> returns {reversed: <text reversed character by character>}; with no msg parameter it returns {reversed: \"\"}"}]}
+  ],
+  "modified": [],
+  "removed": [],
+  "reason": "Factory pause test: hub pause is issued while the builder is mid-task; nothing may merge or deploy until hub resume, then the run completes."
+}

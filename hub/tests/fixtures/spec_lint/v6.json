@@ -1,0 +1,83 @@
+{
+  "requirements": [
+    {
+      "id": "R-1",
+      "title": "Version endpoint: the service names the commit it runs",
+      "needs": [],
+      "acceptance": [
+        {
+          "id": "A-1.1",
+          "v": 1,
+          "text": "GET /version returns {commit}",
+          "test": "tests/acceptance/test_A_1_1.py"
+        }
+      ]
+    },
+    {
+      "id": "R-2",
+      "title": "Uptime endpoint: the service reports how long it has been up",
+      "needs": [],
+      "acceptance": [
+        {
+          "id": "A-2.1",
+          "v": 1,
+          "text": "GET /api/uptime returns {seconds}, an integer >= 0",
+          "test": "tests/acceptance/test_A_2_1.py"
+        }
+      ]
+    },
+    {
+      "id": "R-3",
+      "title": "Info endpoint: the service names itself and its region",
+      "needs": [],
+      "acceptance": [
+        {
+          "id": "A-3.1",
+          "v": 2,
+          "text": "GET /api/info returns {service, region, started_at}, with started_at the time the app started as an ISO-8601 UTC timestamp",
+          "test": "tests/acceptance/test_A_3_1.py"
+        }
+      ]
+    },
+    {
+      "id": "R-4",
+      "title": "Ping endpoint: a cheap liveness probe",
+      "needs": [],
+      "acceptance": [
+        {
+          "id": "A-4.1",
+          "v": 1,
+          "text": "GET /api/ping returns {pong: true}",
+          "test": "tests/acceptance/test_A_4_1.py"
+        }
+      ]
+    },
+    {
+      "id": "R-5",
+      "title": "Time endpoint: the server's clock",
+      "needs": [],
+      "acceptance": [
+        {
+          "id": "A-5.1",
+          "v": 1,
+          "text": "GET /api/time returns {now}, the server's current time as an ISO-8601 UTC timestamp",
+          "test": "tests/acceptance/test_A_5_1.py"
+        }
+      ]
+    },
+    {
+      "id": "R-7",
+      "title": "Echo endpoint: returns what it is sent",
+      "needs": [],
+      "acceptance": [
+        {
+          "id": "A-7.1",
+          "v": 1,
+          "text": "GET /api/echo?msg=<text> returns {msg: <text>}; with no msg parameter it returns {msg: \"\"}",
+          "test": "tests/acceptance/test_A_7_1.py"
+        }
+      ]
+    }
+  ],
+  "version": 6
+}
