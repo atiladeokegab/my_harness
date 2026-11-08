@@ -858,7 +858,7 @@ class PrdBriefTest(unittest.TestCase):
 
 
 class ApplyScopeTest(unittest.TestCase):
-    """T-747, from night-shift C-008: a change rebuilds only what it touches; the check-writer is done on expected reds."""
+    """a change rebuilds only what it touches; the check-writer is done on expected reds."""
 
     def plan(self):
         before = {"version": 1, "requirements": [

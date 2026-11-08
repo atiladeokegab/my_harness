@@ -482,7 +482,7 @@ def plan_tree(an, cid, hidden):
     touched = [aid for aid, (rid, _) in lines.items()
                if aid in added or rid in added or an["changed"].get(aid) == "modified"]
     # A change builds only what it adds or modifies, what it rewinds or leaves unfinished, and hidden reds. An
-    # untouched line nobody covers was built without its check (night-shift C-008): reported, never rebuilt.
+    # untouched line nobody covers was built without its check: reported, never rebuilt.
     redo = set(touched) | set(hidden) | {c.split("@")[0] for t in stale for c in t.get("reqs", [])}
     unchecked = sorted((a for a in lines if a not in covered and a not in redo), key=sort_key)
     gone = sorted((aid for aid, why in an["changed"].items() if why == "removed"), key=sort_key)
@@ -1423,7 +1423,7 @@ def cmd_converge(a):
                                         for name in ("requirements.json", "prd.json") for p in glob.glob(
                                             os.path.join(hb.HUB_DIR, "projects", "*", "spec", name))
                                         if repo_cfg(os.path.basename(os.path.dirname(os.path.dirname(p))))})
-    # Only factory.json projects: archived night-shift opened 41 drift tasks nobody would build (26 Oct).
+    # Only factory.json projects: an archived project opened 41 drift tasks nobody would build (26 Oct).
     if a.repo and len(projects) != 1:
         die("--repo needs --project")
     who, opened, failed = hb.whoami(a.as_agent), [], []

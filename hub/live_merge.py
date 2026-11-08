@@ -411,7 +411,7 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
                     # the owners table were "red" on an empty repo). Green, so main still moves.
                     result = subprocess.CompletedProcess([], 0, "no project yet: nothing to smoke", "")
                 else:
-                    # 300 s stalled main for an hour on a loaded box (night-shift, 2026-10-24); the full suite needs more.
+                    # 300 s stalled main for an hour on a loaded box; the full suite needs more.
                     result = call(["timeout", str(change_timeout), "sh", "-c", smoke], cwd=path, timeout=change_timeout + 10)
             finally:
                 git("worktree", "remove", "--force", str(path))
