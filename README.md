@@ -52,10 +52,13 @@ acceptance criterion in a skill.
 | [`claude/CLAUDE.md`](claude/CLAUDE.md) | Global instructions for every session: the hub protocol, how I like to work, and engineering defaults (uv, testing, deploys). |
 | [`claude/settings.json`](claude/settings.json) | Settings template with agent teams on and an auto-mode skeleton. |
 | [`claude/skills/hub-planning/`](claude/skills/hub-planning/) | The lead's planning layer: where specs and plans go, grilling and C4 before approval, seeding the PRD, and turning an approved plan into board tasks with one owner per file. |
-| [`claude/skills/hackathon-reviewer/`](claude/skills/hackathon-reviewer/) | The reviewer's routine: gated PRs, after-merge digests, the release review, and rule candidates. |
+| [`claude/skills/development/`](claude/skills/development/) | Focused development: debug from evidence, test the behaviour that matters, review the connected change, and verify before claiming done. |
+| [`claude/skills/grilling/`](claude/skills/grilling/) | Stress-test a plan or design as a tree of decisions, asked a round at a time with a recommended answer for each. |
+| [`claude/skills/thinking-from-first-principles/`](claude/skills/thinking-from-first-principles/) | Five steps from the goal and the hard constraints, for acceptance tests, direction checks and any build judged on data it has not seen. |
+| [`claude/skills/designing-products/`](claude/skills/designing-products/) | Plan a product's intent, UX, UI and brand on Impeccable: a blind direction tournament, generated tokens and brand page, four gates, the judge tour and a blind finish check. Run `npm ci` in its `kit/` before the kit's fixture build. |
+| [`claude/skills/3d-model-workflow/`](claude/skills/3d-model-workflow/) | Build a real place or machine as an interactive 3D model in the browser: data contract, LiDAR ground, simulated mechanisms, eras, the look, GPU stills on Cloud Run and a tag, check, promote deploy. |
 | [`claude/skills/intake/`](claude/skills/intake/) | Label pasted material (yours, an outside brief, or for later) before acting on it, so someone else's document never becomes your instructions. |
 | [`claude/skills/clean-repo/`](claude/skills/clean-repo/) | Keep plans, reviews and agent config out of repos other people work in. |
-| [`claude/skills/hackathon/`](claude/skills/hackathon/) | The lead agent's script for a team hackathon: deadlines first, plan, assign, publish to GitHub Issues, review and merge. See the [hackathon kit](docs/hackathon-kit.md). |
 | [`claude/skills/design-system/`](claude/skills/design-system/) | A skill for authoring and enforcing a binding design system, then verifying it in a real browser. Includes a WCAG contrast and Display-P3 colour tool. |
 | [`examples/refinery-design/`](examples/refinery-design/) | A real, filled-in design skill from a shipping product: the worked example. |
 | [`runbooks/`](runbooks/) | Problems that already cost real time, each with the symptom, how to confirm it, and the fix. |
