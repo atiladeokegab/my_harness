@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$title</title>
+<style>
+:root {
+  --bg: #fafaf9; --card: #ffffff; --ink: #1c1917; --muted: #57534e; --line: #e7e5e4;
+  --gap-bg: #fef3c7; --gap-ink: #92400e; --err-bg: #fee2e2; --err-ink: #991b1b; --ok: #15803d; --code: #f5f5f4;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c0a09; --card: #1c1917; --ink: #f5f5f4; --muted: #a8a29e; --line: #292524;
+    --gap-bg: #422006; --gap-ink: #fcd34d; --err-bg: #450a0a; --err-ink: #fca5a5; --ok: #4ade80; --code: #292524;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0c0a09; --card: #1c1917; --ink: #f5f5f4; --muted: #a8a29e; --line: #292524;
+  --gap-bg: #422006; --gap-ink: #fcd34d; --err-bg: #450a0a; --err-ink: #fca5a5; --ok: #4ade80; --code: #292524;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 28px 0 8px; }
+h3 { font-size: 16px; margin: 0; }
+.sub { color: var(--muted); margin: 0 0 16px; }
+section, .req { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin: 0 0 10px; }
+ul { margin: 4px 0; padding-left: 20px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; vertical-align: top; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; font-size: 13px; }
+code { background: var(--code); border-radius: 4px; padding: 1px 4px; font-size: 13px; overflow-wrap: anywhere; }
+.k { color: var(--muted); font-size: 13px; margin-right: 6px; }
+.meta { color: var(--muted); font-size: 13px; margin: 2px 0 6px; }
+.gap { display: inline-block; background: var(--gap-bg); color: var(--gap-ink); border-radius: 4px; padding: 0 6px; font-size: 12px; font-weight: 600; }
+.errs { background: var(--err-bg); color: var(--err-ink); border-color: transparent; }
+.ok { color: var(--ok); font-weight: 600; }
+.line { margin: 4px 0; }
+.rank { display: inline-block; min-width: 28px; font-weight: 700; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+$body
+</main>
+</body>
+</html>

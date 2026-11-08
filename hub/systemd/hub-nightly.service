@@ -1,5 +1,5 @@
 [Unit]
-Description=Hub nightly: archive old inbox messages, gc finished task workspaces, then snapshot hub state to the bucket
+Description=Hub nightly: archive inbox, clean workspaces, then snapshot hub state
 
 [Service]
 Type=oneshot

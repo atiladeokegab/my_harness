@@ -1,0 +1,27 @@
+{
+  "server_time": "2026-09-21T12:00:00+00:00",
+  "needs_you": [
+    {"kind": "waiting", "task": "T-101", "agent": "Prometheus", "title": "Permission check", "why": "Would you like to run the following command? This check needs the lead's approval before the worker can continue. The request includes the exact command, the files it would touch, the reason it needs access, and the consequences of waiting. The full request should remain available when the item is clicked."},
+    {"kind": "blocked", "task": "T-102", "agent": "Zeus", "title": "Blocked task", "why": "Needs a decision"},
+    {"kind": "stopped", "task": "T-103", "agent": "Apollo", "title": "Stopped task", "why": "no hub-apollo session"},
+    {"kind": "silent", "task": "T-104", "agent": "Hermes", "title": "Silent task", "why": "2h 14m without activity"}
+  ],
+  "agents": [
+    {"name": "Zeus", "running": true, "tasks": ["T-102"], "last_event_at": "2026-09-21T11:59:00+00:00"},
+    {"name": "Apollo", "running": false, "tasks": ["T-103"], "last_event_at": null},
+    {"name": "Hermes", "running": true, "tasks": ["T-104"], "last_event_at": "2026-09-21T09:45:00+00:00"},
+    {"name": "Athena", "running": false, "tasks": [], "last_event_at": null},
+    {"name": "Prometheus", "running": true, "tasks": ["T-101"], "last_event_at": "2026-09-21T11:58:00+00:00"}
+  ],
+  "tasks": [
+    {"id": "T-101", "title": "Escape <b>bold</b> task", "status": "claimed", "owner": "Prometheus", "project": "hub", "deps": [], "detail": "Text must remain literal.", "notes": [{"at": "2026-09-21T11:58:00+00:00", "by": "Prometheus", "text": "Checking escaping"}]},
+    {"id": "T-102", "title": "Blocked task", "status": "blocked", "owner": "Zeus", "project": "webapp", "deps": ["T-101"], "detail": "Waiting for a decision.", "notes": [{"at": "2026-09-21T11:59:00+00:00", "by": "Zeus", "text": "Needs a decision"}]},
+    {"id": "T-103", "title": "Stopped task", "status": "claimed", "owner": "Apollo", "project": "hub", "deps": [], "detail": "The worker is away.", "notes": []},
+    {"id": "T-104", "title": "Silent task", "status": "claimed", "owner": "Hermes", "project": "webapp", "deps": ["T-102"], "detail": "No recent activity.", "notes": []},
+    {"id": "T-070", "title": "A task with a long note", "status": "claimed", "owner": "Prometheus", "project": "hub", "deps": [], "detail": "A long task description should stop after two lines in the table detail. Click the detail to read the rest of the explanation, including the context and the next steps for the worker.", "notes": [{"at": "2026-09-21T11:58:00+00:00", "by": "Prometheus", "text": "This note is deliberately long enough to fill several lines in a narrow dashboard column. It explains what happened, what remains open, who needs to respond, and why the worker cannot make progress until that response arrives. The page should keep the note to two lines until someone clicks to read all of it."}]}
+  ],
+  "recent": [
+    {"at": "2026-09-21T11:59:00+00:00", "by": "Zeus", "event": "blocked", "task": "T-102", "text": "Needs a decision"},
+    {"at": "2026-09-21T11:58:00+00:00", "by": "Prometheus", "event": "notify", "task": "T-101", "text": "First line of a notification\nSecond line of a notification"}
+  ]
+}

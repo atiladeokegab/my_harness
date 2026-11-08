@@ -1,0 +1,11 @@
+{
+  "id": "C-004",
+  "base_version": 5,
+  "added": [
+    {"id": "R-7", "title": "Echo endpoint: returns what it is sent", "needs": [],
+     "acceptance": [{"id": "A-7.1", "text": "GET /api/echo?msg=<text> returns {msg: <text>}; with no msg parameter it returns {msg: \"\"}"}]}
+  ],
+  "modified": [],
+  "removed": [],
+  "reason": "Factory done-test run 1 of 2: one small new endpoint built, reviewed, merged and deployed with no human step."
+}

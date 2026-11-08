@@ -1,6 +1,7 @@
 """One safe merge and smoke cycle for hub live."""
 
 import fnmatch
+import hashlib
 import json
 import os
 import posixpath
@@ -14,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import gh_sync
+import stack_check
 
 LEAD_AGENT = os.environ.get("HUB_LEAD") or "Zeus"
 REVIEWER = os.environ.get("HUB_REVIEWER") or "Hermes"
@@ -85,22 +87,26 @@ def protected(pr):
     return len(files) != pr.get("changedFiles") or any(f.startswith(PROTECTED) for f in files)
 
 
-def secret_files(diff):
-    """The files whose added lines look like a secret. Never the matched text: it goes in a message."""
+def secret_files(diff, pattern=SECRET):
+    """The files whose added lines look like a secret (or match pattern). Never the matched text: it goes in a message."""
     hits, path = [], None
     for line in (diff or "").splitlines():
         if line.startswith("+++ "):
             path = line[4:].removeprefix("b/")
-        elif line.startswith("+") and SECRET.search(line) and path not in hits:
+        elif line.startswith("+") and pattern.search(line) and path not in hits:
             hits.append(path)
     return hits
 
 
-def fast_lane(pr, issue_body, review_before):
+def fast_lane(pr, issue_body, review_before, stack=None):
     """True when a PR may merge on green smoke without LGTM: every changed file is outside
     review_before and inside the issue's Files:, and the DONE: text in its body has `Verified:`.
-    Anything unknown (no files, a list gh cut short, no Files: line) is gated."""
+    Anything unknown (no files, a list gh cut short, no Files: line) is gated.
+    A PR that touches the stack table path is never fast-lane (Addendum 3 item 4)."""
+    stack_p = posixpath.normpath(stack or stack_check.DEFAULT_STACK)  # "./docs/stack.md" is docs/stack.md
     files = [f.get("path") or "" for f in pr.get("files") or []]
+    if stack_p in map(posixpath.normpath, files):
+        return False
     areas = [posixpath.normpath(a) for a in gh_sync.file_paths(issue_body)]
     return (bool(files) and len(files) == pr.get("changedFiles")
             and bool(re.search(r"(?m)^Verified:", pr.get("body") or ""))
@@ -108,10 +114,14 @@ def fast_lane(pr, issue_body, review_before):
                     and any(f == a or f.startswith(a + "/") for a in areas) for f in files))
 
 
-def docs_only(pr):
+def docs_only(pr, stack=None):
     """Factory rule F2: a diff of only docs/, READMEs and media merges on its evidence alone.
-    No files, or a list gh cut short, is not docs-only."""
+    No files, or a list gh cut short, is not docs-only.
+    A PR that touches the stack table path is never docs-only (Addendum 3 item 4)."""
+    stack_p = posixpath.normpath(stack or stack_check.DEFAULT_STACK)  # "./docs/stack.md" is docs/stack.md
     files = [f.get("path") or "" for f in pr.get("files") or []]
+    if stack_p in map(posixpath.normpath, files):
+        return False
     return bool(files) and len(files) == pr.get("changedFiles") and all(
         f.startswith("docs/") or posixpath.basename(f).upper().startswith("README")
         or f.lower().endswith(MEDIA) for f in files)
@@ -163,7 +173,8 @@ def now_iso():
 def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
                run, send, review_before=None, req_lines=None, change_tasks=(),
                acceptance=(), acceptance_timeout=300, ci_fix_tasks=None, change_timeout=1800,
-               gate_dir=None, spawn=spawn, change_issues=None) -> None:
+               gate_dir=None, spawn=spawn, change_issues=None, heldout=(), stack=None,
+               trial_builders=(), approvals=None) -> None:
     """Merge at most one eligible PR, then smoke and promote or revert integration.
     Records in state the PRs merged without review ("unreviewed") and the PRs waiting
     for review this pass ("gated"), for hub live's digest and alerts.
@@ -175,7 +186,12 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
     change_timeout: seconds for the smoke and make check on a change head, which run whole product suites.
     gate_dir: where a change gate's exit file and log go (hub live passes the project dir).
     spawn: starts the detached change gate; tests pass a fake.
-    change_issues: {"change/C-NNN": [issue, ...]} of its generated tasks, closed once that change lands."""
+    change_issues: {"change/C-NNN": [issue, ...]} of its generated tasks, closed once that change lands.
+    heldout: [(label, argv)] of the current held-out checks (gh_sync.heldout_checks), run on a change head after
+    the visible ones; a red one is named by its label alone, and recorded in state["heldout_red"] for hub live.
+    stack: repo path of the markdown stack table (defaults to docs/stack.md).
+    trial_builders: agents whose PRs never take fast_lane or docs_only (living spec §4).
+    approvals: {(pr, sha): reviewer} board approvals; when provided, counts instead of comments (Addendum 2 M4)."""
     clone = Path(clone)
     gate_dir = Path(gate_dir or tempfile.gettempdir())
     spec = req_lines is not None
@@ -261,6 +277,8 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
             if gate.get("sha") == sha and gate["exit"] != "lost":
                 land_change(branch, sha, gate)
                 continue
+            if held_out_twice(branch):
+                continue
             if busy:
                 continue
             if gate.get("exit") == "lost":  # its worktree died with it: prune the registration first
@@ -270,23 +288,34 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
                 print(f"live merge: {branch}: cannot fetch it with integration")  # transient: retried next pass
                 continue
             if not git("merge-base", "--is-ancestor", sha, "origin/integration").returncode:
-                git("push", "origin", "--delete", branch)  # merged on an earlier pass
+                if git("push", "origin", "--delete", branch).returncode:
+                    print(f"live merge: {branch}: already in integration, delete failed; retried next pass")
+                else:
+                    send(LEAD_AGENT, f"{branch} already in integration at {sha[:12]}: branch deleted")
                 continue
             # hub env stripped from the checks, as spec.py and board.run_verify do
-            steps = [(" ".join(argv), ["env", "-u", "HUB_DIR", "-u", "HUB_AGENT", "timeout",
-                                       str(acceptance_timeout), *argv]) for argv in acceptance]
+            checks = [(" ".join(argv), argv) for argv in acceptance] + list(heldout)
+            steps = [(name, ["env", "-u", "HUB_DIR", "-u", "HUB_AGENT", "timeout", str(acceptance_timeout), *argv])
+                     for name, argv in checks]
             steps += [("smoke", ["timeout", str(change_timeout), "sh", "-c", smoke]),
                       ("make check", ["timeout", str(change_timeout), "sh", "-c",
                                       "if make -n check >/dev/null 2>&1; then make check; fi"])]
             # the gate exits with the number of its first red step, so the result names it
             command = "\n".join(f"{shlex.join(argv)} || exit {n}" for n, (_, argv) in enumerate(steps, 1))
-            cap = acceptance_timeout * len(acceptance) + 2 * change_timeout + 60
+            cap = acceptance_timeout * len(checks) + 2 * change_timeout + 60
             exit_file = gate_dir / f"change-gate-{sha[:12]}.exit"
             exit_file.unlink(missing_ok=True)
             with open(gate_dir / "change-gate.log", "w") as out:
                 spawn(["sh", "-c", DETACHED_SH, "change-gate", str(clone), sha, command, str(exit_file), str(cap)], out)
             gates[branch] = {"sha": sha, "started": now_iso(), "cap": cap, "steps": [name for name, _ in steps]}
             busy = True
+
+    armed = hashlib.sha256(json.dumps(list(heldout)).encode()).hexdigest()[:12]  # changes when heldout.json does
+
+    def held_out_twice(branch):
+        """Two held-out reds on one branch: Zeus decides whether the check or the build is wrong (design section 3)."""
+        record = state.get("heldout_reds", {}).get(branch) or {}
+        return record.get("armed") == armed and record.get("n", 0) >= 2
 
     def land_change(branch, sha, gate):
         """Act once on a finished gate: tell Zeus the first red step, or merge the green head --no-ff."""
@@ -299,7 +328,19 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
         if code != "0":
             steps = gate["steps"]
             red = steps[int(code) - 1] if code.isdigit() and 0 < int(code) <= len(steps) else f"exit {code}"
-            fail(f"{branch} is red at {sha[:12]} ({red}): not merged into integration")
+            if not red.startswith("held-out "):
+                fail(f"{branch} is red at {sha[:12]} ({red}): not merged into integration")
+                return
+            record = state.setdefault("heldout_reds", {}).get(branch) or {}
+            n = record.get("n", 0) + 1 if record.get("armed") == armed else 1
+            state["heldout_reds"][branch] = {"armed": armed, "n": n}
+            reds = state.setdefault("heldout_red", [])
+            reds[:] = reds[-199:] + [
+                {"at": now_iso(), "branch": branch, "sha": sha, "line": red.removeprefix("held-out ")}
+            ]
+            fail(f"{branch} is red at {sha[:12]} ({red}): not merged into integration; log {gate_dir / 'heldout' / 'gate.log'}"
+                 + ("; red twice on this branch, so it is not gated again until heldout.json changes: decide whether "
+                    "the check or the build is wrong" if n >= 2 else ""))
             return
         if git("fetch", "-q", "origin", "integration").returncode:
             tried.pop(branch)  # transient: retried next pass, on the same green result
@@ -370,7 +411,8 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
                     # the owners table were "red" on an empty repo). Green, so main still moves.
                     result = subprocess.CompletedProcess([], 0, "no project yet: nothing to smoke", "")
                 else:
-                    result = call(["timeout", "300", "sh", "-c", smoke], cwd=path, timeout=310)
+                    # 300 s stalled main for an hour on a loaded box (night-shift, 2026-10-24); the full suite needs more.
+                    result = call(["timeout", str(change_timeout), "sh", "-c", smoke], cwd=path, timeout=change_timeout + 10)
             finally:
                 git("worktree", "remove", "--force", str(path))
 
@@ -438,6 +480,25 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
         else:
             fail(f"Smoke failed after #{merged_pr}; reverted integration and reopened issue #{issue}")
 
+    def carries_heldout(pr):
+        """True (held for Zeus) when the PR's added lines carry a held-out canary, or its diff cannot be read."""
+        key = f"{pr['number']}:{pr.get('headRefOid')}"
+        clean = state.setdefault("canary_clean", [])
+        if key in clean:
+            return False
+        diff = call(["gh", "pr", "diff", str(pr["number"]), "-R", repo])
+        if diff.returncode:
+            return True  # unread: retried next pass
+        hits = secret_files(diff.stdout, gh_sync.CANARY)
+        if not hits:
+            clean[:] = clean[-199:] + [key]
+            return False
+        noted = state.setdefault("canary_noted", [])
+        if key not in noted:
+            noted.append(key)
+            send(LEAD_AGENT, f"PR #{pr['number']} contains a held-out file ({', '.join(hits)}): held, never merged here")
+        return True
+
     close_change_issues()
     prs = data(["gh", "pr", "list", "-R", repo, "--state", "open", "--limit", "100",
                 "--json", "number,body,author,headRefOid,headRefName,baseRefName,isDraft,mergeable,comments,reviews,files,changedFiles"])
@@ -457,8 +518,14 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
             continue  # no Evidence: hub live has asked for it, and it never merges without
         if spec:  # hub live comments on a bad Req: and sends spec/ and tests/acceptance/ PRs to Zeus
             text = req_text(pr, repo, data)
-            if text is None or req_problem(text, req_lines, ci_fix_tasks) or protected(pr):
+            if text is None or req_problem(text, req_lines, ci_fix_tasks) or protected(pr) or carries_heldout(pr):
                 continue
+        try:
+            fetch = stack_check.gh_fetch(call, repo)
+            if stack_check.undeclared(pr, pr.get("baseRefName") or "main", fetch, stack or stack_check.DEFAULT_STACK):
+                continue
+        except stack_check.Unreadable:
+            continue
         to_change = spec and (pr.get("baseRefName") or "").startswith("change/")
         issue_number = int(match.group(1))
         linked_issue = data(["gh", "issue", "view", str(issue_number), "-R", repo,
@@ -477,6 +544,7 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
         author = (pr.get("author") or {}).get("login")
         builder = next((label["name"][6:].lower() for label in linked_issue.get("labels") or []
                         if label["name"].startswith("agent:")), None)
+        trials = {b.lower() for b in trial_builders}
         fast = False
         if author == lead_login:
             # Hermes posts its LGTM from the lead's account, so on a PR Hermes built the LGTM is the
@@ -486,6 +554,16 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
                 comment.get("createdAt") or "" for comment in pr.get("comments") or []
                 if is_lgtm(comment.get("body"), sha)
                 and (comment.get("author") or {}).get("login") == lead_login]
+            if approvals is not None:
+                if isinstance(approvals, dict):
+                    reviewer = approvals.get((pr["number"], sha))
+                    reviewer_canon = reviewer.lower() if isinstance(reviewer, str) else None
+                    builder_canon = builder.lower() if builder else None
+                    approved = bool(reviewer and reviewer_canon != builder_canon and reviewer_canon not in trials)
+                else:
+                    approved = (pr["number"], sha) in approvals
+            else:
+                approved = bool(lgtms)
             # A CHANGES: since the last push holds the PR (fast lane too) until a later LGTM. Commits
             # come per PR: on the list call they exceed GitHub's 500,000-node GraphQL limit.
             if any((note.get("body") or "").strip().startswith("CHANGES:")
@@ -499,11 +577,12 @@ def merge_tick(repo: str, clone: Path, smoke: str, lead_login: str, state: dict,
             if asks and not any(at > asks[-1][0] for at in lgtms):
                 gated.append(pr["number"])
                 continue
-            approved = bool(lgtms)
             # Only lead-account PRs: they merge with --admin, so no GitHub review is needed.
             # With a hackathon config, fast_lane already covers ungated in-area docs; docs_only would
             # bypass review_before (docs/CONTRACT.md) and the issue's Files: (Hermes review of 4ac34c0).
-            fast = not approved and (docs_only(pr) if factory else fast_lane(pr, linked_issue.get("body"), review_before))
+            # Trial builders never take fast_lane or docs_only (living spec §4).
+            is_trial = builder and builder.lower() in trials
+            fast = not approved and not is_trial and (docs_only(pr, stack=stack) if factory else fast_lane(pr, linked_issue.get("body"), review_before, stack=stack))
             if fast:  # a hard extra condition: no secret in the added lines, and the diff was read
                 diff = call(["gh", "pr", "diff", str(pr["number"]), "-R", repo])
                 hits = secret_files(diff.stdout)

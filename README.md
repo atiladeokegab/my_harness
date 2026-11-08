@@ -48,7 +48,7 @@ acceptance criterion in a skill.
 | Path | What it is |
 |---|---|
 | [`install.sh`](install.sh) | Idempotent installer. Backs up anything it replaces and never touches board data. Re-run it after `git pull` to upgrade. |
-| [`hub/`](hub/) | The multi-agent hub: `board.py` (the `hub` CLI), `gh_sync.py` (`hub gh-sync`), `live.py` (`hub live`), `spec.py` (`hub spec`, the PRD tree), `workspace.py` (`hub ws`, a worktree per claim), `hubmsg`, `hubwaked`, `shell.sh`, optional agent hooks (`hooks/`), the optional factory (`dispatch.py`, `run.py`, `systemd/`, `factory.example.json`), and their test suites (`make check`). [`HUB.md`](hub/HUB.md) is the operating manual. |
+| [`hub/`](hub/) | The multi-agent hub: `board.py` (the `hub` CLI), `gh_sync.py` (`hub gh-sync`), `live.py` (`hub live`), `spec.py` and `prd.py` (`hub spec`, `hub prd`: the PRD tree), `autonomy.py` (`hub agents`: per-agent phases), `workspace.py` (`hub ws`, a worktree per claim), `clean_repo.py` (`hub init-repo`, `hub ship-check`, `hub scrub`), `dashboard.py` (`hub dashboard`), `hub_trace.py` (`hub trace`), `map.py` (`hub map`), `hubmsg`, `hubwaked`, `shell.sh`, optional agent hooks (`hooks/`), the optional factory (`dispatch.py`, `run.py`, `systemd/`, `factory.example.json`), and their test suites (`make check`). [`HUB.md`](hub/HUB.md) is the index to the operating manual in [`hub/docs/hub/`](hub/docs/hub/). |
 | [`claude/CLAUDE.md`](claude/CLAUDE.md) | Global instructions for every session: the hub protocol, how I like to work, and engineering defaults (uv, testing, deploys). |
 | [`claude/settings.json`](claude/settings.json) | Settings template with agent teams on and an auto-mode skeleton. |
 | [`claude/skills/hub-planning/`](claude/skills/hub-planning/) | The lead's planning layer: where specs and plans go, grilling and C4 before approval, seeding the PRD, and turning an approved plan into board tasks with one owner per file. |
@@ -84,6 +84,12 @@ The hub can also run as a small AI code factory, so work moves without you relay
    to a bucket; a weekly task turns repeated review findings into rules.
 6. Optionally, a project's PRD drives the board (`hub spec`): a change of intent is an approved
    delta, and the task tree is regenerated from it, rewinding only the work it collides with.
+7. Each agent has an autonomy phase in `factory.json` (`off`, `trial`, `trusted`, `reviewer`,
+   `lead`) that sets whether it is dispatched, reset per task, its time budget and what it may
+   do. `hub agents` shows the table; a weekly pass demotes a trusted agent whose work was
+   reverted and opens a task for the lead to promote a clean trial one.
+8. `hub dashboard` serves the board, agents and their token spend on `127.0.0.1:8765`; the agent
+   launcher starts it for you (`HUB_DASHBOARD=0` turns it off).
 
 `hub pause "reason"` stops all of it. It is off until you write `factory.json` and switch on the
 systemd timers: [`runbooks/install-factory-timers.md`](runbooks/install-factory-timers.md). How it
@@ -105,9 +111,8 @@ works: the factory section of [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
 6. [**Hub architecture**](hub/ARCHITECTURE.md) and [**design review**](hub/OVERVIEW.md):
    how the hub works, what's verified and what's only assumed, and the decisions worth
    arguing about.
-7. [**Hackathon kit**](docs/hackathon-kit.md): run a human team the way the hub runs
-   agents. The lead plans, every task becomes a GitHub Issue, and every teammate's AI agent
-   follows one rulebook. Rehearsed on real GitHub with a second account.
+7. [**Learnings**](docs/learnings.md): the lessons that cost real time, each with why and how
+   to apply it.
 
 ---
 
@@ -119,8 +124,9 @@ works: the factory section of [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
   agent commands are installed as executables, so they work from the default zsh.
 - [Claude Code](https://claude.com/claude-code) for the Claude agents.
 - Optional: [Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`) for
-  the Codex worker, [uv](https://docs.astral.sh/uv/) for Python work, `gh`, `make`, and `node` for
-  the optional agent hooks (turn-end message delivery, inbox surfacing).
+  the Codex worker, [uv](https://docs.astral.sh/uv/) for Python work, `gh`, `make`, `node` for
+  the optional agent hooks (turn-end message delivery, inbox surfacing, ship-check), and
+  `graphify` for `hub map`.
 - For the optional factory: Linux with systemd user units, `gh`, and `gcloud` if you want
   bucket snapshots.
 - One account per agent if you want independent rate limits. You can start with a single
@@ -136,7 +142,8 @@ python3 tests/test_messaging.py   # the transport: wakes, relay, dedup, dialog, 
 python3 tests/test_gh_sync.py     # hub gh-sync against a stub gh: guards, sync, crash safety
 python3 tests/test_live.py        # hub live; also test_live_merge, test_gh_board, test_review
 python3 tests/test_dispatch.py    # the factory; also test_watchdog, test_run, test_gh_sync_factory, test_inbox_gc, test_snapshot
-python3 -m unittest tests.test_spec   # hub spec; also test_workspace, test_inbox_surface (needs node)
+python3 -m unittest tests.test_spec   # hub spec; also test_prd, test_prd_grill, test_spec_lint, test_trace
+python3 -m unittest tests.test_autonomy   # phases; also test_dashboard, test_clean_repo, test_map, test_workspace, test_inbox_surface (needs node)
 ```
 
 Run single suites with every `HUB_*` variable unset (`env -u HUB_DIR -u HUB_AGENT ...`), so nothing

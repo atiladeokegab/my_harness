@@ -36,6 +36,8 @@ elif a[:2] == ["run", "list"]:
     print(read(f"runs-{repo}.json"))
 elif a[:2] == ["run", "view"]:
     print(read(f"log-{a[2]}.txt", ""))
+elif a[:2] == ["pr", "list"]:
+    print(read(f"prs-{repo}.json"))
 elif a[:2] == ["issue", "view"]:
     print(read(f"state-{a[2]}.json", '{"state": "OPEN"}'))
 elif a[:2] in (["issue", "close"], ["issue", "comment"], ["issue", "edit"]):
@@ -339,6 +341,24 @@ class FactoryPollTest(unittest.TestCase):
         self.assertEqual(self.poll(), [])
         self.assertFalse([c for c in self.calls()[calls:] if c[:2] in (["issue", "create"], ["issue", "edit"],
                                                                        ["issue", "comment"])])
+
+    def test_a_done_generated_task_with_an_open_pr_and_no_issue_is_published(self):
+        """2026-10-19: T-565 was done and its PR open while the hub was paused, so it never got an issue and
+        live_merge skipped the PR forever. A done task with no such PR (T-004) stays quiet."""
+        self.spec_project()
+        self.generated_board()
+        board = json.loads((self.hub / "board.json").read_text())
+        board["tasks"] += [dict(board["tasks"][3], id="T-006", title="paused", status="done"),
+                           dict(board["tasks"][3], id="T-007", title="merged", status="done", merge_sha="abc")]
+        (self.hub / "board.json").write_text(json.dumps(board))
+        self.stub_file("prs-app.json", [{"headRefName": "task/T-006"}, {"headRefName": "task/T-007"}])
+        self.poll()
+        creates = [c[c.index("--title") + 1] for c in self.calls() if c[:2] == ["issue", "create"]]
+        self.assertEqual(creates, ["R-1 Create link: A-1.1@2", "R-1 seeded", "paused"])
+        tasks = {t["id"]: t for t in self.tasks()}
+        self.assertEqual(tasks["T-006"]["issue"], 53)
+        self.assertNotIn("issue", tasks["T-004"])
+        self.assertNotIn("issue", tasks["T-007"])
 
     def test_a_lost_create_reply_is_found_by_its_marker_not_sent_twice(self):
         self.spec_project()

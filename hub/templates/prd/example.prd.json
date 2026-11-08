@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "header": {
+    "problem": "Support staff paste long tracking URLs into customer chats, where they wrap, break and cannot be counted.",
+    "users": [
+      "Support agents: shorten a link in one step while on a live chat",
+      "Support leads: see how often each shared link is opened"
+    ],
+    "goals": [
+      {
+        "purpose": "Every link an agent shares fits on one line",
+        "advantage": "No more broken wrapped URLs in chats",
+        "measure": "A short link is created in under 1 second"
+      },
+      {
+        "purpose": "Leads can see which links customers open",
+        "advantage": "Help articles get fixed by evidence, not guesswork",
+        "measure": "Click counts are visible within 5 seconds of a click"
+      }
+    ],
+    "principles": [
+      "One step for the agent: paste, get a link",
+      "Nothing is deleted; expiry hides a link, it does not destroy it",
+      "Works offline on one machine: no external services"
+    ],
+    "non_goals": [
+      "Custom vanity codes",
+      "User accounts or login",
+      "Analytics beyond a click count"
+    ],
+    "owner": "the lead",
+    "glossary": {
+      "code": "the 6-character key in a short link",
+      "click": "one redirect served for a code"
+    }
+  },
+  "constraints": {
+    "stack": "docs/stack.md",
+    "limits": [
+      {"text": "p95 redirect under 50 ms on one core", "why": "redirects sit in front of every customer click", "check": "tests/perf/test_redirect_p95.py"},
+      "One SQLite file; no other datastore"
+    ],
+    "invariants": [
+      {"text": "A code, once issued, always resolves to the same URL", "why": "links live on in old chats", "check": "tests/property/test_code_stable.py"}
+    ],
+    "offline_tests": true,
+    "tags": ["trust_boundary: the shorten form takes untrusted URLs"]
+  },
+  "requirements": [
+    {
+      "id": "R-1",
+      "title": "Shorten: a URL becomes a short link",
+      "why": "Agents need one-line links in chat",
+      "rank": 1,
+      "needs": [],
+      "touches": ["app/routes/links.py", "app/store.py"],
+      "acceptance": [
+        {
+          "id": "A-1.1",
+          "v": 1,
+          "text": "POST /api/links {url} returns 201 {code, short_url} with a 6-character code",
+          "test": "tests/acceptance/test_A_1_1.py",
+          "fixtures": [
+            {"input": {"url": "https://example.com/a/very/long/path"}, "output": {"status": 201, "code_length": 6}}
+          ]
+        },
+        {
+          "id": "A-1.2",
+          "v": 1,
+          "text": "POST /api/links with a URL that is not http(s) returns 422 {error: \"bad_url\"}",
+          "test": "tests/acceptance/test_A_1_2.py"
+        }
+      ]
+    },
+    {
+      "id": "R-2",
+      "title": "Redirect: a short link opens its URL",
+      "why": "A short link is useless unless it lands the customer on the page",
+      "rank": 2,
+      "needs": ["R-1"],
+      "touches": ["app/routes/redirect.py"],
+      "acceptance": [
+        {
+          "id": "A-2.1",
+          "v": 1,
+          "text": "GET /<code> returns 302 to the stored URL; an unknown code returns 404",
+          "test": "tests/acceptance/test_A_2_1.py"
+        }
+      ]
+    },
+    {
+      "id": "R-3",
+      "title": "Stats: a lead sees each link's click count",
+      "why": "Leads fix the help articles customers actually open",
+      "rank": 3,
+      "needs": ["R-2"],
+      "touches": ["app/routes/stats.py", "app/store.py"],
+      "acceptance": [
+        {
+          "id": "A-3.1",
+          "v": 1,
+          "text": "GET /api/links/<code>/stats returns {clicks}, one more after each redirect",
+          "test": "tests/acceptance/test_A_3_1.py"
+        }
+      ]
+    }
+  ],
+  "references": {
+    "spine": {"path": "example-spine.md", "sha256": "d0709467bbc76bf64d16892396c53f006b45df0800bc4d85712dc06cc45f61bb"}
+  },
+  "status": {
+    "state": {"R-1": "approved", "R-2": "approved", "R-3": "proposed"},
+    "open_questions": [],
+    "waiting_room": ["QR code for each short link"]
+  }
+}

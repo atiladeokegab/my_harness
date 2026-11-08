@@ -13,8 +13,12 @@
  * a shared app-server daemon whose env belongs to whoever started it (spike T1), so a Codex payload
  * (it carries turn_id) counts only with --agent, which ~/.codex/hooks.json passes. Codex shows
  * additionalContext to the model as a developer message. Always exits 0 and prints nothing on any failure.
+ *
+ * agy (`--format agy`) runs this on PreInvocation, before every model call, and takes the messages as an
+ * injected ephemeral step. Every caller skips spawning `hub` until the inbox file is newer than the --unseen cursor.
  */
 const fs = require('node:fs');
+const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 function agentFor(input) {
@@ -24,18 +28,50 @@ function agentFor(input) {
   return process.env.HUB_AGENT || '';
 }
 
+function format() {
+  const i = process.argv.indexOf('--format');
+  return i > 1 ? process.argv[i + 1] : '';
+}
+
+// board.py rewrites the cursor whenever the set of inbox keys changes, under the lock that appends.
+function inboxChanged(agent) {
+  if (!process.env.HUB_DIR) return true;
+  const me = agent[0].toUpperCase() + agent.slice(1).toLowerCase();
+  const dir = path.join(process.env.HUB_DIR, 'inbox');
+  let box;
+  try {
+    box = fs.statSync(path.join(dir, `${me}.jsonl`)).mtimeMs;
+  } catch {
+    return false;
+  }
+  try {
+    return box > fs.statSync(path.join(dir, `.${me}.unseen.json`)).mtimeMs;
+  } catch {
+    return true;
+  }
+}
+
 function main() {
+  if (process.env.HUB_NO_HOOKS) return;  // a launcher's probe (agy -p): never surface the seat's inbox to it
   const input = JSON.parse(fs.readFileSync(0, 'utf8'));
   const agent = agentFor(input);
   if (!agent) return;
+  const agy = format() === 'agy';
+  // No hub spawn on a tool call unless mail arrived since the last look (token review 2026-10-20).
+  if (!inboxChanged(agent)) return;
   const news = execFileSync('hub', ['inbox', '--unseen', '--as', agent], {
     encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
   }).trim();
   if (!news) return;
+  const text = `[hub inbox] new since last check:\n${news}`;
+  if (agy) {
+    process.stdout.write(JSON.stringify({ injectSteps: [{ ephemeralMessage: text }] }));
+    return;
+  }
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: input.hook_event_name || 'UserPromptSubmit',
-      additionalContext: `[hub inbox] new since last check:\n${news}`,
+      additionalContext: text,
     },
   }));
 }

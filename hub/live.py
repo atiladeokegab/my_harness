@@ -20,12 +20,14 @@ from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+import autonomy
+from autonomy import reviewer
 import board as hb
 import gh_sync
-from live_merge import CLOSES, DETACHED_SH, EVIDENCE, docs_only, fast_lane, lead_changes, protected, req_problem, req_text, secret_files
+import stack_check
+from live_merge import CLOSES, DETACHED_SH, EVIDENCE, REQ, docs_only, fast_lane, lead_changes, protected, req_problem, req_text, secret_files
 
-REVIEWER = os.environ.get("HUB_REVIEWER") or "Hermes"
-LEAD_AGENT = os.environ.get("HUB_LEAD") or "Zeus"
+LEAD_AGENT = hb.LEAD_AGENT
 # gh's words for GitHub throttling ("API rate limit exceeded", "secondary rate limit", HTTP 429,
 # Retry-After). A plain 403 is a permissions error, not a throttle.
 # shortcut/ponytail notes only after a comment marker, so `shortcut: "⌘K"` in UI code is not a limitation
@@ -186,8 +188,8 @@ class Live:
         for line in r.stdout.splitlines():
             kind = line.split(" ", 1)[0]
             if kind in ("NEW", "CHANGED") and " in #" in line:  # sub-issue activity: FLAG if it drifts
-                self._send(REVIEWER, f"{self.project} {line}")
-                self.log(f"sent {REVIEWER}: {line}")
+                self._send(reviewer(), f"{self.project} {line}")
+                self.log(f"sent {reviewer()}: {line}")
             elif kind == "DRAFT":
                 self._send(LEAD_AGENT, f"{self.project} {line} (decide within 10 min)")
                 self.log(f"sent {LEAD_AGENT}: {line}")
@@ -248,7 +250,7 @@ class Live:
         # gh's default limit of 30 dropped the 31st PR. Commits come per PR, as in live_merge: on a
         # 100-PR list they exceed GitHub's 500,000-node GraphQL limit.
         self._prs = self.gh_json("pr", "list", "-R", self.repo, "--state", "open", "--limit", "100", "--json",
-                                "number,title,headRefOid,headRefName,isDraft,author,body,reviews,comments,files,changedFiles,additions,deletions")
+                                 "number,title,headRefOid,headRefName,baseRefName,isDraft,author,body,reviews,comments,files,changedFiles,additions,deletions")
         if not isinstance(self._prs, list):
             self._prs, self._prs_error = [], True
             hour = self.now().strftime("%Y-%m-%dT%H")
@@ -260,6 +262,7 @@ class Live:
         for pr in self._prs:
             if pr["isDraft"]:
                 continue
+            self.fill(pr)
             n, sha = pr["number"], pr["headRefOid"]
             if ((pr.get("author") or {}).get("login", "").lower() == self.lead.lower()
                     and any((note.get("body") or "").strip().startswith("CHANGES:")
@@ -275,18 +278,63 @@ class Live:
                 pass
             elif not EVIDENCE.search(pr.get("body") or ""):
                 self.hold(pr)  # not reviewed until it proves its work; live_merge never merges it
+            elif self.stack_hold(pr):
+                pass
             elif self.fast(pr):
                 self.state["sent"].append(key)  # the "merged without review:" digest covers it
             else:
                 task = self.task_for(pr)
                 text = f"{self.project} PR #{n} ready for review at {sha[:12]}: {pr['title']}{self.scope(pr, task)}"
-                if self.builder(task) == REVIEWER:  # live_merge ignores Hermes's LGTM on its own PR
-                    self.once(key, LEAD_AGENT, f"{text}\nBuilt by {REVIEWER}, so its LGTM does not count: "
+                if self.builder(task) == reviewer():  # live_merge ignores the reviewer's LGTM on its own PR
+                    self.once(key, LEAD_AGENT, f"{text}\nBuilt by {reviewer()}, so its LGTM does not count: "
                               "review it and merge it by hand.")
                 else:
-                    self.once(key, REVIEWER, text)
+                    self.once(key, reviewer(), text)
             if (pr.get("author") or {}).get("login", "").lower() == self.lead.lower():
                 self.fixes(pr)
+
+    def fill(self, pr):
+        """A PR from task/T-n gets the lines the board already knows (`Closes #`, `Req:`, `Task:`) put at
+        the top of its body when any is missing, once per PR: on 2026-10-18 both builders left one out."""
+        m = re.fullmatch(r"task/(T-\d+)", pr.get("headRefName") or "")
+        key = f"fill:{pr['number']}"
+        if not m or key in self.state["sent"]:
+            return
+        with hb.board() as (data, _):
+            task = next((t for t in data["tasks"] if t["id"] == m[1] and t.get("project") == self.project), None)
+        if not task:
+            self.state["sent"].append(key)
+            return
+        # Req: and Task: may be commit trailers: a body Req: from the board would hide a newer one there
+        text = req_text(pr, self.repo, lambda args: self.gh_json(*args[1:]))
+        if text is None:
+            return  # commits unreadable: logged by gh_json, retried next pass
+        body = pr.get("body") or ""
+        missing = []
+        if task.get("issue") and not CLOSES.search(body):
+            missing.append(f"Closes #{task['issue']}")
+        if task.get("reqs") and not REQ.search(text):
+            missing.append(f"Req: {', '.join(task['reqs'])}")
+        if not re.search(r"(?mi)^Task:[ \t]*T-\d+", text):
+            missing.append(f"Task: {task['id']}")
+        waiting = not task.get("issue") and not CLOSES.search(body)
+        if waiting:
+            # not complete until the poll publishes its issue: no `Closes #` means live_merge skips it
+            self.once(f"noissue:{pr['number']}", LEAD_AGENT,
+                      f"{self.project}: PR #{pr['number']} ({m[0]}) has no issue yet, so it cannot merge")
+        if not missing:
+            if not waiting:
+                self.state["sent"].append(key)  # complete: never take the board lock for it again
+            return
+        new = "\n".join(missing) + "\n\n" + body
+        r = self.run(["gh", "pr", "edit", pr["number"], "-R", self.repo, "--body", new])
+        if r.returncode:
+            self.log(f"fill PR #{pr['number']} failed: {(r.stderr or '').strip()[:200]}")  # retried next pass
+            return
+        pr["body"] = new
+        if not waiting:
+            self.state["sent"].append(key)
+        self.log(f"filled PR #{pr['number']} body: {'; '.join(missing)}")
 
     def hold(self, pr):
         """One comment per PR saying what is missing; a failed comment is retried next pass."""
@@ -295,6 +343,36 @@ class Live:
                 ["gh", "pr", "comment", pr["number"], "-R", self.repo, "--body", NO_EVIDENCE]).returncode:
             self.state["sent"].append(key)
             self.log(f"held PR #{pr['number']}: no Evidence")
+
+    def stack_hold(self, pr):
+        """In a repo with a stack table (PRD constraints.stack, else docs/stack.md), a PR adding an undeclared
+        dependency gets one comment naming the row to add and no review; live_merge never merges it."""
+        n, sha = pr["number"], pr["headRefOid"]
+        spec = gh_sync.load_spec(self.project)
+        stack = stack_check.stack_path(spec)
+        fetch = stack_check.gh_fetch(self.run, self.repo)
+        base = pr.get("baseRefName") or "main"
+        try:
+            found = stack_check.undeclared(pr, base, fetch, stack)
+        except stack_check.Unreadable as exc:
+            self.log(f"PR #{n} stack check unreadable: {exc}")
+            key = f"stack-unreadable:{n}"
+            if key not in self.state["sent"] and not self.run(
+                    ["gh", "pr", "comment", str(n), "-R", self.repo, "--body",
+                     f"Held: dependency files or stack table could not be read: {exc}. "
+                     "Resolve this before review or merge."]).returncode:
+                self.state["sent"].append(key)
+            return True
+        if not found:
+            return False
+        problem = ",".join(name for name, _ in found)
+        key = f"stack:{n}:{problem}"
+        if key not in self.state["sent"] and not self.run(
+                ["gh", "pr", "comment", str(n), "-R", self.repo, "--body",
+                 stack_check.message(found, stack)]).returncode:
+            self.state["sent"].append(key)
+            self.log(f"held PR #{n}: undeclared {problem}")
+        return True
 
     def ci_fix_tasks(self):
         with hb.board() as (data, _):
@@ -324,7 +402,7 @@ class Live:
         if protected(pr):
             self.once(f"protected:{n}:{sha}", LEAD_AGENT,
                       f"{self.project} PR #{n} at {sha[:12]} touches spec/ or tests/acceptance/ (or gh cut its file "
-                      f"list short): protected, so not sent to {REVIEWER} and never merged by hub live. Review it and "
+                      f"list short): protected, so not sent to {reviewer()} and never merged by hub live. Review it and "
                       "merge it by hand.")
             return True
         return False
@@ -409,12 +487,23 @@ class Live:
         if (not m or lead_changes(pr, self.lead)
                 or (pr.get("author") or {}).get("login", "").lower() != self.lead.lower()):
             return False
+        builder = None
+        if m:
+            issue = self.gh_json("issue", "view", m[1], "-R", self.repo, "--json", "labels")
+            if isinstance(issue, dict):
+                builder = next((l["name"][6:] for l in issue.get("labels") or [] if l.get("name", "").startswith("agent:")), None)
+        if not builder:
+            task = self.task_for(pr)
+            builder = self.builder(task)
+        if builder and autonomy.lacks(builder, "fast_lane"):
+            return False
+        stack_p = stack_check.stack_path(gh_sync.load_spec(self.project))
         if review_before is None:  # factory repo: rule F2, docs, READMEs and media need no review
-            if not docs_only(pr):
+            if not docs_only(pr, stack=stack_p):
                 return False
         else:  # hackathon: the fast lane alone, so review_before and the issue's Files: still gate docs
             issue = self.gh_json("issue", "view", m[1], "-R", self.repo, "--json", "body")
-            if not isinstance(issue, dict) or not fast_lane(pr, issue.get("body"), review_before):
+            if not isinstance(issue, dict) or not fast_lane(pr, issue.get("body"), review_before, stack=stack_p):
                 return False
         diff = self.run(["gh", "pr", "diff", str(pr["number"]), "-R", self.repo])
         return not diff.returncode and not secret_files(diff.stdout)
@@ -456,6 +545,7 @@ class Live:
             self.once(f"cr:{cr['number']}", LEAD_AGENT, f"{self.project} change-request #{cr['number']}: {cr['title']}")
 
     def merge(self):
+        self.change_branch_cap()
         hold = self.dir / ".merge-hold"
         if hold.is_file():
             since = hold.read_text().strip() or "?"
@@ -463,7 +553,7 @@ class Live:
             try:
                 if self.now() - when(since) >= timedelta(minutes=15):
                     self.once(f"hold:{since}", LEAD_AGENT,
-                              f"{self.project}: merges held by {REVIEWER} since {since} (15 min+). "
+                              f"{self.project}: merges held by {reviewer()} since {since} (15 min+). "
                               f"Resume: hub live --project {self.project} --resume-merges")
             except ValueError:
                 pass
@@ -491,14 +581,86 @@ class Live:
             spec["ci_fix_tasks"] = self.ci_fix_tasks()
             spec["change_timeout"] = gh_sync.factory_entry(self.project).get("change_timeout", 1800)
             spec["gate_dir"] = self.dir
+            spec["heldout"] = gh_sync.heldout_checks(self.project)
+            if stale := gh_sync.heldout_stale(self.project):
+                self.once(f"heldout-stale:{', '.join(stale)}", LEAD_AGENT,
+                          f"{self.project}: the change gate skips stale held-out checks: {', '.join(stale)}")
+            stack_p = ((gh_sync.load_spec(self.project) or {}).get("constraints") or {}).get("stack")
+            if stack_p and isinstance(stack_p, str) and stack_p.strip():
+                spec["stack"] = stack_p.strip()
+            trial_builders = [a["name"] for a in autonomy.agents(autonomy.factory())
+                              if autonomy.lacks(a["name"], "fast_lane")]
+            if trial_builders:
+                spec["trial_builders"] = trial_builders
+            approvals = autonomy.board_approvals(self.repo)
+            if approvals:
+                spec["approvals"] = approvals
         live_merge.merge_tick(self.repo, self.clone, self.cfg["smoke"], self.lead, self.state,
                               self.run, send, self.cfg.get("review_before"), **spec)
+        self.heldout_notes()
         now, since = self.now(), self.state.setdefault("gated_since", {})
         for n in self.state.get("gated", []):
             if now - when(since.setdefault(str(n), now.isoformat())) > timedelta(minutes=10):
                 self.once(f"gatewait:{n}", LEAD_AGENT,
                           f"{self.project} PR #{n} has waited 10+ min for LGTM: review it "
-                          f"(a sub-agent can load hub:hackathon-reviewer) or chase {REVIEWER}.")
+                          f"(a sub-agent can load hub:hackathon-reviewer) or chase {reviewer()}.")
+
+    def heldout_notes(self):
+        """A held-out red on a change branch (live_merge's heldout_red): a note on each of its tasks citing the
+        line, and a comment on their issues, that name the line alone. Once per red."""
+        for e in self.state.get("heldout_red", []):
+            key = f"heldout:{e['branch']}:{e['sha']}"
+            if key in self.state["sent"]:
+                continue
+            text = (f"A held-out check of {e['line']} is red. Re-read {e['line']}'s text and its edge cases. "
+                    "Do not ask for the check.")
+            with hb.board(write=True) as (data, events):
+                mine = [t for t in data["tasks"] if t.get("project") == self.project
+                        and gh_sync.change_branch(t) == e["branch"] and "stale" not in (t.get("tags") or [])]
+                # a carried-over line red on the rebuild names no task: every task on the branch hears
+                hits = [t for t in mine if any(r.split("@")[0] == e["line"] for r in t.get("reqs") or [])] or mine
+                for t in hits:
+                    t["notes"].append({"at": hb.now(), "by": "hub-live", "text": text})
+                    t["updated"] = hb.now()
+                    hb.log(events, "hub-live", "note", t["id"], text=text)
+            self.state["sent"].append(key)  # after the write: a failed one is retried next tick
+            for t in hits:
+                if t.get("issue"):
+                    r = self.run(["gh", "issue", "comment", str(t["issue"]), "-R", self.repo, "--body", text])
+                    if r.returncode:
+                        self.log(f"held-out comment on #{t['issue']} failed: {(r.stderr or '').strip()[:200]}")
+            self.log(f"held-out {e['line']} red on {e['branch']}: noted on {', '.join(t['id'] for t in hits) or 'no task'}")
+
+    def change_branch_cap(self):
+        lock = self.dir / "spec" / "spec.lock"
+        if not lock.is_file():
+            return
+        try:
+            current = json.loads(lock.read_text())
+            age = self.now().timestamp() - lock.stat().st_mtime
+        except (OSError, ValueError):
+            return
+        if not isinstance(current, dict):
+            return
+        cid, version = current.get("change"), current.get("version")
+        if not cid or not version or age <= 48 * 3600:
+            return
+        branch = f"change/{cid}"
+        if f"change-cap:{branch}" in self.state["sent"]:
+            return
+        with hb.board() as (data, _):
+            pending = [t["id"] for t in data["tasks"] if t.get("project") == self.project
+                       and t.get("generated_from") == f"v{version}" and t.get("status") != "done"
+                       and "stale" not in (t.get("tags") or [])]
+        if pending:
+            try:
+                exists = branch in self.branches()
+            except Throttled:
+                return
+            if exists:
+                self.once(f"change-cap:{branch}", LEAD_AGENT,
+                          f"{self.project}: {branch} has been open 48+ hours with unfinished generated tasks "
+                          f"{', '.join(pending)}. Decide whether to finish, shrink or abandon it.")
 
     def hand_merges(self):
         """A PR merged into integration by someone other than live_merge (Zeus merging a Hermes-built PR)
@@ -709,7 +871,7 @@ class Live:
             self.freeze_report()
         if freeze and freeze - timedelta(minutes=45) <= now < freeze:
             merged = ", ".join(f"#{n}" for n in self.state.get("unreviewed", [])) or "none"
-            self.once("release-review", REVIEWER,
+            self.once("release-review", reviewer(),
                       f"{self.project} release review: code freeze in 45 min, run it now (hub:hackathon-reviewer): "
                       "the runner at main's head on 5 practice cases, per-tool error counts, the final-state mix, "
                       f"and these PRs merged without review, each reviewed: {merged}.")
@@ -769,8 +931,8 @@ class Live:
             self._branch_work = []
             merged_heads = None
             for name in self.branches():
-                if name in ("main", "integration"):
-                    continue
+                if name in ("main", "integration") or name.startswith(("archive/", "backup/")):
+                    continue  # parked branches are kept on purpose, not stalled work
                 compare = self.gh_json("api", f"repos/{self.repo}/compare/integration...{quote(name, safe='')}")
                 if not isinstance(compare, dict) or not isinstance(compare.get("ahead_by"), int):
                     self._branch_work_error = True
@@ -918,8 +1080,8 @@ class Live:
         if new:
             self.state["sent"] += [f"digest:{n}" for n in new]
             digest = f"{self.project} merged without review: {', '.join(f'#{n}' for n in new)}. Review each with gh pr diff <n>.\n{message}"
-            self._send(REVIEWER, digest)
-            self.log(f"sent {REVIEWER}: {digest}")
+            self._send(reviewer(), digest)
+            self.log(f"sent {reviewer()}: {digest}")
 
     def nudges(self):
         now = self.now()

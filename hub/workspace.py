@@ -55,15 +55,21 @@ def create(task, home=Path.home()):
         print(f"workspace: no clone at {clone}; claim continues without one")
         return None
     path = home / "work" / project / tid
+    fetched = f"fetched {time.strftime('%H:%MZ', time.gmtime())}"
     for attempt in range(3):
         try:
             git(clone, "fetch", "-q", "--prune", "origin")
             break
         except RuntimeError as exc:
             if attempt == 2:
+                # Prometheus's sandbox has no DNS: build from the local refs and say how old they are.
                 print(f"workspace: fetch failed after 3 tries: {exc}")
-                return None
-            time.sleep(1)
+                fetch_head = _git_path(clone, "FETCH_HEAD")
+                fetched = ("UNFETCHED, last fetch "
+                           + (f"{(time.time() - fetch_head.stat().st_mtime) / 60:.0f} min ago" if fetch_head.exists()
+                              else "never"))
+            else:
+                time.sleep(1)
     try:
         if path.exists():
             if not _same_repo(clone, path):
@@ -82,7 +88,11 @@ def create(task, home=Path.home()):
         _git_path(path, "hub-base").write_text(f"{sha} {base}\n")
         if (clone / ".env").is_file():
             shutil.copy2(clone / ".env", path / ".env")
-        print(f"workspace: {path} (detached at {base} {sha[:7]}, fetched {time.strftime('%H:%MZ', time.gmtime())})")
+        try:  # fast checks in a fresh worktree; a failed install must not fail the claim
+            subprocess.run([str(Path(__file__).parent / "bin" / "ws-node-modules"), str(path)], timeout=900)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"workspace: node_modules not prepared: {exc}")
+        print(f"workspace: {path} (detached at {base} {sha[:7]}, {fetched})")
         print(f"create your branch there: git switch -c <issue>-<slug> | task/{tid}")
         return path
     except (RuntimeError, OSError) as exc:

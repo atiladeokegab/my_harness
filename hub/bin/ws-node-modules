@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# ws-node-modules <worktree>: give every package-lock.json in a fresh worktree its node_modules.
+# Same lock as the main checkout (first `git worktree list` entry) and a node_modules beside it:
+# hardlink-copy it (cp -al, seconds). Otherwise npm ci.
+# Hardlinked files are shared with the main checkout. Anything that edits a file in place would
+# write through to it, and vite's cache (.vite, .vite-temp) does, so those get a real copy.
+set -euo pipefail
+wt=$(cd "${1:?usage: ws-node-modules <worktree>}" && pwd)
+main=$(git -C "$wt" worktree list --porcelain | sed -n '1s/^worktree //p')
+find "$wt" -name node_modules -prune -o -name package-lock.json -print | while read -r lock; do
+  dir=$(dirname "$lock"); rel=${dir#"$wt"}; rel=${rel#/}
+  src="$main${rel:+/$rel}"
+  [ -e "$dir/node_modules" ] && continue
+  if [ "$src" != "$dir" ] && [ -d "$src/node_modules" ] && [ -f "$src/package-lock.json" ] \
+     && [ "$(sha256sum <"$lock")" = "$(sha256sum <"$src/package-lock.json")" ]; then
+    cp -al "$src/node_modules" "$dir/node_modules"
+    for c in "$dir"/node_modules/.vite*; do
+      [ -e "$c" ] || continue
+      cp -a "$c" "$c.copy" && rm -rf "$c" && mv "$c.copy" "$c"
+    done
+    echo "ws-node-modules: linked ${rel:-.}/node_modules"
+  else
+    (cd "$dir" && npm ci --no-audit --no-fund)
+  fi
+done

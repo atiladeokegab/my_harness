@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -38,7 +39,7 @@ class BoardHelpers(unittest.TestCase):
     def read_board(self):
         return json.loads((self.root / "board.json").read_text())
 
-    def run_hub(self, *args, agent="Zeus", project=None, stdin=None, cwd=None, env_extra=None):
+    def run_hub(self, *args, agent="Zeus", project=None, stdin=None, cwd=None, env_extra=None, timeout=None):
         env = {k: v for k, v in os.environ.items()
                if not k.startswith("HUB_")}  # HUB_CODE_DIR, HUB_LEAD: the roster under test is the default one
         # HOME too: hub done looks for the task's checkout under ~/code, and a real one
@@ -48,7 +49,7 @@ class BoardHelpers(unittest.TestCase):
             env["HUB_PROJECT"] = project
         return subprocess.run(
             [str(BOARD_PY), *map(str, args)], env=env, text=True, capture_output=True,
-            input=stdin, cwd=cwd,
+            input=stdin, cwd=cwd, timeout=timeout,
         )
 
     def assert_ok(self, result):
@@ -99,6 +100,15 @@ class BoardCase(BoardHelpers):
                 self.assertIn("hub spec apply", edited.stderr)
         self.assert_ok(self.run_hub("edit", "1", "--tag", "stale", "--yes", "--project", "p"))
         self.assertEqual(self.read_board()["tasks"][0]["tags"], ["stale"])
+
+    def test_prd_json_only_project_refuses_hand_made_tasks(self):
+        spec = self.root / "projects" / "p" / "spec"
+        spec.mkdir(parents=True)
+        (spec / "prd.json").write_text('{"version": 1, "requirements": []}')
+        refused = self.run_hub("new", "manual", "--project", "p")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("tasks for p come from hub spec apply", refused.stderr)
+        self.assertEqual(self.read_board()["tasks"], [])
 
     def test_generated_task_verify_requires_lead_or_recorded_force(self):
         spec = self.root / "projects" / "p" / "spec"
@@ -225,25 +235,60 @@ class BoardCase(BoardHelpers):
         self.assertIn("▣ T-001  [open]", self.run_hub("show", "1").stdout)
         self.assertNotIn("▣", self.run_hub("show", "2").stdout)
 
-    def test_done_needs_a_handoff_note_from_a_per_task_reset_agent(self):
-        """Agent OS §1: a per-task reset agent loses its context next, so its done note is the handoff."""
+    def test_done_needs_a_handoff_note_from_every_factory_agent(self):
+        """Agent OS §1, and living spec M1: the done note is the handoff for every factory.json agent, reset
+        or not, so a phase change never drops the guard."""
         (self.root / "factory.json").write_text(json.dumps({"agents": [
             {"name": "Prometheus", "reset": "per-task"}, {"name": "Hermes", "reset": False}]}))
-        for n, agent in enumerate(("Prometheus", "Hermes", "Prometheus"), 1):
+        for n, agent in enumerate(("Prometheus", "Hermes", "Prometheus", "Zeus"), 1):
             self.assert_ok(self.run_hub("new", f"work {n}", "--owner", agent))
             self.assert_ok(self.run_hub("claim", str(n), agent=agent))
-        for note in ([], ["--note", "done, see log"]):
-            r = self.run_hub("done", "1", *note, agent="Prometheus")
-            self.assertNotEqual(r.returncode, 0, r.stdout)
-            self.assertIn("handoff note", r.stderr)
+        for tid, agent in (("1", "Prometheus"), ("2", "Hermes")):
+            for note in ([], ["--note", "done, see log"]):
+                r = self.run_hub("done", tid, *note, agent=agent)
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertIn("handoff note", r.stderr)
         self.assertEqual(self.read_board()["tasks"][0]["status"], "claimed")
         self.assert_ok(self.run_hub("done", "1", "--note", "fixed X on t-1 at abc1234; nothing left",
                                     agent="Prometheus"))
-        self.assert_ok(self.run_hub("done", "2", agent="Hermes"))  # reset off: no note needed
+        self.assert_ok(self.run_hub("done", "2", "--note", "reviewed T-9 at abc1234; LGTM posted", agent="Hermes"))
+        self.assert_ok(self.run_hub("done", "4", agent="Zeus"))  # not a factory.json agent: no note needed
         self.assertFalse(any(e["event"] == "override" for e in self.events()))
         self.assert_ok(self.run_hub("done", "3", "--force", agent="Prometheus"))
         self.assertTrue(any(e["event"] == "override" and e.get("verb") == "done" and e["task"] == "T-003"
                             for e in self.events()), self.events())
+
+    def test_done_refuses_a_factory_task_whose_open_pr_lacks_evidence(self):
+        """2026-10-18: PR #13 had no Evidence, so hub live held it until a reviewer stepped in."""
+        (self.root / "factory.json").write_text(json.dumps({"repos": [{"repo": "o/fs"}]}))
+        self.write_board({"next_id": 4, "tasks": [
+            task(f"T-00{n}", p, issue=12, status="claimed", owner="Hermes") for n, p in ((1, "fs"), (2, "other"), (3, "fs"))]})
+        stub, prs = self.root / "stub", self.root / "prs.json"
+        stub.mkdir()
+        (stub / "gh").write_text('#!/bin/sh\n[ -f "$GH_PRS" ] && exec cat "$GH_PRS"; echo offline >&2; exit 1\n')
+        (stub / "gh").chmod(0o755)
+        env = {"PATH": f"{stub}:{os.environ['PATH']}", "GH_PRS": str(prs)}
+        def done(body, head="task/T-001"):
+            prs.write_text(json.dumps([{"number": 9, "headRefName": "x"}, {"number": 13, "headRefName": head, "body": body}]))
+            return self.run_hub("done", "1", agent="Hermes", env_extra=env)
+        r = done("Closes #12\nTask: T-001")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("PR #13 on o/fs", r.stderr)
+        self.assertIn("`## Evidence` block (or a `Verified:` line)", r.stderr)
+        self.assertIn("`Not verified:` line", r.stderr)
+        r = done("## Evidence\nmake check: 3 passed", head="12-time")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("Evidence` block", r.stderr)
+        self.assertIn("`Not verified:` line", r.stderr)
+        self.assertEqual(self.read_board()["tasks"][0]["status"], "claimed")
+        self.assert_ok(self.run_hub("done", "2", agent="Hermes", env_extra=env))  # not a factory repo
+        r = done("Verified: make check: 3 passed\nNot verified: nothing")
+        self.assert_ok(r)
+        self.assertNotIn("warning", r.stderr)
+        prs.unlink()  # gh unreachable, as for a sandboxed builder: warned, not blocked
+        r = self.run_hub("done", "3", agent="Hermes", env_extra=env)
+        self.assert_ok(r)
+        self.assertIn("warning: could not check T-003's PR body", r.stderr)
 
     def test_vertical_done_refuses_open_children_even_with_force(self):
         (self.root / "projects" / "hk").mkdir(parents=True)
@@ -412,6 +457,17 @@ class BoardCase(BoardHelpers):
         self.assert_ok(self.run_hub("notify", "Prometheus", "handoff", "--message-id", match.group(1)))
         inbox = self.load_module().read_msgs(self.root / "inbox" / "Prometheus.jsonl")
         self.assertEqual(len(inbox), 1, f"the hint queued the message twice: {inbox}")
+    def test_a_keyed_message_replaces_the_last_one_with_that_key_and_receipts_it(self):
+        for mid, text in (("k-1", "Hermes: stuck"), ("k-2", "Hermes: permission prompt")):
+            self.assert_ok(self.run_hub("notify", "Zeus", text, "--message-id", mid, "--key", "watchdog:Hermes",
+                                        agent="Watchdog"))
+        self.assert_ok(self.run_hub("notify", "Zeus", "unrelated", agent="Hermes"))
+        inbox = self.run_hub("inbox", agent="Zeus").stdout
+        self.assertNotIn("Hermes: stuck", inbox)
+        self.assertIn("Hermes: permission prompt", inbox)
+        self.assertIn("unrelated", inbox)
+        pending = self.run_hub("receive", "--pending", agent="Zeus").stdout
+        self.assertNotIn("Hermes: stuck", pending)  # superseded counts as received: its wake is dropped
 
     def test_durable_message_receive_is_idempotent(self):
         mid = "msg-123"
@@ -473,6 +529,32 @@ class BoardCase(BoardHelpers):
         self.assert_ok(result)
         self.assertIn("good", result.stdout)
 
+    def test_plain_inbox_shows_a_count_and_the_latest_20_unless_all(self):
+        for i in range(25):
+            self.assert_ok(self.run_hub("notify", "Zeus", f"mail-{i:02d}-end", agent="Hermes"))
+        short = self.run_hub("inbox", agent="Zeus").stdout
+        self.assertIn("25 message(s); the latest 20", short)
+        self.assertNotIn("mail-04-end", short)
+        self.assertIn("mail-05-end", short)
+        self.assertIn("mail-04-end", self.run_hub("inbox", "--all", agent="Zeus").stdout)
+
+    def test_brief_counts_peers_in_other_projects_and_cuts_inbox_lines(self):
+        t = {"status": "claimed", "owner": "Hermes", "deps": [], "notes": []}
+        self.write_board({"next_id": 3, "tasks": [{**t, "id": "T-001", "title": "here-task", "project": "a"},
+                                                  {**t, "id": "T-002", "title": "away-task", "project": "b"}]})
+        self.assert_ok(self.run_hub("notify", "Zeus", "x" * 400, agent="Hermes"))
+        out = self.run_hub("brief", project="a").stdout
+        self.assertIn("here-task", out)
+        self.assertNotIn("away-task", out)
+        self.assertIn("+ 1 claimed in other projects", out)
+        self.assertTrue(all(len(l) <= 160 for l in out.splitlines() if "xxx" in l))
+
+    def test_events_are_one_line_cut_to_120_unless_full(self):
+        self.assert_ok(self.run_hub("new", "t" * 300))
+        short = self.run_hub("events").stdout.splitlines()
+        self.assertTrue(short and all(len(l) <= 120 for l in short), short)
+        self.assertIn("t" * 200, self.run_hub("events", "--full").stdout)
+
     def test_concurrent_deliverers_and_consumers_lose_no_messages(self):
         tokens = [f"mail-{i:03d}-unique" for i in range(40)]
 
@@ -490,7 +572,7 @@ class BoardCase(BoardHelpers):
             self.assert_ok(result)
             if kind == "clear":
                 observed += result.stdout
-        final = self.run_hub("inbox", agent="Zeus")
+        final = self.run_hub("inbox", "--all", agent="Zeus")
         self.assert_ok(final)
         observed += final.stdout
         missing = [token for token in tokens if token not in observed]
@@ -1117,6 +1199,56 @@ class TestFactoryGate(BoardHelpers):
         self.assertTrue([e for e in self.events() if e["event"] == "edited" and e.get("forced")])
         self.assertIn("tags: ", self.run_hub("edit", "1", "--tag", "standing", "--yes").stdout + self.run_hub("show", "1").stdout)
 
+    def test_quoted_empty_verify_runs_nothing(self):
+        """T-556 stored --verify '' as the literal two quotes, and hub done ran it (exit 127)."""
+        self.repo("check:\n\tfalse\n")
+        self.claimed("--verify", "''")
+        done = self.run_hub("done", "1")
+        self.assert_ok(done)
+        self.assertNotIn("verify", done.stdout)
+        self.assertNotIn("verify", self.events()[-1])
+
+    def test_hub_tag_adds_removes_and_logs_like_edit(self):
+        self.claimed()
+        self.assert_ok(self.run_hub("tag", "1", "read", "headless", "--as", "Hermes"))
+        self.assertEqual(self.task()["tags"], ["read", "headless"])
+        self.assert_ok(self.run_hub("tag", "1", "--rm", "headless"))
+        self.assertEqual(self.task()["tags"], ["read"])
+        edits = [(e["by"], e.get("tagged"), e.get("untagged")) for e in self.events() if e["event"] == "edited"]
+        self.assertEqual(edits, [("Hermes", ["read", "headless"], []), ("Zeus", [], ["headless"])])
+        self.assertIn("[a-z0-9-]+", self.run_hub("tag", "1", "Read").stderr)
+        self.assertNotEqual(self.run_hub("tag", "1").returncode, 0)
+
+    def test_hub_tag_keeps_untrusted_for_zeus_and_never_touches_stale(self):
+        self.claimed()
+        self.assert_ok(self.run_hub("tag", "1", "untrusted", "--as", "Hermes"))
+        r = self.run_hub("tag", "1", "--rm", "untrusted", "--as", "Hermes")
+        self.assertIn("only Zeus clears 'untrusted'", r.stderr)
+        self.assert_ok(self.run_hub("tag", "1", "--rm", "untrusted"))
+        for args in (["stale"], ["--rm", "stale"]):
+            r = self.run_hub("tag", "1", *args)
+            self.assertNotEqual(r.returncode, 0, args)
+            self.assertIn("Spec Tree", r.stderr)
+        self.assertEqual(self.task().get("tags"), [])
+
+    def test_new_takes_repeatable_tags_but_not_stale(self):
+        self.assert_ok(self.run_hub("new", "look", "--owner", "Zeus", "--tag", "read", "--tag", "headless"))
+        self.assertEqual(self.task()["tags"], ["read", "headless"])
+        self.assertEqual([e for e in self.events() if e["event"] == "created"][0]["tags"], ["read", "headless"])
+        self.assertIn("Spec Tree", self.run_hub("new", "x", "--tag", "stale").stderr)
+        self.assertIn("[a-z0-9-]+", self.run_hub("new", "x", "--tag", "a b").stderr)
+        self.assertEqual(len(self.read_board()["tasks"]), 1)
+
+    def test_claimed_at_set_on_claim_kept_on_done_cleared_on_release(self):
+        self.claimed()
+        stamp = self.task()["claimed_at"]
+        self.assertRegex(stamp, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$")
+        self.assert_ok(self.run_hub("release", "1"))
+        self.assertNotIn("claimed_at", self.task())
+        self.assert_ok(self.run_hub("claim", "1"))
+        self.assert_ok(self.run_hub("done", "1"))
+        self.assertIn("claimed_at", self.task())
+
     def test_bump_attempts_counts_on_the_task_and_ignores_a_missing_one(self):
         self.claimed()
         board = self.load_module()
@@ -1318,6 +1450,129 @@ class TestClaimWorkspace(BoardHelpers):
         t = self.read_board()["tasks"][0]
         self.assertEqual((t["status"], t["owner"]), ("claimed", "Zeus"))
         self.assertNotIn("workspace", t)
+
+
+class TestBoardConcurrency(BoardHelpers):
+    """T-586: a burst of concurrent subprocesses doing new/claim/note/done loses no writes."""
+
+    def test_concurrent_subprocess_burst_preserves_every_write_and_event(self):
+        seeded = [
+            *(task(f"T-{i:03d}", None, status="open", owner=f"Agent{i}") for i in range(1, 6)),
+            *(task(f"T-{i:03d}", None, status="claimed", owner=f"Agent{i}") for i in range(6, 16)),
+        ]
+        self.write_board({"next_id": 16, "tasks": seeded})
+        self.assert_ok(self.run_hub("list", cwd=self.root, timeout=10))
+
+        jobs = [
+            *((f"Agent{i}", ("claim", f"T-{i:03d}")) for i in range(1, 6)),
+            *((f"Agent{i}", ("note", "T-006", f"concurrent-note-{i}")) for i in range(6, 11)),
+            *((f"Agent{i}", ("done", f"T-{i:03d}", "--note", f"done-note-{i}")) for i in range(11, 16)),
+            *((f"Agent{i}", ("new", f"burst-new-{i}", "--detail", f"detail-{i}")) for i in range(16, 21)),
+        ]
+        self.assertEqual(len(jobs), 20)
+        start = threading.Barrier(len(jobs))
+
+        def run_job(job):
+            agent, args = job
+            start.wait(timeout=10)
+            return self.run_hub(*args, agent=agent, cwd=self.root, timeout=10)
+
+        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+            results = list(pool.map(run_job, jobs))
+        for res in results:
+            self.assert_ok(res)
+
+        self.assertFalse((self.root / ".board.wal").exists())
+        board = self.read_board()
+        self.assertEqual(board["next_id"], 21)
+        tasks = board["tasks"]
+        self.assertEqual(len(tasks), 20)
+        self.assertEqual({t["id"] for t in tasks}, {f"T-{i:03d}" for i in range(1, 21)})
+        by_id = {t["id"]: t for t in tasks}
+        for i in range(1, 6):
+            self.assertEqual((by_id[f"T-{i:03d}"]["status"], by_id[f"T-{i:03d}"]["owner"]),
+                             ("claimed", f"Agent{i}"))
+        self.assertCountEqual(
+            [(n["by"], n["text"]) for n in by_id["T-006"]["notes"]],
+            [(f"Agent{i}", f"concurrent-note-{i}") for i in range(6, 11)],
+        )
+        for i in range(11, 16):
+            t = by_id[f"T-{i:03d}"]
+            self.assertEqual((t["status"], t["owner"]), ("done", f"Agent{i}"))
+            self.assertEqual([(n["by"], n["text"]) for n in t["notes"]],
+                             [(f"Agent{i}", f"done-note-{i}")])
+        created = [by_id[f"T-{i:03d}"] for i in range(16, 21)]
+        self.assertCountEqual(
+            [(t["created_by"], t["title"], t["detail"], t["status"]) for t in created],
+            [(f"Agent{i}", f"burst-new-{i}", f"detail-{i}", "open") for i in range(16, 21)],
+        )
+
+        events = self.events()
+        self.assertEqual(len(events), 40)
+        txids = []
+        actions = []
+        for idx in range(0, len(events), 2):
+            action, commit = events[idx], events[idx + 1]
+            self.assertIn(action["event"], ("created", "claimed", "note", "done"))
+            self.assertEqual(commit["event"], "commit")
+            self.assertEqual(action["txid"], commit["txid"])
+            txids.append(commit["txid"])
+            actions.append(action)
+        self.assertEqual(len(set(txids)), 20)
+        self.assertCountEqual(
+            [(e["by"], e["event"], e["task"]) for e in actions if e["event"] == "claimed"],
+            [(f"Agent{i}", "claimed", f"T-{i:03d}") for i in range(1, 6)],
+        )
+        self.assertCountEqual(
+            [(e["by"], e["event"], e["task"], e["text"]) for e in actions if e["event"] == "note"],
+            [(f"Agent{i}", "note", "T-006", f"concurrent-note-{i}") for i in range(6, 11)],
+        )
+        self.assertCountEqual(
+            [(e["by"], e["event"], e["task"], e["note"]) for e in actions if e["event"] == "done"],
+            [(f"Agent{i}", "done", f"T-{i:03d}", f"done-note-{i}") for i in range(11, 16)],
+        )
+        self.assertCountEqual(
+            [(e["by"], e["event"], e["title"]) for e in actions if e["event"] == "created"],
+            [(f"Agent{i}", "created", f"burst-new-{i}") for i in range(16, 21)],
+        )
+
+
+class TestPhases(BoardHelpers):
+    """Living spec §4: the board enforces claim and done_force from each agent's phase."""
+
+    def setUp(self):
+        super().setUp()
+        live = json.loads((ROOT / "factory.example.json").read_text())
+        (self.root / "factory.json").write_text(json.dumps({"agents": [
+            {"name": "Iris", "kind": "agy", "phase": "trial"},
+            {"name": "Prometheus", "kind": "codex", "phase": "trusted"},
+            {"name": "Ghost", "kind": "agy", "phase": "off"}], "autonomy": live["autonomy"]}))
+
+    def test_trial_done_force_refused(self):
+        for n, agent in enumerate(("Iris", "Iris", "Prometheus"), 1):
+            self.assert_ok(self.run_hub("new", f"work {n}", "--owner", agent))
+            self.assert_ok(self.run_hub("claim", str(n), agent=agent))
+        note = ("--note", "built it on task/T-1 at abc1234; nothing left")
+        for flag in ("--force", "--no-verify"):
+            r = self.run_hub("done", "1", flag, *note, agent="Iris")
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertIn(f"{flag} needs done_force; Iris's phase trial has none", r.stderr)
+        self.assertEqual(self.read_board()["tasks"][0]["status"], "claimed")
+        self.assert_ok(self.run_hub("done", "2", *note, agent="Iris"))
+        self.assert_ok(self.run_hub("done", "3", "--force", agent="Prometheus"))  # trusted has done_force
+
+    def test_off_phase_cannot_claim(self):
+        self.assert_ok(self.run_hub("new", "work"))
+        r = self.run_hub("claim", "1", agent="Ghost")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("Ghost's phase off may not claim", r.stderr)
+        self.assertEqual(self.read_board()["tasks"][0]["status"], "open")
+        self.assert_ok(self.run_hub("claim", "1", agent="Apollo"))  # not in factory.json: no phase rules
+
+    def test_new_budget_sets_the_tasks_own_budget(self):
+        self.assert_ok(self.run_hub("new", "long one", "--budget", "240"))
+        self.assertEqual(self.read_board()["tasks"][0]["budget_minutes"], 240)
+        self.assertNotEqual(self.run_hub("new", "bad", "--budget", "0").returncode, 0)
 
 
 if __name__ == "__main__":

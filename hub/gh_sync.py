@@ -2,7 +2,7 @@
 
 Config and sync state live in $HUB_DIR/projects/<project>/hackathon.json, written by the
 hackathon skill. The hub is the source of truth for each brief; GitHub is the source of
-truth for who picked up pool work and what got closed. See docs/hackathon-kit.md.
+truth for who picked up pool work and what got closed. See the hackathon skill (claude/skills/hackathon/).
 """
 
 import difflib
@@ -103,10 +103,12 @@ def issue_body(t, by_id):
     return body if t.get("kind") == "gh-imported" else body + "\n\n" + MARKER.format(t["id"])
 
 
-# The spec contract (T-515): ~/hub/projects/<project>/spec/requirements.json is the PRD. Read here,
-# not through spec.py, so gh-sync and hub live never depend on it. No file: everything runs as before.
+# The spec contract: spec/prd.json is the PRD when present, else legacy requirements.json.
+# Read the one source path, so gh-sync and hub live see the same lines as hub spec. spec.py is imported here,
+# lazily, so importing gh-sync (and hub live through it) never depends on spec.py loading.
 def spec_file(project):
-    return os.path.join(hb.HUB_DIR, "projects", project or "", "spec", "requirements.json")
+    import spec
+    return spec.spec_path(project or "")
 
 
 def load_spec(project):
@@ -146,6 +148,49 @@ def acceptance_checks(project):
     return ([[x.replace("{test}", a["test"]) for x in shlex.split(cmd)]
              for r in spec.get("requirements") or [] for a in r.get("acceptance") or []],
             entry.get("acceptance_timeout", 300))
+
+
+# Held-out checks (living spec, section 3) live in projects/<p>/heldout/, outside spec/, so nothing that
+# writes a brief or an issue body reads them. heldout.json: {"A-8.1": {"v": 1, "tests": ["A-8.1/test_x.py"]}}.
+CANARY = re.compile(r"HELDOUT[-_]CANARY")  # in every held-out file; hub live holds a PR whose diff carries it
+
+
+def heldout_dir(project):
+    return os.path.join(hb.HUB_DIR, "projects", project or "", "heldout")
+
+
+def heldout_index(project):
+    try:
+        with open(os.path.join(heldout_dir(project), "heldout.json")) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+def heldout_stale(project):
+    """The entries the gate skips as stale: the line is no longer active, or moved past the check's version."""
+    lines = current_lines(project) or {}
+    return [f"{aid} (check v{e.get('v')}, line " + (f"v{lines[aid]})" if aid in lines else "not active)")
+            for aid, e in sorted(heldout_index(project).items()) if aid not in lines or (e.get("v") or 0) < lines[aid]]
+
+
+def heldout_checks(project):
+    """[(label, argv)] for each held-out entry current with its line. Each copies its files into tests/_heldout
+    of the gate's throwaway worktree and runs them with acceptance_cmd; all output, errors included, goes to
+    heldout/gate.log, so a red step reveals its label, the line id, and nothing else."""
+    lines, root = current_lines(project) or {}, heldout_dir(project)
+    cmd = factory_entry(project).get("acceptance_cmd", "uv run pytest -q {test}")
+    log = shlex.quote(os.path.join(root, "gate.log"))
+    checks = []
+    for aid, e in sorted(heldout_index(project).items()):
+        if lines.get(aid) != e.get("v") or not e.get("tests"):
+            continue
+        files = [os.path.join(root, t) for t in e["tests"]]
+        runs = " && ".join(cmd.replace("{test}", shlex.quote(f"tests/_heldout/{os.path.basename(f)}")) for f in files)
+        header = shlex.quote(f"== held-out {aid} v{e['v']} {e.get('at', '')}")  # rewriting `at` re-arms a held branch
+        checks.append((f"held-out {aid}", ["sh", "-c", f"{{ echo {header}; mkdir -p tests/_heldout && "
+                       f"cp {' '.join(map(shlex.quote, files))} tests/_heldout/ && {runs}; }} >> {log} 2>&1"]))
+    return checks
 
 
 def stale(t):
@@ -1292,7 +1337,7 @@ def poll_factory_repos(dry_run=False):
         known, live = seen(data)
         superseded = [dict(t) for t in data["tasks"] if t.get("issue") and not t.get("issue_superseded") and stale(t)]
         unpublished = [dict(t) for t in data["tasks"] if (t.get("generated_from") or "ci-fix" in (t.get("tags") or []))
-                       and t.get("status") != "done"
+                       and (t.get("status") != "done" or not (t.get("issue") or t.get("merge_sha")))
                        and not t.get("issue_shipped") and "stale" not in (t.get("tags") or [])]
     gh, pending = Gh(dry_run), []
     for repo in factory_repos():
@@ -1302,7 +1347,17 @@ def poll_factory_repos(dry_run=False):
                         if (repo.split("/")[1], c["title"]) not in live]
         except (GhError, KeyError, TypeError, AttributeError) as e:
             print(f"factory: {repo}: {e!r}", file=sys.stderr)
-        for t in (t for t in unpublished if spec_driven and t.get("project") == repo.split("/")[1]):
+        mine = [t for t in unpublished if spec_driven and t.get("project") == repo.split("/")[1]]
+        if any(t.get("status") == "done" for t in mine):
+            # Done while the hub was paused, so never published: only one with an open PR needs its issue to merge
+            try:
+                heads = {p.get("headRefName") for p in gh.json("pr", "list", "-R", repo, "--state", "open",
+                                                               "--json", "headRefName", "--limit", "200") or []}
+            except (GhError, AttributeError) as e:
+                heads = set()
+                print(f"factory: {repo}: {e!r}", file=sys.stderr)
+            mine = [t for t in mine if t.get("status") != "done" or f"task/{t['id']}" in heads]
+        for t in mine:
             try:
                 publish_generated(gh, repo, t, dry_run)
             except (GhError, ValueError, IndexError, AttributeError) as e:

@@ -90,6 +90,16 @@ class RunCase(unittest.TestCase):
         self.assertEqual(self.result_note()["num_turns"], 3)
         self.assertEqual(self.result_note()["total_cost_usd"], 0.42)
 
+    def test_claude_default_budget_is_10_for_zeus_and_2_for_others(self):
+        self.env["FAKE_OUTPUT"] = json.dumps({"session_id": "s", "num_turns": 1, "result": "ok"})
+        for owner, budget in (("Zeus", "10.0"), ("Hermes", "2.0")):
+            self.task["owner"] = owner
+            self.write_board()
+            result = self.run_hubrun()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            argv = json.loads(self.log.read_text())["argv"]
+            self.assertEqual(argv[argv.index("--max-budget-usd") + 1], budget)
+
     def test_codex_run_records_thread_and_marks_cost_unknown(self):
         self.env["FAKE_OUTPUT"] = "\n".join([
             json.dumps({"type": "thread.started", "thread_id": "codex-thread"}),

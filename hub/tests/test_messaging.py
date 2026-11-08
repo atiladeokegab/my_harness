@@ -41,6 +41,14 @@ def check(name, cond, detail=""):
     print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f"\n        {detail}" if detail and not cond else ""))
 
 
+# What Codex 0.162.1 shows after /new: the empty composer, or in a git repo first the start-in picker.
+COMPOSER = "› Ask Codex to do anything\n  ? for shortcuts"
+PICKER = ("  Where should the new conversation run?\n"
+          "› 1. Use current Git worktree  Keep using the current working directory\n"
+          "  2. Create new Git worktree   Create a separate checkout of this repository in another directory\n"
+          "  enter select · esc back")
+
+
 class Bed:
     """A throwaway hub: its own HUB_DIR, board, wake dir and target panes."""
 
@@ -57,19 +65,22 @@ class Bed:
         self.env = {**os.environ, "HUB_DIR": self.dir, "HUB_AGENT": "Zeus"}
         self.sessions = []
 
-    def target(self, suffix, delay=0, slash_clears=False, preamble=""):
+    def target(self, suffix, delay=0, slash_clears=False, preamble="", new_screen=COMPOSER):
         """A stand-in TUI.
 
         The pty echoes the typed wake and the loop consumes it like a TUI. hubwaked watches
         cursor movement rather than interpreting rendered pane history. With slash_clears,
-        /clear and /new clear the screen as Claude and Codex do (spike T1); without it a typed
-        slash command stays on screen, like a Codex /new that never left the composer.
+        /clear and /new clear the screen as Claude and Codex do (spike T1), and /new then shows
+        new_screen; without it a typed slash command stays on screen, like a Codex /new that never
+        left the composer. The PICKER eats the next line, typed text and all, as the real one did.
         """
         sess = f"hub-{suffix}{self.tag}"
         out = os.path.join(self.dir, f"{suffix}.out")
-        clears = 'case "$l" in /clear|/new) clear; continue ;; esac; ' if slash_clears else ""
+        picker = f'[ -n "$p" ] && {{ p=; clear; printf "%s\\n" {shlex.quote(COMPOSER)}; continue; }}; '
+        clears = (f'case "$l" in /clear) clear; continue ;; /new) clear; printf "%s\\n" {shlex.quote(new_screen)}; '
+                  f'{"p=1; " if new_screen == PICKER else ""}continue ;; esac; ') if slash_clears else ""
         script = (f'printf "%s" {shlex.quote(preamble)}; sleep {delay}; while IFS= read -r l; do '
-                  f'printf "%s\\n" "$l" >> {out}; {clears}printf "rendered: %s\\n" "$l"; done')
+                  f'{picker}printf "%s\\n" "$l" >> {out}; {clears}printf "rendered: %s\\n" "$l"; done')
         sh(["tmux", "new-session", "-d", "-s", sess, "-c", self.dir, "bash", "-c", script])
         self.sessions.append(sess)
         return sess, out
@@ -80,9 +91,10 @@ class Bed:
         are read after the flag, so a wake typed during the banner shows up as an extra line."""
         sess = f"hub-{suffix}{self.tag}"
         out, flag = os.path.join(self.dir, f"{suffix}.out"), os.path.join(self.dir, f"{suffix}.idle")
-        script = (f'printf "%s\\n" "{banner}"; while [ ! -e {flag} ]; do sleep 0.2; done; clear; '
+        script = (f'printf "%s\\n" {shlex.quote(banner)}; while [ ! -e {flag} ]; do sleep 0.2; done; clear; '
                   f'while IFS= read -r l; do printf "%s\\n" "$l" >> {out}; printf "rendered: %s\\n" "$l"; done')
-        sh(["tmux", "new-session", "-d", "-s", sess, "-c", self.dir, "bash", "-c", script])
+        # 200x50: the agy fixtures' geometry, so their footers do not wrap.
+        sh(["tmux", "new-session", "-d", "-s", sess, "-x", "200", "-y", "50", "-c", self.dir, "bash", "-c", script])
         self.sessions.append(sess)
         time.sleep(1)
         return sess, out, flag
@@ -584,7 +596,8 @@ def test_codex_launch_dialogs_defer_the_wake(b):
     MODAL_MARKERS."""
     for suffix, banner in (("t8u", "  Update available! 0.162.1 -> 0.163.0   enter continue · esc skip"),
                            ("t8k", "  Hooks need review: 2 hooks are new or changed"),
-                           ("t8c", "  Teach auto mode about your environment? Enter to confirm · Esc to cancel")):
+                           ("t8c", "  Teach auto mode about your environment? Enter to confirm · Esc to cancel"),
+                           ("t8p", PICKER)):
         sess, out, idle = b.busy_target(suffix, banner)
         b.msg(b.agent(suffix), "wake arriving on a launch dialog")
         time.sleep(2)
@@ -627,7 +640,7 @@ def relay_log(b):
 
 def test_reset_request_types_the_reset_then_the_line(b):
     """Agent OS §1 and spike T1: /clear for Claude, /new for Codex, then about 3 s, then the line."""
-    for suffix, kind, cmd in (("r534c", "claude", "/clear"), ("r534x", "codex", "/new")):
+    for suffix, kind, cmd in (("r534c", "claude", "/clear"), ("r534x", "codex", "/new"), ("r557a", "agy", "/clear")):
         b.target(suffix, slash_clears=True)
         agent = b.agent(suffix)
         out = os.path.join(b.dir, f"{suffix}.out")
@@ -682,6 +695,131 @@ def test_reset_that_stays_in_the_composer_falls_back(b):
           r.returncode == 0 and lines_of(out) == ["/new", WAKE_LINE], f"rc={r.returncode} {lines_of(out)!r}")
     check("the fallback is logged as a downgrade", "reset downgraded: /new not submitted" in relay_log(b),
           relay_log(b)[-400:])
+
+
+def test_reset_answers_the_codex_start_in_picker(b):
+    """Live, 2026-10-18 14:54Z: /new in a git repo opened "Where should the new conversation run?" and the
+    receive line typed into it was lost. Enter takes the preselected current worktree, then the line."""
+    b.target("r535p", slash_clears=True, new_screen=PICKER)
+    agent = b.agent("r535p")
+    out = os.path.join(b.dir, "r535p.out")
+    r = sh([HUBWAKED, "--deliver", reset_request(b, agent, "codex")], env=b.env)
+    wait_for(out)
+    time.sleep(1)
+    check("the picker is answered and the receive line reaches the fresh session",
+          r.returncode == 0 and lines_of(out) == ["/new", WAKE_LINE], f"rc={r.returncode} {lines_of(out)!r}")
+    check("logged as reset delivered", f"reset delivered id={agent}" in relay_log(b), relay_log(b)[-400:])
+
+
+def test_reset_onto_an_unknown_screen_falls_back(b):
+    """Anything after /new but the empty composer: Escape back and send the plain wake, logged as a downgrade."""
+    b.target("r535u", slash_clears=True, new_screen="  Something Codex has not shown before")
+    agent = b.agent("r535u")
+    out = os.path.join(b.dir, "r535u.out")
+    r = sh([HUBWAKED, "--deliver", reset_request(b, agent, "codex")], env=b.env)
+    wait_for(out)
+    time.sleep(1)
+    check("an unknown screen after /new gets the plain wake",
+          r.returncode == 0 and lines_of(out) == ["/new", WAKE_LINE], f"rc={r.returncode} {lines_of(out)!r}")
+    check("logged as a downgrade", "reset downgraded: /new did not reach an empty composer" in relay_log(b),
+          relay_log(b)[-400:])
+
+
+def test_reset_onto_a_quoted_option_line_presses_no_enter(b):
+    """Zeus, review of 6123a50: an old transcript quoting the picker's option line, with no picker title, is not the
+    picker. No Enter (the fake records it as an empty line), Escape back, plain wake."""
+    b.target("r535q", slash_clears=True,
+             new_screen="• Earlier the pane read: › 1. Use current Git worktree  Keep using the current working directory")
+    agent = b.agent("r535q")
+    out = os.path.join(b.dir, "r535q.out")
+    r = sh([HUBWAKED, "--deliver", reset_request(b, agent, "codex")], env=b.env)
+    wait_for(out)
+    time.sleep(1)
+    raw = open(out).read().splitlines() if os.path.exists(out) else []
+    check("a quoted option line gets no Enter, only /new and the plain wake",
+          r.returncode == 0 and raw == ["/new", WAKE_LINE], f"rc={r.returncode} {raw!r}")
+    check("logged as a downgrade", "reset downgraded: /new did not reach an empty composer" in relay_log(b),
+          relay_log(b)[-400:])
+
+
+AGY = os.path.join(HUB, "tests", "fixtures", "agy")
+
+
+def agy_screen(name):
+    """A live agy 1.4.2 pane (T-556), without the empty rows below it."""
+    return open(os.path.join(AGY, name)).read().rstrip()
+
+
+def agy_state(b, agent, state, age=0):
+    """What agy's statusLine command leaves in state/<Name>.agy.json; age backdates it."""
+    d = os.path.join(b.dir, "state"); os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, f"{agent}.agy.json")
+    with open(p, "w") as f:
+        json.dump({"agent_state": state, "at": "2026-10-19T12:40:00+00:00"}, f)
+    os.utime(p, (time.time() - age,) * 2)
+
+
+def test_agy_busy_pane_is_busy_not_a_dialog(b):
+    """T-556: busy agy's footer reads `esc to cancel`, which is also a dialog marker. The statusLine file is an hour
+    old, so only the pane says busy."""
+    sess, out, idle = b.busy_target("a557b", agy_screen("busy-generating.txt"))
+    agent = b.agent("a557b")
+    agy_state(b, agent, "working", age=3600)
+    r = b.msg(agent, "while agy generates")
+    open(idle, "w").close()
+    time.sleep(1)
+    log = relay_log(b)
+    check("agy busy pane: hubmsg reports busy", r.returncode == 0 and "busy" in r.stdout, r.stdout + r.stderr)
+    check("agy busy pane: logged busy, not as a dialog",
+          f"busy id={agent}" in log and f"deferred id={agent}" not in log, log[-400:])
+    check("agy busy pane: no keys typed", lines_of(out) == [], repr(lines_of(out)))
+
+
+def test_agy_dialogs_defer(b):
+    """T-556: Enter on an agy dialog takes option 1, a Yes. Each one defers, logged as a dialog although the footer
+    also reads `esc to cancel` and the statusLine says tool_use."""
+    for suffix, name in (("a557r", "dialog-run-command.txt"), ("a557f", "dialog-create-file.txt"),
+                         ("a557t", "dialog-trust-folder.txt")):
+        sess, out, idle = b.busy_target(suffix, agy_screen(name))
+        agent = b.agent(suffix)
+        agy_state(b, agent, "tool_use")
+        b.msg(agent, "wake arriving on an agy dialog")
+        open(idle, "w").close()
+        time.sleep(1)
+        check(f"agy {name}: deferred as a dialog, no keys typed",
+              f"deferred id={agent} session={sess} (confirmation dialog" in relay_log(b) and lines_of(out) == [],
+              relay_log(b)[-300:] + repr(lines_of(out)))
+
+
+def test_agy_idle_state_outranks_a_stale_turn_heartbeat(b):
+    """T-556: denying an agy dialog ends the turn with no Stop hook, so the heartbeat still reads UserPromptSubmit.
+    The statusLine's idle is the truth, and the pane is an empty composer: the wake goes in."""
+    sess, out = b.target("a557i", preamble=agy_screen("after-edit-denied.txt") + "\n")
+    agent = b.agent("a557i")
+    agy_state(b, agent, "idle")
+    with open(os.path.join(b.dir, "state", f"{agent}.json"), "w") as f:
+        json.dump({"at": "2026-10-19T12:44:00+00:00", "event": "UserPromptSubmit", "tool": None}, f)
+    r = b.msg(agent, "after a denied dialog")
+    wait_for(out)
+    time.sleep(1)
+    check("agy idle statusLine outranks a mid-turn heartbeat", confirmed(r) and lines_of(out) == [WAKE_LINE],
+          r.stdout + r.stderr + repr(lines_of(out)))
+
+
+def test_plain_wake_pauses_before_enter(b):
+    """Gemini-family TUIs (agy) can take an Enter that follows typed text within ~30 ms as a newline. The fake reads
+    key by key and records the time of the last typed key and of Enter."""
+    sess, out = f"hub-a557p{b.tag}", os.path.join(b.dir, "a557p.out")
+    script = (f'stty -icanon; while IFS= read -r -N 1 c; do t=$EPOCHREALTIME; '
+              f'[ "$c" = $\'\\n\' ] && echo "$p $t" >> {out}; p=$t; done')
+    sh(["tmux", "new-session", "-d", "-s", sess, "-c", b.dir, "bash", "-c", script])
+    b.sessions.append(sess)
+    time.sleep(0.5)
+    r = b.msg(b.agent("a557p"), "pause before Enter")
+    wait_for(out)
+    gaps = [float(t) - float(p) for p, t in (l.split() for l in lines_of(out))]
+    check("a plain wake pauses >= 0.2 s between the typed line and Enter", confirmed(r) and gaps and min(gaps) >= 0.2,
+          f"gaps={gaps} {r.stdout}{r.stderr}")
 
 
 def test_reset_downgrades_to_the_plain_line(b):
@@ -771,6 +909,18 @@ def main():
     # types into can be a live agent's, whatever its hub-* name.
     os.environ.pop("TMUX", None)
     os.environ["TMUX_TMPDIR"] = tempfile.mkdtemp(prefix="hubtest-tmux-")
+    # Every test drives tmux. Where it cannot start a server (no sockets: the Codex sandbox),
+    # each would only wait out its timeouts and fail; skip instead, saying so.
+    # The probe session lives until kill-server below. A probe that exited at once (`true`) let the
+    # server shut down under the first test's new-session: "server exited unexpectedly", no session,
+    # and test_content_integrity failed under make check's parallel load (2026-11-02).
+    probe = shutil.which("tmux") and sh(["tmux", "new-session", "-d", "-s", f"hub-probe-{uuid.uuid4().hex[:6]}", "sleep 86400"])
+    if not probe or probe.returncode:
+        err = (probe.stderr.strip() if probe else "") or "no tmux"
+        if probe and "duplicate session" in err:  # a name clash is a bug, never a reason to skip
+            print(f"FAIL: tmux probe: {err}"); return 1
+        print(f"skipped: tmux cannot start a server here ({err}; e.g. the Codex sandbox)")
+        return 0
     b = Bed()
     print(f"bed: {b.dir}\n")
     try:
@@ -792,6 +942,13 @@ def main():
                   test_plain_wake_clears_leftover_input_first,
                   test_reset_clears_a_draft_first,
                   test_reset_that_stays_in_the_composer_falls_back,
+                  test_reset_answers_the_codex_start_in_picker,
+                  test_reset_onto_an_unknown_screen_falls_back,
+                  test_reset_onto_a_quoted_option_line_presses_no_enter,
+                  test_agy_busy_pane_is_busy_not_a_dialog,
+                  test_agy_dialogs_defer,
+                  test_agy_idle_state_outranks_a_stale_turn_heartbeat,
+                  test_plain_wake_pauses_before_enter,
                   test_reset_downgrades_to_the_plain_line):
             print(f"{t.__name__}:")
             try:

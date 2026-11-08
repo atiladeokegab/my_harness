@@ -1,0 +1,11 @@
+{
+  "id": "C-005",
+  "base_version": 5,
+  "added": [
+    {"id": "R-8", "title": "Version endpoint: what is deployed", "needs": [],
+     "acceptance": [{"id": "A-8.1", "text": "GET /api/version returns {version}: the APP_VERSION environment variable, or \"dev\" when it is unset"}]}
+  ],
+  "modified": [],
+  "removed": [],
+  "reason": "Factory pause test: hub pause is issued while the builder is mid-task; nothing may merge or deploy until hub resume, then the run completes."
+}

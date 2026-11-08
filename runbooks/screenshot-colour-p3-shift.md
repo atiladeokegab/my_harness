@@ -2,9 +2,9 @@
 
 **Symptom.** You sample the pixels of a design screenshot to recover brand colours.
 Every neutral matches the design file exactly, but one saturated accent comes back
-noticeably different — enough that it reads as a deliberate palette change. On
-Refinery this surfaced as green `#00D46A` reading as `#60D175` across five separate
-reference PNGs, consistently, which made it look confirmed.
+noticeably different — enough that it reads as a deliberate palette change. In one
+case a green `#00D46A` read as `#60D175` across five separate reference PNGs,
+consistently, which made it look confirmed.
 
 **Confirm it.** Convert the design file's stated sRGB value into Display P3 and compare
 against what you sampled. If they match to the byte, the colour never changed:

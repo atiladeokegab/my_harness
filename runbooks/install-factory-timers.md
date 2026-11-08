@@ -28,7 +28,7 @@ $EDITOR ~/hub/factory.json
 
 - `agents`: who the dispatcher may wake. `kind` is `claude` or `codex`; `dispatch: false` keeps the
   lead out of the rotation. `"reset": "per-task"` starts that agent on a fresh session for each
-  dispatched task (`HUB.md`, "Fresh context per task"); `false` or missing keeps one session. Without the file, the roster variables (`HUB_CODEX_AGENTS`,
+  dispatched task (`docs/hub/dispatch.md`, "Fresh context per task"); `false` or missing keeps one session. Without the file, the roster variables (`HUB_CODEX_AGENTS`,
   `HUB_CLAUDE_AGENTS`, `HUB_LEAD`) are used, with the lead never dispatched.
 - `repos`: GitHub repos whose `agent`-labelled issues and red CI on main become tasks. A spec
   project's repo may set `acceptance_cmd` (default `uv run pytest -q {test}`).
@@ -175,6 +175,11 @@ for f in ~/.claude/settings.json ~/.claude-*/settings.json; do
       "$f" > "$f.new" && mv "$f.new" "$f"
 done
 ```
+
+A third, `session-ship-check.js`, runs `hub ship-check --quiet` at `SessionStart` and warns when
+harness files (plans, reviews, agent notes) would reach a shared repo; a clean repo prints nothing.
+Add it the same way: `.hooks.SessionStart += [{"hooks": [{"type": "command", "command":
+"node $HUB_DIR/hooks/session-ship-check.js", "timeout": 10}]}]`.
 
 Hooks load when a session starts: restart each agent at a quiet moment. Then:
 

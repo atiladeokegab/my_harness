@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Build phases</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px system-ui, sans-serif;
+            --line: #8885; --soft: #8881; --done: #2e8b57; --going: #2f6fdb; --blocked: #c0392b; --idle: #888; --you: #b8860b; }
+    body { max-width: 1000px; margin: 0 auto; padding: 1rem; background: Canvas; color: CanvasText; }
+    h1 { margin: 0 0 .2rem; font-size: 1.6rem; }
+    .muted { opacity: .7; font-size: .9rem; }
+    .you { border: 2px solid var(--you); border-radius: .5rem; padding: .7rem .9rem; margin: 1rem 0; }
+    .you h2 { margin: 0 0 .4rem; font-size: 1.05rem; color: var(--you); }
+    .you ul { margin: 0; padding-left: 1.2rem; }
+    .phase { border: 1px solid var(--line); border-radius: .5rem; margin: .7rem 0; }
+    .phase > summary { list-style: none; cursor: pointer; padding: .75rem .9rem; display: grid;
+                       grid-template-columns: 1fr auto; gap: .35rem .8rem; align-items: center; }
+    .phase > summary::-webkit-details-marker { display: none; }
+    .phase[open] > summary { border-bottom: 1px solid var(--line); }
+    .name { font-weight: 650; }
+    .badge { font-size: .8rem; font-weight: 650; padding: .15rem .55rem; border-radius: 1rem; color: white; white-space: nowrap; }
+    .s-done { background: var(--done); } .s-in-progress { background: var(--going); }
+    .s-blocked { background: var(--blocked); } .s-not-started { background: var(--idle); }
+    .bar { grid-column: 1 / -1; height: .45rem; background: var(--soft); border-radius: 1rem; overflow: hidden; }
+    .bar > div { height: 100%; background: var(--done); }
+    .goal { grid-column: 1 / -1; font-size: .92rem; opacity: .85; }
+    .wait { grid-column: 1 / -1; font-size: .9rem; color: var(--you); }
+    .tasks { padding: .3rem .9rem .8rem; }
+    .task { display: grid; grid-template-columns: 4.2rem 1fr auto; gap: .2rem .7rem; padding: .5rem 0; border-top: 1px solid var(--soft); }
+    .task:first-child { border-top: 0; }
+    .tid { font-variant-numeric: tabular-nums; opacity: .75; }
+    .tstatus { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; }
+    .t-done { color: var(--done); } .t-claimed { color: var(--going); } .t-blocked { color: var(--blocked); }
+    .t-open, .t-missing { color: var(--idle); }
+    .note { grid-column: 2 / -1; font-size: .86rem; opacity: .8; }
+    .error { background: var(--blocked); color: white; padding: .6rem .8rem; border-radius: .4rem; }
+    select { font: inherit; margin-left: .4rem; }
+    @media (max-width: 560px) { .task { grid-template-columns: 1fr auto; } .tid { grid-column: 1 / -1; } .note { grid-column: 1 / -1; } }
+  </style>
+</head>
+<body>
+  <h1 id="title">Build phases</h1>
+  <div class="muted"><span id="summary"></span> · <span id="fresh">loading</span><label id="pick" hidden> · project<select id="project"></select></label></div>
+  <div id="error" class="error" hidden></div>
+  <section id="you" class="you" hidden><h2>Waiting on you</h2><ul id="you-list"></ul></section>
+  <main id="phases"></main>
+  <section id="unphased-section" hidden><h2>Not in a phase yet</h2><div id="unphased" class="phase tasks"></div></section>
+
+<script>
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const slug = s => String(s || "").replace(/\s+/g, "-");
+const openPhases = new Set();
+let project = new URLSearchParams(location.search).get("project");
+
+function taskRow(t) {
+  const row = el("div", "task");
+  row.append(el("span", "tid", t.id), el("span", null, t.title || "(not on the board)"),
+             el("span", "tstatus t-" + slug(t.status), t.status + (t.owner ? " · " + t.owner : "")));
+  if (t.last_note) {
+    const n = t.last_note;
+    row.append(el("div", "note", (n.at || "").slice(0, 10) + " " + (n.by || "") + ": " + n.text));
+  }
+  return row;
+}
+
+function render(data) {
+  document.title = data.title + " · build phases";
+  document.getElementById("title").textContent = data.title;
+  const done = data.phases.filter(p => p.status === "done").length;
+  const current = data.phases.find(p => p.status !== "done");
+  document.getElementById("summary").textContent =
+    `${done} of ${data.phases.length} phases done` + (current ? ` · now: Phase ${current.id}, ${current.name}` : "");
+
+  const waits = data.phases.filter(p => p.waiting_on_you);
+  const list = document.getElementById("you-list");
+  list.replaceChildren(...waits.map(p => { const li = el("li"); li.append(el("strong", null, `Phase ${p.id}: `), p.waiting_on_you); return li; }));
+  document.getElementById("you").hidden = !waits.length;
+
+  const main = document.getElementById("phases");
+  main.replaceChildren(...data.phases.map(p => {
+    const d = el("details", "phase");
+    d.open = openPhases.has(p.id);
+    d.addEventListener("toggle", () => d.open ? openPhases.add(p.id) : openPhases.delete(p.id));
+    const s = el("summary");
+    const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+    const bar = el("div", "bar"); bar.append(Object.assign(el("div"), { style: `width:${pct}%` }));
+    s.append(el("span", "name", `Phase ${p.id} · ${p.name}  (${p.done}/${p.total} tasks)`),
+             el("span", "badge s-" + slug(p.status), p.status), bar, el("span", "goal", p.goal || ""));
+    if (p.waiting_on_you) s.append(el("span", "wait", "Needs you: see the box above"));
+    const tasks = el("div", "tasks");
+    tasks.append(...p.tasks.map(taskRow));
+    d.append(s, tasks);
+    return d;
+  }));
+
+  document.getElementById("unphased").replaceChildren(...data.unphased.map(taskRow));
+  document.getElementById("unphased-section").hidden = !data.unphased.length;
+  document.getElementById("fresh").textContent = "live, checked " + new Date().toLocaleTimeString();
+}
+
+async function tick() {
+  const err = document.getElementById("error");
+  try {
+    if (!project) {
+      const { projects } = await (await fetch("phases.json", { cache: "no-store" })).json();
+      if (!projects.length) throw new Error("No project has a phases.json yet.");
+      project = projects.includes("hy-hackathon") ? "hy-hackathon" : projects[0];
+      const sel = document.getElementById("project");
+      sel.replaceChildren(...projects.map(p => Object.assign(el("option", null, p), { value: p, selected: p === project })));
+      sel.onchange = () => { project = sel.value; openPhases.clear(); tick(); };
+      document.getElementById("pick").hidden = projects.length < 2;
+    }
+    const r = await fetch("phases.json?project=" + encodeURIComponent(project), { cache: "no-store" });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || r.statusText);
+    render(body);
+    err.hidden = true;
+  } catch (e) {
+    err.textContent = "Cannot read the board: " + e.message + " (retrying)";
+    err.hidden = false;
+  }
+}
+tick();
+setInterval(tick, 10000);
+</script>
+</body>
+</html>

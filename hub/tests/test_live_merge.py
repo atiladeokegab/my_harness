@@ -14,7 +14,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 for _k in [k for k in os.environ if k.startswith("HUB_")]:  # HUB_LEAD, HUB_REVIEWER: test the default roster
     del os.environ[_k]
-from live_merge import DETACHED_SH, is_lgtm, merge_tick, secret_files
+from live_merge import DETACHED_SH, docs_only, fast_lane, is_lgtm, merge_tick, secret_files
+import gh_sync
 import spec
 from tests.test_spec import Fixture, git  # hub spec's Linkly fixture
 
@@ -43,6 +44,7 @@ class FakeRun:
         self.smoke_code = 0
         self.smoke_output = "ok\n"
         self.setup_fails = False
+        self.push_fails = False
         self.conflicts = []
         self.head = SHA
         self.project = True  # the worktree has a pyproject.toml, so the smoke runs
@@ -55,6 +57,8 @@ class FakeRun:
         self.gate_exit = "0"  # how the detached change gate ends at once; None leaves it running
         self.spawned = []  # argv of each detached gate: sh -c DETACHED_SH name clone sha command exit_file cap
 
+        self.raw_files = {}
+
     def spawn(self, argv, out):
         self.spawned.append(argv)
         if self.gate_exit is not None:
@@ -63,6 +67,12 @@ class FakeRun:
     def __call__(self, args, cwd=None, timeout=60):
         self.calls.append((args, cwd, timeout))
         result = None
+        if args[:2] == ["gh", "api"] and any("/contents/" in a for a in args):
+            url = next(a for a in args if "/contents/" in a)
+            path_part, _, ref = url.partition("/contents/")[2].partition("?ref=")
+            if (path_part, ref) in self.raw_files:
+                return subprocess.CompletedProcess(args, 0, self.raw_files[(path_part, ref)], "")
+            return subprocess.CompletedProcess(args, 1, "", "HTTP 404: Not Found")
         if args[:3] == ["gh", "pr", "list"]:
             result = self.conflicts if any(c[0][:3] == ["gh", "pr", "merge"] for c in self.calls) else self.prs
         elif args[:2] == ["gh", "api"]:
@@ -93,6 +103,14 @@ class FakeRun:
             return subprocess.CompletedProcess(args, int(any(t in args for t in self.acceptance_red)), "", "")
         if "--is-ancestor" in args:
             return subprocess.CompletedProcess(args, 0 if self.in_integration else 1, "", "")
+        if "push" in args and "--delete" in args:
+            if self.push_fails:
+                return subprocess.CompletedProcess(args, 1, "", "push failed")
+            branch = args[-1]
+            self.remote_heads = "\n".join(
+                line for line in self.remote_heads.splitlines() if not line.endswith(f"\trefs/heads/{branch}")
+            ) + ("\n" if self.remote_heads else "")
+            return subprocess.CompletedProcess(args, 0, "", "")
         if args[:1] == ["timeout"] and args[2:3] == ["sh"]:  # the smoke, or make check on a change head
             return subprocess.CompletedProcess(args, self.smoke_code, self.smoke_output, "")
         if "worktree" in args and "add" in args and self.setup_fails:
@@ -216,6 +234,50 @@ class MergeTickTests(unittest.TestCase):
         self.tick()
         self.assertEqual(len(self.run.commands("gh", "pr", "merge")), 1)
 
+    def test_a_pr_with_undeclared_dependency_never_merges_even_with_lgtm(self):
+        lgtm = [{"author": {"login": "lead"}, "body": f"LGTM {SHA}"}]
+        self.run.prs = [pr(author="lead", body="Closes #17\n\n## Evidence\nmake check: 12 passed") | {
+            "files": [{"path": "pyproject.toml"}], "changedFiles": 1, "comments": lgtm, "baseRefName": "main"}]
+        self.run.raw_files[("docs/stack.md", SHA)] = "| Lib | requests | Decided | http |\n"
+        self.run.raw_files[("docs/stack.md", "main")] = "| Lib | requests | Decided | http |\n"
+        self.run.raw_files[("pyproject.toml", "main")] = '[project]\ndependencies = ["requests"]\n'
+        self.run.raw_files[("pyproject.toml", SHA)] = '[project]\ndependencies = ["requests", "redis"]\n'
+        self.tick()
+        self.assertFalse(self.run.commands("gh", "pr", "merge"))
+        self.run.raw_files[("docs/stack.md", SHA)] = "| Lib | requests | Decided | http |\n| Lib | redis | Decided | cache |\n"
+        self.tick()
+        # Even if head has the row, base does not, so it never merges
+        self.assertFalse(self.run.commands("gh", "pr", "merge"))
+        # When declared in docs/stack.md at base (main), it merges
+        self.run.raw_files[("docs/stack.md", "main")] = "| Lib | requests | Decided | http |\n| Lib | redis | Decided | cache |\n"
+        self.tick()
+        self.assertEqual(len(self.run.commands("gh", "pr", "merge")), 1)
+
+    def test_stack_table_path_is_never_docs_only_or_fast_lane(self):
+        """Hermes T-583 review: docs_only and fast_lane must never bypass LGTM for the stack table."""
+        stack_pr = pr(author="lead", body="Closes #17\n\nVerified: manual") | {
+            "files": [{"path": "docs/stack.md"}], "changedFiles": 1}
+        self.assertFalse(docs_only(stack_pr))
+        self.assertFalse(fast_lane(stack_pr, "Files: docs/", review_before=[]))
+        # Custom stack path
+        custom_pr = pr(author="lead", body="Closes #17\n\nVerified: manual") | {
+            "files": [{"path": "arch/stack.md"}], "changedFiles": 1}
+        self.assertFalse(docs_only(custom_pr, stack="arch/stack.md"))
+        self.assertFalse(fast_lane(custom_pr, "Files: arch/", review_before=[], stack="arch/stack.md"))
+        # Hermes follow-up nit: normpath handles leading ./
+        self.assertFalse(docs_only(stack_pr, stack="./docs/stack.md"))
+        self.assertFalse(fast_lane(stack_pr, "Files: docs/", review_before=[], stack="./docs/stack.md"))
+        dot_pr = pr(author="lead", body="Closes #17\n\nVerified: manual") | {
+            "files": [{"path": "./docs/stack.md"}], "changedFiles": 1}
+        self.assertFalse(docs_only(dot_pr, stack="docs/stack.md"))
+        self.assertFalse(fast_lane(dot_pr, "Files: docs/", review_before=[], stack="docs/stack.md"))
+        # In merge_tick: a stack table edit without LGTM is never fast-merged
+        self.run = FakeRun()
+        self.run.prs = [stack_pr]
+        self.tick(review_before=None)
+        self.assertFalse(self.run.commands("gh", "pr", "merge"))
+
+
     def test_docs_readme_and_media_only_merge_on_evidence_alone(self):
         """Factory rule F2, even with no review_before in hackathon.json (everything else waits)."""
         for paths, merged in ((["docs/guide.md", "README.md", "web/README", "shots/home.png"], True),
@@ -226,6 +288,74 @@ class MergeTickTests(unittest.TestCase):
                 self.tick(review_before=None)
                 self.assertEqual(len(self.run.commands("gh", "pr", "merge")), int(merged))
                 self.assertEqual(self.state.get("unreviewed", []), [7] if merged else [])
+
+    def test_trial_builder_skips_fast_lane(self):
+        """Living spec §4: a trial builder's PR never takes fast_lane or docs_only; always waits for LGTM."""
+        self.run = FakeRun()
+        self.run.issue_labels[17] = ["task", "agent:iris"]
+        self.run.prs = [pr(author="lead") | {"files": [{"path": "docs/guide.md"}], "changedFiles": 1}]
+        self.tick(review_before=None, trial_builders=["iris"])
+        self.assertFalse(self.run.commands("gh", "pr", "merge"))
+        self.assertEqual(self.state["gated"], [7])
+
+    def test_trusted_builder_keeps_fast_lane(self):
+        """Living spec §4: a trusted builder's docs-only PR still merges on evidence alone."""
+        self.run = FakeRun()
+        self.run.issue_labels[17] = ["task", "agent:prometheus"]
+        self.run.prs = [pr(author="lead") | {"files": [{"path": "docs/guide.md"}], "changedFiles": 1}]
+        self.tick(review_before=None, trial_builders=["iris"])
+        self.assertEqual(len(self.run.commands("gh", "pr", "merge")), 1)
+        self.assertEqual(self.state.get("unreviewed", []), [7])
+
+    def test_board_approval_allows_trial_builder_merge(self):
+        """Addendum 2 M4: live_merge counts board approvals for trial/trusted builders."""
+        self.run = FakeRun()
+        self.run.issue_labels[17] = ["task", "agent:iris"]
+        self.run.prs = [pr(author="lead") | {"files": [{"path": "src/app.py"}], "changedFiles": 1}]
+        approvals = {(7, SHA): "Hermes"}
+        self.tick(review_before=None, trial_builders=["iris"], approvals=approvals)
+        self.assertEqual(len(self.run.commands("gh", "pr", "merge")), 1)
+
+    def test_board_approval_from_builder_or_trial_agent_ignored(self):
+        """Living spec §4: approvals from the builder or an agent lacking review capability do not count."""
+        # Self-approval
+        self.run = FakeRun()
+        self.run.issue_labels[17] = ["task", "agent:iris"]
+        self.run.prs = [pr(author="lead") | {"files": [{"path": "src/app.py"}], "changedFiles": 1}]
+        self.tick(review_before=None, trial_builders=["iris"], approvals={(7, SHA): "iris"})
+        self.assertFalse(self.run.commands("gh", "pr", "merge"))
+        # Approval from another trial agent
+        self.run = FakeRun()
+        self.run.issue_labels[17] = ["task", "agent:iris"]
+        self.run.prs = [pr(author="lead") | {"files": [{"path": "src/app.py"}], "changedFiles": 1}]
+        self.tick(review_before=None, trial_builders=["iris", "ghost"], approvals={(7, SHA): "ghost"})
+        self.assertFalse(self.run.commands("gh", "pr", "merge"))
+
+    def test_board_approval_held_by_lead_changes_note(self):
+        """Hermes review T-577: board-approval mode still obeys lead CHANGES: holds."""
+        self.run = FakeRun()
+        self.run.issue_labels[17] = ["task", "agent:iris"]
+        ask = {"createdAt": "2026-10-12T12:05:00Z", "body": "CHANGES: fix edge case", "author": {"login": "lead"}}
+        self.run.prs = [pr(author="lead") | {
+            "files": [{"path": "src/app.py"}],
+            "changedFiles": 1,
+            "comments": [ask],
+        }]
+        self.run.commits = [{"committedDate": "2026-10-12T12:00:00Z"}]
+        approvals = {(7, SHA): "Hermes"}
+        self.tick(review_before=None, trial_builders=["iris"], approvals=approvals)
+        self.assertFalse(self.run.commands("gh", "pr", "merge"))
+        self.assertEqual(self.state.get("gated"), [7])
+
+    def test_board_approval_unpinned_pr_number_fallback_dropped(self):
+        """T-577: board approval requires exact (pr, sha); no fallback to unpinned pr number."""
+        self.run = FakeRun()
+        self.run.issue_labels[17] = ["task", "agent:iris"]
+        self.run.prs = [pr(author="lead") | {"files": [{"path": "src/app.py"}], "changedFiles": 1}]
+        approvals = {7: "Hermes"}  # Unpinned int key should not be honored
+        self.tick(review_before=None, trial_builders=["iris"], approvals=approvals)
+        self.assertFalse(self.run.commands("gh", "pr", "merge"))
+        self.assertEqual(self.state.get("gated"), [7])
 
     def test_with_a_hackathon_config_docs_still_obey_review_before_and_files(self):
         """Hermes review of 4ac34c0: docs_only must not bypass review_before or the issue's Files:."""
@@ -323,7 +453,7 @@ class MergeTickTests(unittest.TestCase):
         self.run.smoke_code = 1
         self.tick()
         self.assertEqual(len(self.run.commands("gh", "pr", "merge")), 1)
-        self.assertFalse(self.run.commands("timeout", "300"))
+        self.assertFalse(self.run.commands("timeout", "1800"))
         self.assertFalse(any("revert" in args for args, _, _ in self.run.calls))
         self.assertTrue(any(args[-1] == f"{SHA}:refs/heads/main" for args, _, _ in self.run.calls))
 
@@ -415,7 +545,7 @@ class MergeTickTests(unittest.TestCase):
         self.tick()
         self.assertEqual(self.state["smoked"], MERGE)
         self.assertEqual(len(self.run.commands("gh", "pr", "comment")), 1)
-        self.assertEqual(len(self.run.commands("timeout", "300")), 2)
+        self.assertEqual(len(self.run.commands("timeout", "1800")), 2)
 
     def test_retargets_before_checking_gate(self):
         self.run.prs = [pr() | {"baseRefName": "main"}]
@@ -439,18 +569,18 @@ class MergeTickTests(unittest.TestCase):
                 self.run.checks.append({"name": "smoke", "bucket": bucket, "state": bucket.upper()})
                 self.tick()
                 self.assertFalse(self.run.commands("gh", "pr", "merge"))
-                self.assertFalse(self.run.commands("timeout", "300"))
+                self.assertFalse(self.run.commands("timeout", "1800"))
         self.run.checks[-1]["bucket"] = "pass"
         self.tick()
         self.assertEqual(len(self.run.commands("gh", "pr", "merge")), 1)
-        self.assertEqual(self.run.commands("timeout", "300")[0][-1], "make smoke")  # the local smoke still decides main
+        self.assertEqual(self.run.commands("timeout", "1800")[0][-1], "make smoke")  # the local smoke still decides main
 
     def test_no_smoke_check_falls_back_to_the_local_smoke(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.tick()
         self.assertEqual(len(self.run.commands("gh", "pr", "merge")), 1)
-        self.assertEqual([c[-1] for c in self.run.commands("timeout", "300")], ["make smoke"])
+        self.assertEqual([c[-1] for c in self.run.commands("timeout", "1800")], ["make smoke"])
         self.assertIn("live merge: #7 has no smoke check (Actions not reporting); the local smoke alone decides",
                       out.getvalue())
 
@@ -552,7 +682,7 @@ class SpecMergeTests(unittest.TestCase):
         [merge] = self.run.commands("gh", "pr", "merge")
         self.assertEqual(merge[:3], ["gh", "pr", "merge"])
         self.assertFalse(self.run.commands("gh", "pr", "edit"))  # not retargeted to integration
-        self.assertFalse(self.run.commands("timeout", "300"))
+        self.assertFalse(self.run.commands("timeout", "1800"))
         self.assertFalse([a for a in self.run.commands("git") if "push" in a])
         self.assertEqual(self.state["merge_events"][0]["event"], "merged")
         self.assertNotIn("first_merge", self.state)
@@ -680,7 +810,7 @@ class SpecMergeTests(unittest.TestCase):
         self.assertIn("timeout 1200 sh -c 'if make -n check", command)
         self.assertEqual(cap, str(120 + 2 * 1200 + 60))  # the whole gate's cap: every step's, plus a minute
         self.assertEqual(len([a for a in self.run.commands("git") if "--no-ff" in a]), 1)
-        self.assertEqual({tuple(a) for a in self.run.commands("timeout")}, {("timeout", "300", "sh", "-c", "make smoke")})
+        self.assertEqual({tuple(a) for a in self.run.commands("timeout")}, {("timeout", "1200", "sh", "-c", "make smoke")})
         self.assertFalse(self.run.commands("env"))  # no gate step ran inline: only integration's own smoke
 
     def test_a_red_make_check_also_keeps_a_change_branch_out(self):
@@ -774,11 +904,188 @@ class SpecMergeTests(unittest.TestCase):
         self.tick(req_lines=LINES, change_tasks=[])
         self.assertFalse([a for a in self.run.commands("git") if "merge" in a and "--no-ff" in a])
         self.assertIn("--delete", [x for a in self.run.commands("git") if "push" in a for x in a])
+        self.assertEqual(self.sent, [("Zeus", f"change/C-001 already in integration at {'d' * 12}: branch deleted")])
+        self.tick(req_lines=LINES, change_tasks=[])
+        self.assertEqual(len(self.sent), 1)  # once per branch
+
+    def test_a_failed_change_branch_delete_is_retried_next_pass(self):
+        self.run.prs, self.run.in_integration = [], True
+        self.run.remote_heads = f"{'d' * 40}\trefs/heads/change/C-001\n"
+        self.run.push_fails = True
+        self.tick(req_lines=LINES, change_tasks=[])
+        self.assertEqual(self.sent, [])
+        self.run.push_fails = False
+        self.tick(req_lines=LINES, change_tasks=[])
+        self.assertEqual(self.sent, [("Zeus", f"change/C-001 already in integration at {'d' * 12}: branch deleted")])
+        deletes = [x for a in self.run.commands("git") if "push" in a for x in a if x == "--delete"]
+        self.assertEqual(len(deletes), 2)
 
     def test_without_a_spec_change_branches_are_left_alone(self):
         self.run.prs, self.run.remote_heads = [], f"{'d' * 40}\trefs/heads/change/C-001\n"
         self.tick()
         self.assertFalse([a for a in self.run.commands("git") if "ls-remote" in a or "--no-ff" in a])
+
+
+HELDOUT = [("held-out A-1.1", ["sh", "-c", "cp /hub/heldout/A-1.1/test_codes_unique.py tests/_heldout/ && run it"])]
+
+
+class HeldoutGateTests(unittest.TestCase):
+    """Living spec section 3: held-out checks gate a change branch, and a red one is named by its line alone."""
+    setUp, tick, finish, spec_pr = MergeTickTests.setUp, MergeTickTests.tick, SpecMergeTests.finish, SpecMergeTests.spec_pr
+    CHECKS = [["uv", "run", "pytest", "-q", "tests/acceptance/test_A_1_1.py"]]
+
+    def gate_tick(self, heldout=HELDOUT):
+        self.tick(req_lines=LINES, change_tasks=[], acceptance=self.CHECKS, acceptance_timeout=120, heldout=heldout)
+
+    def merges(self):
+        return [a for a in self.run.commands("git") if "--no-ff" in a]
+
+    def test_heldout_red_names_line_only(self):
+        self.run.prs, self.run.remote_heads = [], f"{'d' * 40}\trefs/heads/change/C-001\n"
+        self.run.gate_exit = 2  # the held-out step
+        self.gate_tick(); self.gate_tick()
+        self.assertEqual(self.run.spawned[0][6].splitlines()[1:3], [  # after the visible checks, before the smoke
+            "env -u HUB_DIR -u HUB_AGENT timeout 120 sh -c 'cp /hub/heldout/A-1.1/test_codes_unique.py "
+            "tests/_heldout/ && run it' || exit 2", "timeout 1800 sh -c 'make smoke' || exit 3"])
+        self.assertEqual(self.run.spawned[0][8], str(2 * 120 + 2 * 1800 + 60))  # one more step under the cap
+        self.assertEqual(self.sent, [("Zeus", "change/C-001 is red at dddddddddddd (held-out A-1.1): not merged into "
+                                              f"integration; log {self.clone / 'heldout' / 'gate.log'}")])
+        self.assertEqual([{k: e[k] for k in ("branch", "sha", "line")} for e in self.state["heldout_red"]],
+                         [{"branch": "change/C-001", "sha": "d" * 40, "line": "A-1.1"}])
+        self.assertNotIn("test_codes_unique", json.dumps(self.sent) + json.dumps(self.state["heldout_red"]))
+        self.assertFalse(self.merges())
+
+    def test_two_heldout_reds_hold_the_branch_until_heldout_json_changes(self):
+        self.run.prs, self.run.gate_exit = [], 2
+        for head in "de":
+            self.run.remote_heads = f"{head * 40}\trefs/heads/change/C-001\n"
+            self.gate_tick(); self.gate_tick()
+        self.assertEqual(len(self.sent), 2)
+        self.assertIn("red twice on this branch", self.sent[1][1])
+        self.run.remote_heads, self.run.gate_exit = f"{'f' * 40}\trefs/heads/change/C-001\n", "0"
+        self.gate_tick(); self.gate_tick()
+        self.assertEqual(len(self.run.spawned), 2)  # the third head is not gated: Zeus decides
+        rewritten = [(HELDOUT[0][0], ["sh", "-c", "echo '== held-out A-1.1 v2 2026-10-21'; run it"])]
+        self.gate_tick(rewritten); self.gate_tick(rewritten)
+        self.assertEqual(len(self.run.spawned), 3)
+        self.assertEqual(len(self.merges()), 1)
+
+    def test_visible_reds_never_hold_the_branch(self):
+        self.run.prs, self.run.gate_exit = [], 1
+        for head in "def":
+            self.run.remote_heads = f"{head * 40}\trefs/heads/change/C-001\n"
+            self.gate_tick(); self.gate_tick()
+        self.assertEqual(len(self.run.spawned), 3)
+        self.assertNotIn("heldout_red", self.state)
+
+    def test_heldout_red_trimmed_like_canary_clean(self):
+        self.state["heldout_red"] = [
+            {"at": "2026-10-19T00:00:00Z", "branch": f"change/C-{i:03d}", "sha": "a" * 40, "line": "A-1.1"}
+            for i in range(250)
+        ]
+        self.run.prs, self.run.remote_heads = [], f"{'d' * 40}\trefs/heads/change/C-001\n"
+        self.run.gate_exit = 2  # the held-out step
+        self.gate_tick(); self.gate_tick()
+        self.assertEqual(len(self.state["heldout_red"]), 200)
+        self.assertEqual(self.state["heldout_red"][-1]["branch"], "change/C-001")
+
+
+    def lead_pr(self, diff):
+        body = "Closes #17\n\nReq: A-1.1@2\nVerified: make check: 3 passed"
+        self.run = FakeRun([self.spec_pr(body, author="lead") | {"comments": [{"author": {"login": "lead"}, "body": f"LGTM {SHA}"}]}])
+        self.run.diff = diff
+
+    def test_canary_in_diff_holds_pr(self):
+        self.lead_pr("+++ b/tests/test_sum.py\n@@ -0,0 +1,2 @@\n+# HELDOUT_CANARY_7f3a do not copy\n+assert sum_(-2, 3) == 1\n")
+        self.tick(req_lines=LINES, change_tasks=[]); self.tick(req_lines=LINES, change_tasks=[])
+        self.assertFalse(self.run.commands("gh", "pr", "merge"))
+        self.assertEqual(self.sent, [("Zeus", "PR #7 contains a held-out file (tests/test_sum.py): held, never merged here")])
+        self.lead_pr(None)  # an unread diff holds too, silently, until a pass can read it
+        self.sent = []
+        self.tick(req_lines=LINES, change_tasks=[])
+        self.assertFalse(self.run.commands("gh", "pr", "merge"))
+        self.assertEqual(self.sent, [])
+
+    def test_no_canary_no_hold(self):
+        self.lead_pr("+++ b/app/links.py\n+def sum_(a, b):\n-# HELDOUT-CANARY removed is not added\n")
+        self.tick(req_lines=LINES, change_tasks=[])
+        self.assertEqual(len(self.run.commands("gh", "pr", "merge")), 1)
+        self.assertEqual(self.sent, [])
+        self.run.calls = []
+        self.tick(req_lines=LINES, change_tasks=[])  # a clean head is read once
+        self.assertFalse(self.run.commands("gh", "pr", "diff"))
+
+    def test_a_bent_build_goes_red_only_at_its_heldout_step_and_leaves_nothing_behind(self):
+        """The acceptance of T-575, on a factory-sandbox-shaped repo: GET /api/sum's helper is bent to pass the
+        visible check (2 + 3) only. The real gate (DETACHED_SH, gh_sync.heldout_checks) goes red at the held-out
+        step alone, its output reaches heldout/gate.log only, and no held-out file reaches the worktree or a branch."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
+        self.enterContext(mock.patch.dict(os.environ, env, clear=True))
+        root = Path(self.tmp.name)
+        hub, origin, clone = root / "hub", root / "origin.git", root / "sandbox"
+        gates = hub / "projects" / "sandbox"
+        (gates / "spec").mkdir(parents=True)
+        (gates / "spec" / "requirements.json").write_text(json.dumps({"version": 1, "requirements": [
+            {"id": "R-8", "title": "Sum endpoint", "acceptance": [{"id": "A-8.1", "v": 1, "test": "tests/acceptance/test_A_8_1.py",
+             "text": "GET /api/sum?a=<int>&b=<int> returns {sum: a+b}"}]}]}))
+        (gates / "heldout" / "A-8.1").mkdir(parents=True)
+        (gates / "heldout" / "heldout.json").write_text(json.dumps(
+            {"A-8.1": {"v": 1, "tests": ["A-8.1/test_sum_negatives.py"], "by": "Zeus check-writer", "at": "2026-10-20T09:00:00Z"}}))
+        (gates / "heldout" / "A-8.1" / "test_sum_negatives.py").write_text(
+            "# HELDOUT_CANARY_e2e575 do not copy\nimport os, sys\nsys.path.insert(0, os.getcwd())\n"
+            "from app import total\nassert total(-2, 3) == 1, 'negatives'\n")
+        (hub / "factory.json").write_text(json.dumps({"repos": [{"repo": "o/sandbox", "acceptance_cmd": f"{sys.executable} {{test}}"}]}))
+        self.enterContext(mock.patch.object(spec.hb, "HUB_DIR", str(hub)))
+        sh = lambda *a, cwd=root: subprocess.run(a, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+        sh("git", "init", "-q", "--bare", "-b", "integration", str(origin))
+        sh("git", "clone", "-q", str(origin), str(clone))
+        sh("git", "config", "user.email", "t@t", cwd=clone)
+        sh("git", "config", "user.name", "t", cwd=clone)
+        (clone / "tests" / "acceptance").mkdir(parents=True)
+        (clone / "tests" / "acceptance" / "test_A_8_1.py").write_text(
+            "import os, sys\nsys.path.insert(0, os.getcwd())\nfrom app import total\nassert total(2, 3) == 5\n")
+        sh("git", "add", "tests", cwd=clone)
+        sh("git", "commit", "-q", "-m", "base", cwd=clone)
+        sh("git", "push", "-q", "origin", "HEAD:integration", cwd=clone)
+        def build(body, message):
+            (clone / "app.py").write_text(f"def total(a, b):\n    return {body}\n")
+            sh("git", "add", "app.py", cwd=clone)
+            sh("git", "commit", "-q", "-m", message, cwd=clone)
+            sh("git", "push", "-q", "origin", "HEAD:refs/heads/change/C-001", cwd=clone)
+        build("abs(a) + abs(b)", "A-8.1: bent to the visible check")
+        run = lambda args, cwd=None, timeout=60: (
+            subprocess.CompletedProcess(args, 0, "[]", "") if args[0] == "gh"
+            else subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout))
+        acceptance, _ = gh_sync.acceptance_checks("sandbox")
+        def tick():
+            merge_tick("o/sandbox", clone, "true", "lead", self.state, run, lambda a, m: self.sent.append(m),
+                       req_lines={"A-8.1": 1}, change_tasks=[], acceptance=acceptance, acceptance_timeout=30,
+                       change_timeout=30, gate_dir=gates, heldout=gh_sync.heldout_checks("sandbox"))
+        def wait():
+            for _ in range(300):
+                tick()
+                if not [g for g in self.state["change_gates"].values() if "exit" not in g]:
+                    return tick()
+                time.sleep(0.1)
+            self.fail("the gate never finished")
+        tick()
+        wait()
+        bent = sh("git", "rev-parse", "HEAD", cwd=clone)
+        self.assertEqual(self.sent, [f"change/C-001 is red at {bent[:12]} (held-out A-8.1): not merged into "
+                                     f"integration; log {gates / 'heldout' / 'gate.log'}"])
+        self.assertEqual(self.state["heldout_red"][0]["line"], "A-8.1")
+        self.assertIn("AssertionError: negatives", (gates / "heldout" / "gate.log").read_text())
+        gate_log = (gates / "change-gate.log").read_text()
+        self.assertFalse(any(word in gate_log for word in ("negatives", "CANARY", "test_sum_negatives")), gate_log)
+        build("a + b", "A-8.1: the sum, negatives included")
+        tick()
+        wait()
+        self.assertTrue(any("merged into integration" in m for m in self.sent), self.sent)
+        self.assertEqual(sh("git", "worktree", "list", "--porcelain", cwd=clone).count("worktree "), 1)
+        self.assertFalse((clone / "tests" / "_heldout").exists())
+        everything = sh("git", "--git-dir", str(origin), "log", "--all", "-p", "--stat")
+        self.assertNotIn("_heldout", everything)
+        self.assertNotIn("CANARY", everything)
 
 
 class ChangeBranchRewindTest(Fixture):

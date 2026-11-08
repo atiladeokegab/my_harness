@@ -34,7 +34,7 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$source_path")" && pwd)"
 RELAY="$SCRIPT_DIR/hubwaked"
 
-usage() { echo "usage: hubmsg <Agent> \"message\" [--task T-003] [--id MESSAGE_ID]" >&2; exit 2; }
+usage() { echo "usage: hubmsg <Agent> \"message\" [--task T-003] [--id MESSAGE_ID] [--key K]" >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 target="$1"; shift
@@ -42,10 +42,12 @@ message="$1"; shift
 
 task=""
 message_id=""
+key=()  # --key K replaces the target's earlier message with that key (hub notify --key)
 while [ $# -gt 0 ]; do
     case "$1" in
         --task) task="${2:-}"; [ -n "$task" ] || usage; shift 2 ;;
         --id) message_id="${2:-}"; [[ "$message_id" =~ ^[A-Za-z0-9._-]{1,96}$ ]] || usage; shift 2 ;;
+        --key) [ -n "${2:-}" ] || usage; key=(--key "$2"); shift 2 ;;
         *) usage ;;
     esac
 done
@@ -64,9 +66,9 @@ fi
 
 # 1. Durable half — survives restarts, read with `hub inbox`.
 if [ -n "$task" ]; then
-    hub notify "$target" "$message" --task "$task" --message-id "$message_id" >/dev/null
+    hub notify "$target" "$message" --task "$task" --message-id "$message_id" "${key[@]}" >/dev/null
 else
-    hub notify "$target" "$message" --message-id "$message_id" >/dev/null
+    hub notify "$target" "$message" --message-id "$message_id" "${key[@]}" >/dev/null
 fi
 echo "queued  -> $target inbox"
 

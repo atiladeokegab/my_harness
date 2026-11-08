@@ -7,6 +7,7 @@ import json
 import hashlib
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,25 @@ from pathlib import Path
 HUB = Path(__file__).resolve().parent.parent
 
 
+def sockets_allowed():
+    """The Codex sandbox (Prometheus) refuses socket() outright, even on 127.0.0.1."""
+    try:
+        socket.socket().close()
+        return True
+    except OSError:
+        return False
+
+
+needs_sockets = unittest.skipUnless(sockets_allowed(), "no sockets here (the Codex sandbox)")
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@needs_sockets
 class TestReview(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())

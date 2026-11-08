@@ -559,8 +559,12 @@ def read_msgs(path):
     return msgs
 
 
-def deliver(agent, text, message_id=None):
-    """Durable notification. This does NOT ping a live session — see notify_hint()."""
+def deliver(agent, text, message_id=None, key=None):
+    """Durable notification. This does NOT ping a live session — see notify_hint().
+
+    A `key` marks a status line that only matters while it is current (a watchdog alert): it
+    replaces every earlier message with that key, and text=None only withdraws them. Without it,
+    alerts about sessions long since relaunched piled up in Zeus's inbox (2026-11-01)."""
     agent = addressable(agent, "recipient")
     path = os.path.join(INBOX_DIR, f"{agent}.jsonl")
     with inbox_lock(agent):
@@ -570,8 +574,20 @@ def deliver(agent, text, message_id=None):
         _repair_jsonl_tail(path)
         if message_id and any(m.get("id") == message_id for m in read_msgs(path)):
             return
+        msgs = read_msgs(path) if key else []
+        if any(m.get("key") == key for m in msgs):
+            for m in msgs:  # superseded counts as received, so a wake still listing it is dropped
+                if m.get("key") == key and MESSAGE_ID_RE.match(m.get("id") or ""):
+                    take_receipt(os.path.join(INBOX_DIR, ".received", agent), m["id"])
+            fd, tmp = tempfile.mkstemp(dir=INBOX_DIR, prefix=f".{agent}.")
+            with os.fdopen(fd, "w") as f:
+                f.writelines(json.dumps(m) + "\n" for m in msgs if m.get("key") != key)
+            os.replace(tmp, path)
+        if text is None:
+            return
         with open(path, "a") as f:
-            f.write(json.dumps({"at": now(), "text": text, **({"id": message_id} if message_id else {})}) + "\n")
+            f.write(json.dumps({"at": now(), "text": text, **({"id": message_id} if message_id else {}),
+                                **({"key": key} if key else {})}) + "\n")
 
 
 def new_message_id():
@@ -690,7 +706,8 @@ def verify_checkout(repo, workspace=None):
 def verify_command(t, repo):
     """The task's own verify: line; unset means `make check` when the repo has that target."""
     if "verify" in t:
-        return t["verify"] or None   # "" is an explicit "no verify"
+        # "" is an explicit "no verify", and so is '' that a re-quoting caller stored literally (T-556)
+        return t["verify"] if (t["verify"] or "").strip("'\" ") else None
     if not repo:
         return None
     try:
@@ -784,19 +801,31 @@ def verify_failed(tid, me, cmd, tail):
                 else f"{label(t)} stays claimed: fix it and run hub done again."))
 
 
+def check_tags(tags):
+    bad = [x for x in tags if not re.fullmatch(r"[a-z0-9-]+", x)]
+    if bad:
+        sys.exit(f"tag names must match [a-z0-9-]+: {', '.join(map(repr, bad))}")
+    if "stale" in tags:
+        sys.exit("'stale' belongs to the Spec Tree: hub spec apply sets and clears it")
+
+
 def cmd_new(a):
     me = whoami(a.as_agent)
+    check_tags(a.tag)
     if a.owner:
         a.owner = addressable(a.owner, "owner")
     project = which_project(getattr(a, "project", None))
     check_owner(project, a.owner)
-    if project and os.path.isfile(os.path.join(HUB_DIR, "projects", project, "spec", "requirements.json")) \
-            and not a.from_spec:
-        sys.exit(f"tasks for {project} come from hub spec apply")
+    if project and not a.from_spec:
+        import spec  # lazy, as in main(): spec imports board
+        if os.path.isfile(spec.spec_path(project)):
+            sys.exit(f"tasks for {project} come from hub spec apply")
     if a.from_spec and not a.generated_from:
         sys.exit("--from-spec needs --generated-from")
     if a.generated_from and not a.from_spec:
         sys.exit("--generated-from needs --from-spec")
+    if a.budget is not None and a.budget < 1:
+        sys.exit("--budget is whole minutes above 0")
     with board(write=True) as (data, events):
         nid = f"T-{data['next_id']:03d}"
         data["next_id"] += 1
@@ -817,9 +846,11 @@ def cmd_new(a):
             **({"generated_from": a.generated_from} if a.generated_from else {}),
             **({"kind": "vertical"} if a.vertical else {}),
             **({"verify": a.verify} if a.verify is not None else {}),
+            **({"tags": list(dict.fromkeys(a.tag))} if a.tag else {}),
+            **({"budget_minutes": a.budget} if a.budget else {}),
         })
         log(events, me, "created", nid, title=a.title, deps=deps, owner=a.owner,
-            project=project)
+            project=project, **({"tags": list(dict.fromkeys(a.tag))} if a.tag else {}))
     print(f"created {nid}: {a.title}" + (f"  [{project}]" if project else ""))
     if not a.detail:
         print("  note: no --detail given. Tasks should carry enough plan for another agent to execute cold.")
@@ -1007,7 +1038,7 @@ def cmd_edit(a):
             sys.exit(f"{label(cur)} is done; reopen it before editing its brief")
         if cur["title"] != t["title"] or (cur.get("detail") or "") != old_detail:
             sys.exit(f"{label(cur)} changed while you were editing; run hub edit again")
-        if cur.get("generated_from") and (new_title != cur["title"] or new_detail != old_detail):
+        if cur.get("generated_from") and (new_title != cur["title"] or new_detail != old_detail.replace("\r\n", "\n").rstrip()):
             sys.exit(f"{label(cur)} was generated from the PRD; change its brief through hub spec apply")
         if cur.get("generated_from") and a.verify is not None and me != LEAD_AGENT and not a.force:
             sys.exit(f"{label(cur)} was generated from the PRD; change its verify through hub spec apply")
@@ -1033,6 +1064,16 @@ def cmd_edit(a):
                (any(tag in untagged for tag in ("untrusted", "stale")) or
                 (cur.get("generated_from") and a.verify is not None)) else {}))
     print(f"{label(t)} saved" + ("; the next hub gh-sync pushes it" if is_hackathon(t.get("project")) else ""))
+
+
+def cmd_tag(a):
+    """hub edit's tag path, so the untrusted rule and the ledger event stay in one place."""
+    if not (a.tags or a.rm):
+        sys.exit("name a tag to add, or --rm <tag>")
+    check_tags(a.tags + a.rm)
+    vars(a).update(tag=a.tags, untag=a.rm, title=None, deadline=None, detail_file=None,
+                   take_github=False, keep_hub=False, verify=None, yes=True, force=False)
+    cmd_edit(a)
 
 
 def next_candidates(tasks, agent, project=None):
@@ -1099,6 +1140,9 @@ def cmd_claim(a):
     # finished by a real agent without --force.
     me = addressable(whoami(a.as_agent), "claiming agent")
     refuse_if_paused("hub claim")
+    import autonomy
+    if autonomy.lacks(me, "claim"):
+        sys.exit(f"{me}'s phase {autonomy.lacks(me, 'claim')} may not claim (factory.json autonomy; hub agents)")
     with board(write=True) as (data, events):
         t = resolve(data, a.id, which_project(getattr(a, "project", None)))
         if "stale" in (t.get("tags") or []):
@@ -1124,6 +1168,7 @@ def cmd_claim(a):
             t["owner"] = me
             if t.get("kind") == "factory":
                 t["agent"] = me  # hub live's builder(): the agent that built the PR
+        t["claimed_at"] = now()
         log(events, me, "claimed", t["id"], forced=bool(missing) or overridden)
     print(f"{label(t)} claimed by {me}")
     if not t.get("project"):
@@ -1152,6 +1197,7 @@ def cmd_release(a):
             t["owner"] = None
             if t.get("kind") == "factory":
                 t["agent"] = None
+        t.pop("claimed_at", None)
         log(events, me, "released", t["id"], forced=overridden)
     print(f"{label(t)} released back to open")
     try:
@@ -1205,14 +1251,40 @@ def cmd_delegate(a):
     print(f"{label(t)} " + (f"delegated to {agent}" if agent else "delegate cleared"))
 
 
-def resets_per_task(me):
-    """factory.json gives `me` a fresh session per task (agent OS §1)."""
+def _harness_nudge():
+    """Warn if this repo has harness files committed but not yet pushed.
+
+    `hub done` is the one moment every agent passes through, which makes it the only
+    place a reminder actually lands. Deliberately advisory and never fatal: a task board
+    that fails because of an unrelated git state is a task board people stop using.
+    """
     try:
-        with open(os.path.join(HUB_DIR, "factory.json")) as f:
-            agents = json.load(f).get("agents", [])
-    except (OSError, ValueError, AttributeError):
-        return False
-    return any(str(x.get("name", "")).lower() == me.lower() and x.get("reset") == "per-task" for x in agents)
+        import subprocess
+        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+        import clean_repo
+
+        def g(*args):
+            r = subprocess.run(["git", *args], capture_output=True, text=True, timeout=5)
+            return r.stdout.strip() if r.returncode == 0 else ""
+
+        root = g("rev-parse", "--show-toplevel")
+        if not root:
+            return
+        # The hub is where harness output is SUPPOSED to live. Flagging it here would
+        # cry wolf 98 times and teach everyone to ignore the line.
+        if os.path.realpath(root) == os.path.realpath(HUB_DIR):
+            return
+        base = clean_repo.find_base(root)
+        if not base:
+            return  # nothing to push to yet; "would ship" has no meaning
+        names = g("diff", "--name-only", "--diff-filter=ACRT", f"{base}...HEAD")
+        hits = [f for f in names.splitlines() if clean_repo.classify(f) == "harness"]
+        if hits:
+            print(f"  ! {len(hits)} harness file(s) would ship: " + ", ".join(hits[:3])
+                  + ("..." if len(hits) > 3 else ""))
+            print("    run `hub ship-check` before anyone pushes")
+    except Exception:
+        pass  # never let a nudge break the board
 
 
 def done_guard(data, t, me, a):
@@ -1231,17 +1303,54 @@ def done_guard(data, t, me, a):
                  f"with `Closes #{t['issue']}` (or post DONE: on the issue): the merge closes the issue, the next "
                  f"gh-sync closes this task, and a smoke revert reopens both. To drop it "
                  f"instead: hub done {label(t)} --force --note \"dropped: <why>\"")
-    # Only the board, inbox, git and memory survive the reset that follows, so the note is the handoff.
-    short_note = len((a.note or "").strip()) < 20 and resets_per_task(me)
+    # Only the board, inbox, git and memory survive a reset, so the note is the handoff. Every factory.json
+    # agent, reset or not (living spec M1), so a phase change never drops the guard.
+    import autonomy
+    short_note = len((a.note or "").strip()) < 20 and autonomy.entry(me) is not None
     if short_note and not a.force:
-        sys.exit(f"cannot done {label(t)} without a handoff note: {me} starts a fresh session next.\n"
+        sys.exit(f"cannot done {label(t)} without a handoff note: the next session on it starts from the note.\n"
                  f"add --note \"<what changed, branch and commit, what is left>\" (20+ characters), "
                  f"or --force (recorded in the ledger)")
     return issue_rule or short_note
 
 
+def pr_evidence_guard(t):
+    """A factory task's open PR must carry its builder's own Evidence and `Not verified:` before hub done:
+    hub live holds a PR without them, and on 2026-10-18 that cost a round-trip. hub live fills Closes,
+    Req and Task itself. gh unreachable (a sandboxed builder): warn, never block."""
+    import gh_sync
+    from live_merge import EVIDENCE
+    repo = t.get("issue") and gh_sync.factory_entry(t.get("project")).get("repo")
+    if not repo:
+        return
+    try:
+        prs = gh_sync.Gh().json("pr", "list", "-R", repo, "--state", "open", "--limit", "100",
+                                "--json", "number,body,headRefName")
+    except gh_sync.GhError as e:
+        print(f"warning: could not check {label(t)}'s PR body for Evidence: {e}", file=sys.stderr)
+        return
+    pr = next((p for p in prs or [] if p.get("headRefName") == f"task/{t['id']}"
+               or (p.get("headRefName") or "").startswith(f"{t['issue']}-")), None)
+    body = (pr or {}).get("body") or ""
+    missing = [line for line, ok in (
+        ("an `## Evidence` block (or a `Verified:` line): each command you ran in a clean checkout and its counts",
+         EVIDENCE.search(body)),
+        ("a `Not verified:` line: what you did not check, or \"nothing\"", re.search(r"(?m)^Not verified:", body)))
+        if not ok]
+    if pr and missing:
+        sys.exit(f"cannot done {label(t)}: PR #{pr['number']} on {repo} needs, in your own words,\n  - "
+                 + "\n  - ".join(missing)
+                 + f"\nadd them to the PR body (`gh pr edit {pr['number']} -R {repo} --body-file <file>`, keeping "
+                 f"its other lines), then hub done again")
+
+
 def cmd_done(a):
     me = whoami(a.as_agent)
+    import autonomy
+    for flag, used in (("--force", a.force), ("--no-verify", a.no_verify)):
+        if used and autonomy.lacks(me, "done_force"):
+            sys.exit(f"{flag} needs done_force; {me}'s phase {autonomy.lacks(me, 'done_force')} has none. "
+                     f"Fix what it would skip, or ask Zeus")
     pings = []
     project = which_project(getattr(a, "project", None))
     # Every refusal first, on a copy and outside the write lock: verify can run for minutes,
@@ -1253,6 +1362,8 @@ def cmd_done(a):
                    who=actor(t) if is_hackathon(t.get("project")) else None)
         repo = verify_checkout(task_repo(t), t.get("workspace"))
         cmd = verify_command(t, repo)
+    if not a.force:
+        pr_evidence_guard(t)
     verdict, tail = None, ""
     if cmd and a.no_verify:
         verdict = "skipped"
@@ -1297,6 +1408,7 @@ def cmd_done(a):
                 else:
                     pings.append((None, f"{x['id']} is now claimable: {x['title']}", None))
     print(f"{label(t)} marked done by {me}")
+    _harness_nudge()
     unowned = [p for p in pings if p[0] is None]
     for _, text, _ in unowned:
         print(f"  → {text}")
@@ -1330,7 +1442,7 @@ def cmd_notify(a):
     if a.message_id and not MESSAGE_ID_RE.match(a.message_id):
         sys.exit(f"invalid message id: {a.message_id!r}")
     mid = a.message_id or new_message_id()
-    deliver(target, f"{a.text}  (from {me})", mid)
+    deliver(target, f"{a.text}  (from {me})", mid, a.key)
     with board(write=True) as (_, events):
         log(events, me, "notify", a.task or "-", to=target, text=a.text)
     print(f"queued for {target}: {a.text}")
@@ -1342,6 +1454,7 @@ def cmd_brief(a):
     and what everyone else is holding. Read by _hub_enter at launch and injected into the
     agent's system prompt, so a session begins already knowing the state of the board
     rather than spending its first turn discovering it."""
+    import autonomy
     me = whoami(a.as_agent)
     project = which_project(getattr(a, "project", None))
     scope = f" · project {project}" if project else " · all projects"
@@ -1350,6 +1463,12 @@ def cmd_brief(a):
            if reason else [])
     out += [f"HUB BRIEFING — you are {me}{scope}.",
             "Snapshot taken when this session started; re-run `hub brief` for current state."]
+    cfg = autonomy.factory()
+    phase, policy = autonomy.phase_of(me, cfg)
+    if policy is not None:
+        out.append(f"POLICY — phase {phase}; build dispatch {'on' if policy['dispatch'] else 'off'}; "
+                   f"reset {'per-task' if policy['reset'] == 'per-task' else 'off'}. "
+                   f"Reviewer: {autonomy.reviewer(cfg)}. Source: factory.json (`hub agents`).")
 
     path = os.path.join(INBOX_DIR, f"{me}.jsonl")
     msgs = read_msgs(path) if os.path.exists(path) else []
@@ -1357,7 +1476,7 @@ def cmd_brief(a):
         out.append(f"\nINBOX — {len(msgs)} message(s) waiting. Read with `hub inbox`.")
         for m in msgs[-5:]:
             mid = f" [{m['id']}]" if m.get("id") else ""
-            out.append(f"  · [{m['at']}]{mid} {m['text']}")
+            out.append(f"  · [{m['at']}]{mid} {m['text']}"[:160])
     else:
         out.append("\nINBOX — empty.")
 
@@ -1383,11 +1502,16 @@ def cmd_brief(a):
         # what stops two agents starting the same work or colliding on one file.
         others = [t for t in data["tasks"] if t["status"] == "claimed"
                   and (t.get("owner") or "").lower() != me.lower()]
+        # Out of scope only as a count: the list cost every briefing ~200 tokens (token review 2026-10-20).
+        here = [t for t in others if not project or (t.get("project") or "") == project]
+        elsewhere = len(others) - len(here)
         if others:
             out.append("\nPEERS ARE HOLDING —")
-            for t in others:
+            for t in here:
                 tag = f" [{t['project']}]" if t.get("project") else ""
                 out.append(f"  {label(t)}  {t['title']}{tag}  @{t['owner']}")
+            if elsewhere:
+                out.append(f"  + {elsewhere} claimed in other projects")
 
         blocked = [t for t in tasks if t["status"] == "blocked"]
         if blocked:
@@ -1399,7 +1523,8 @@ def cmd_brief(a):
 
 # Routine hub live chatter: `--unseen` feeds a hook that interrupts an attached agent, and
 # these would bury the one alert that matters ("Smoke failed ...").
-INBOX_NOISE = re.compile(r"not accepted the invite yet|deployed [0-9a-f]{12}:|deploy started")
+INBOX_NOISE = re.compile(r"not accepted the invite yet|deployed [0-9a-f]{12}:|deploy started"
+                         r"|^\[watchdog\] \w+: [a-z ]+ -> [a-z ]+")  # health changes: Stop still delivers them
 
 
 def take_receipt(receipt_dir, mid):
@@ -1419,7 +1544,7 @@ def inbox_unseen(me, path):
 
     A message with an id shares receipts with `hub receive`: one already received is not shown,
     and one shown in full is received, so the Stop hook and the relay do not deliver it again
-    (live rollout 2026-10-18). A line cut at 300 characters is left for them to deliver whole."""
+    (live rollout 2026-10-18). Only a line without an id is cut at 200 characters."""
     cursor = os.path.join(INBOX_DIR, f".{me}.unseen.json")
     receipt_dir = os.path.join(INBOX_DIR, ".received", me)
 
@@ -1440,15 +1565,19 @@ def inbox_unseen(me, path):
         for m in new[-8:]:
             mid = f" [{m['id']}]" if m.get("id") else ""
             line = f"  · [{m['at']}]{mid} {m['text']}"
-            if has_id(m) and len(line) <= 300:
+            if has_id(m):  # shown whole: Zeus has no Stop hook to deliver a cut message later
                 take_receipt(receipt_dir, m["id"])
-            lines.append(line[:300])
-        if set(keys) != seen:
-            _write_json_atomic(cursor, sorted(set(keys)))
+                lines.append(line)
+            else:
+                lines.append(line[:200])
+        # Overflow past 8 stays out of the cursor, so the next call shows it rather than losing it.
+        shown = set(keys) - {m.get("id") or f"{m.get('at')}|{m.get('text')}" for m in new[:-8]}
+        if shown != seen:
+            _write_json_atomic(cursor, sorted(shown))
     for line in lines:
         print(line)
     if len(new) > 8:
-        print(f"  (+{len(new) - 8} more: run hub inbox)")
+        print(f"  (+{len(new) - 8} more, shown next time)")
 
 
 def cmd_inbox(a):
@@ -1483,7 +1612,12 @@ def cmd_inbox(a):
     if not os.path.exists(path):
         print(f"no messages for {me}")
         return
-    for m in read_msgs(path):
+    # The whole inbox ran to 22k-33k tokens on a relaunch (token review 2026-10-20): latest 20 unless --all.
+    msgs = read_msgs(path)
+    shown = msgs if a.all else msgs[-20:]
+    if len(shown) < len(msgs):
+        print(f"{len(msgs)} message(s); the latest {len(shown)} (hub inbox --all for every one):")
+    for m in shown:
         mid = f" [{m['id']}]" if m.get("id") else ""
         print(f"  · [{m['at']}]{mid} {m['text']}")
 
@@ -1537,20 +1671,26 @@ def cmd_receive(a):
     print(matches[0]["text"])
 
 
+def ledger():
+    """The ledger's actions: commit markers and aborted transactions dropped."""
+    lines = read_events(repair=False)
+    aborted = {e.get("txid") for e in lines if e.get("event") == "abort"}
+    return [e for e in lines if e.get("event") not in ("commit", "abort") and e.get("txid") not in aborted]
+
+
 def cmd_events(a):
     if not os.path.exists(EVENTS):
         print("no events recorded yet")
         return
-    lines = read_events(repair=False)
-    aborted = {e.get("txid") for e in lines if e.get("event") == "abort"}
-    lines = [e for e in lines if e.get("event") not in ("commit", "abort") and e.get("txid") not in aborted]
+    lines = ledger()
     if a.task:
         tid = norm_id(a.task)
         lines = [e for e in lines if e.get("task") == tid]
     for e in lines[-a.tail:]:
         extra = {k: v for k, v in e.items() if k not in ("at", "by", "event", "task") and v}
         tail = f"  {extra}" if extra else ""
-        print(f"  [{e['at']}] {e['by']:<10} {e['event']:<10} {e['task']}{tail}")
+        line = f"  [{e['at']}] {e['by']:<10} {e['event']:<10} {e['task']}{tail}".replace("\n", " ")
+        print(line if getattr(a, "full", False) else line[:120])
 
 
 def main():
@@ -1572,6 +1712,9 @@ def main():
     n.add_argument("--verify", help="command hub done must pass in the task's repo "
                    "(default: make check if the repo has that target; \"\" for none)")
     n.add_argument("--req", action="append", help="acceptance line and version, e.g. A-3.2@1")
+    n.add_argument("--tag", action="append", default=[], help="tag the task, e.g. read (repeatable)")
+    n.add_argument("--budget", type=int, help="minutes this task may stay claimed before the watchdog tells Zeus "
+                   "(default: the claimer's phase budget)")
     n.add_argument("--from-spec", action="store_true", help=argparse.SUPPRESS)
     n.add_argument("--generated-from", help=argparse.SUPPRESS)
     n.set_defaults(fn=cmd_new)
@@ -1606,6 +1749,13 @@ def main():
     ed.add_argument("--force", action="store_true", help="override stale/untrusted tags or generated verify (recorded)")
     ed.set_defaults(fn=cmd_edit)
 
+    tg = sub.add_parser("tag", help="add tags to a task, or remove one with --rm")
+    tg.add_argument("id", help="T-id, or in a hackathon the issue number")
+    tg.add_argument("tags", nargs="*", help="tags to add, e.g. read")
+    tg.add_argument("--rm", action="append", default=[], help="remove a tag (repeatable)")
+    tg.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
+    tg.set_defaults(fn=cmd_tag)
+
     nx = sub.add_parser("next", help="show the next task available to you")
     nx.add_argument("--project", help="only this project (defaults to $HUB_PROJECT)")
     nx.set_defaults(fn=cmd_next)
@@ -1613,18 +1763,21 @@ def main():
     c = sub.add_parser("claim", help="claim a task")
     c.add_argument("id")
     c.add_argument("--force", action="store_true")
+    c.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
     c.set_defaults(fn=cmd_claim)
 
     r = sub.add_parser("release", help="release a claimed task")
     r.add_argument("id")
     r.add_argument("--force", action="store_true",
                        help="override state/ownership rules (recorded in the ledger)")
+    r.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
     r.set_defaults(fn=cmd_release)
 
     g = sub.add_parser("assign", help="hand a task to another owner (planner)")
     g.add_argument("id")
     g.add_argument("owner")
     g.add_argument("--force", action="store_true", help="also reassign a claimed or blocked task (recorded)")
+    g.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
     g.set_defaults(fn=cmd_assign)
 
     dg = sub.add_parser("delegate", help="hand a task to one of its owner's agents")
@@ -1656,11 +1809,13 @@ def main():
     b.add_argument("note")
     b.add_argument("--force", action="store_true",
                        help="override state/ownership rules (recorded in the ledger)")
+    b.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
     b.set_defaults(fn=cmd_block)
 
     nt = sub.add_parser("note", help="add a note to a task")
     nt.add_argument("id")
     nt.add_argument("text")
+    nt.add_argument("--project", help="project for issue numbers (defaults to $HUB_PROJECT)")
     nt.set_defaults(fn=cmd_note)
 
     nf = sub.add_parser("notify", help="queue a durable message for an agent")
@@ -1668,6 +1823,7 @@ def main():
     nf.add_argument("text")
     nf.add_argument("--task", help="task id this concerns")
     nf.add_argument("--message-id", help=argparse.SUPPRESS)
+    nf.add_argument("--key", help="replace the recipient's earlier message with this key (a status line)")
     nf.set_defaults(fn=cmd_notify)
 
     br = sub.add_parser("brief", help="orientation: your inbox, your work, what peers hold")
@@ -1677,6 +1833,7 @@ def main():
     ib = sub.add_parser("inbox", help="read queued messages")
     ib.add_argument("agent", nargs="?", help="whose inbox (defaults to you)")
     ib.add_argument("--clear", action="store_true")
+    ib.add_argument("--all", action="store_true", help="every stored message, not just the latest 20")
     ib.add_argument("--unseen", action="store_true",
                     help="only messages not shown by --unseen before; leaves the inbox intact")
     ib.set_defaults(fn=cmd_inbox)
@@ -1691,12 +1848,24 @@ def main():
     gh_sync.register(sub)
     import live
     live.register(sub)
+    # Repo hygiene lives in its own module -- this file is a task board, and the two
+    # concerns should not grow into each other. See ~/hub/CLEAN-REPO.md.
+    import clean_repo
+    clean_repo.register(sub, common)
     import review
     review.register(sub)
+    import dashboard
+    dashboard.register(sub)
     import spec
     spec.register(sub)
+    import prd; prd.register(sub)
+    import hub_trace
+    hub_trace.register(sub)
     import workspace
     workspace.register(sub)
+    import autonomy
+    autonomy.register(sub)
+    import map as _map; _map.register(sub)
 
     sh = sub.add_parser("sh", help="run a long or noisy command: full output to a log, "
                         "a header and the tail to you, its exit code kept")
@@ -1708,6 +1877,7 @@ def main():
     ev = sub.add_parser("events", help="read the append-only ledger")
     ev.add_argument("--tail", type=int, default=30)
     ev.add_argument("--task", help="filter to one task")
+    ev.add_argument("--full", action="store_true", help="whole events, not one line cut to 120 characters")
     ev.set_defaults(fn=cmd_events)
 
     a = p.parse_args()
