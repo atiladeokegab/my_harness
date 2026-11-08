@@ -12,7 +12,7 @@ import tempfile
 import time
 import unittest
 import unittest.mock
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HUB = Path(__file__).resolve().parent.parent
@@ -32,7 +32,7 @@ CLAUDE_LOGGED_OUT = ('  ⎿  API Error: 401 {"type":"error","error":{"type":"aut
                      '"message":"OAuth token has expired."}} · Please run /login\n❯ \n')
 CODEX_LIMIT = ("■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit "
                "https://chatgpt.com/settings/usage to purchase more credits or try\nagain at 7:28 PM.\n"
-               "› Ask Codex to do anything\n  GPT-6-Sol high · ~/code/demo-film · Receive hub messages\n"
+               "› Ask Codex to do anything\n  GPT-6-Sol high · ~/code/webapp · Receive hub messages\n"
                "  ? for shortcuts                                         ⚠ 6 warnings · f2 to view\n")
 CODEX_WARNING_IDLE = ("• Ran hub list --owner Prometheus --status open\n  └ no tasks match\n"
                       "                         ⚠ 5h limit: only 5% left · resets at 19:28 · /status\n"
@@ -49,7 +49,7 @@ again at 7:28 PM.
 ■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try
 again at 7:28 PM.
 › Ask Codex to do anything
-  GPT-6-Sol high · ~/code/demo-film · Receive hub messages
+  GPT-6-Sol high · ~/code/webapp · Receive hub messages
   ? for shortcuts                                                                                                                 ⚠ 6 warnings · f2 to view
 """
 CLAUDE_PERMISSION_UNBOXED = (" Bash command\n\n   rm -rf build\n\n Do you want to proceed?\n ❯ 1. Yes\n"
@@ -62,6 +62,12 @@ PROSE = ("● Done. Do you want to keep T-505 open for the review duty?",
          "  If the deployer is missing it says you are not logged in",
          "● I ran codex login checks yesterday",
          "  ⎿  dispatch.py:44: usage limit reached|limit reached|hit your (?:usage )?limit")
+
+# agy 1.4.2 captures from the T-556 live check. Its limit and login screens were not captured: those
+# lines are the strings the plan names, in agy's ⎿ transcript gutter.
+AGY = {f.stem: f.read_text() for f in (HUB / "tests" / "fixtures" / "agy").glob("*.txt")}
+AGY_LIMIT = "⎿  You have exhausted your quota on this model.\n" + AGY["idle"]
+AGY_LOGGED_OUT = "⎿  Authentication expired. Please sign in again.\n" + AGY["idle"]
 
 STUBS = {
     "tmux": r'''#!/usr/bin/env python3
@@ -127,8 +133,8 @@ class Factory(unittest.TestCase):
             "lead_alert": ["lead-alert", "send"]}))
         self.board([])
         env = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
-        self.env = {**env, "HUB_DIR": str(self.hub), "HUB_LEAD": "Zeus", "HUB_CLAUDE_AGENTS": "Zeus Hermes",
-                    "HUB_CODEX_AGENTS": "Prometheus", "FAKE_PANES": str(self.panes),
+        self.env = {**env, "HUB_DIR": str(self.hub), "HOME": str(self.hub), "HUB_LEAD": "Zeus",
+                    "HUB_CLAUDE_AGENTS": "Hermes Zeus", "HUB_CODEX_AGENTS": "Prometheus", "FAKE_PANES": str(self.panes),
                     "FAKE_LOG": str(self.logs), "PATH": f"{self.bin}:{env['PATH']}"}
 
     def board(self, tasks):
@@ -198,6 +204,28 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(at("hit your usage limit, try again in 2 hours 3 minutes."), now + 7380)
         self.assertIsNone(at("Claude usage limit reached."))
 
+    def test_agy_panes(self):
+        cases = {
+            "idle": (AGY["idle"], None, False),
+            "idle after a turn": (AGY["idle-after-turn"], None, False),
+            "busy": (AGY["busy-generating"], None, True),
+            "run command dialog": (AGY["dialog-run-command"], "permission prompt", True),
+            "create file dialog": (AGY["dialog-create-file"], "permission prompt", True),  # esc to cancel
+            "trust dialog": (AGY["dialog-trust-folder"], "permission prompt", False),
+            "quota exhausted": (AGY_LIMIT, "rate limited", False),
+            "individual quota": ("⎿  Individual quota reached, try again later\n" + AGY["idle"], "rate limited", False),
+            "authentication expired": (AGY_LOGGED_OUT, "logged out", False),
+            "not logged in": ("You are not logged into Antigravity.\n" + AGY["idle"], "logged out", False),
+        }
+        for label, (pane, cause, busy) in cases.items():
+            with self.subTest(label):
+                self.assertEqual(dispatch.classify(pane)[0], cause)
+                self.assertEqual(dispatch.busy(pane), busy)
+
+    def test_agy_busy_footer_is_not_a_dialogs_cancel_line(self):
+        reply = AGY["busy-generating"].replace("⣽  Generating...", "  1. Yes, keep it\n  2. Close it")
+        self.assertEqual(dispatch.classify(reply), (None, ""))
+
 
 class TickTest(Factory):
     def test_recent_tick_is_debounced(self):
@@ -234,6 +262,17 @@ class TickTest(Factory):
         self.run_cmd("tick")
         self.assertEqual(len(self.calls("hubmsg")), 1)
         self.assertEqual(self.state("dispatch.json")["woken"]["T-002"]["agent"], "Hermes")
+
+    def test_a_wake_fetches_the_project_clone_first(self):
+        """A sandboxed builder cannot fetch, so hub claim would build its worktree from stale refs."""
+        (self.hub / "code" / "hub" / ".git").mkdir(parents=True)
+        # Only here: tests.test_watchdog reuses Factory, and snapshot.sh needs the real git.
+        (self.bin / "git").write_text(STUBS["systemd-run"].replace("systemd-run", "git"))
+        (self.bin / "git").chmod(0o755)
+        self.board([task("T-002")])
+        self.pane("hub-hermes", CLAUDE_IDLE)
+        self.assertIn("Hermes: idle, wake for T-002", self.run_cmd("tick"))
+        self.assertEqual(self.calls("git"), [["-C", str(self.hub / "code" / "hub"), "fetch", "-q", "--prune", "origin"]])
 
     def test_only_factory_projects_are_offered(self):
         cfg = json.loads((self.hub / "factory.json").read_text())
@@ -435,6 +474,52 @@ class TickTest(Factory):
         self.assertIn("debounced 5.0s", self.run_cmd("tick"))
 
 
+class ReadRoutingTest(Factory):
+    """A `read` task goes to the reader (factory.json "reads": true) and to others only after offer_minutes."""
+
+    def setUp(self):
+        super().setUp()
+        cfg = json.loads((self.hub / "factory.json").read_text())
+        cfg["agents"].append({"name": "Iris", "kind": "agy", "reads": True})
+        (self.hub / "factory.json").write_text(json.dumps(cfg))
+
+    def test_the_reader_takes_a_read_task_before_a_build_task(self):
+        self.board([task("T-001", owner=None), task("T-002", owner=None, tags=["read"])])
+        self.pane("hub-iris", AGY["idle"])
+        self.run_cmd("tick")
+        self.assertEqual([(c["argv"][0], c["argv"][-1]) for c in self.calls("hubmsg")], [("Iris", "T-002")])
+
+    def test_the_reader_is_never_offered_a_build_task(self):
+        self.board([task("T-001", owner=None)])
+        self.pane("hub-iris", AGY["idle"])
+        self.run_cmd("tick")
+        self.assertEqual(self.calls("hubmsg"), [])
+
+    def test_others_get_a_read_task_only_after_the_offer_window(self):
+        self.pane("hub-prometheus", CLAUDE_IDLE)  # the reader has no session: down
+        self.board([task("T-002", owner=None, tags=["read"], created=hb_now(-29))])
+        self.assertIn("Prometheus: idle, nothing available", self.run_cmd("tick"))
+        self.assertEqual(self.calls("hubmsg"), [])
+        self.board([task("T-002", owner=None, tags=["read"], created=hb_now(-31))])
+        self.write_state("dispatch.json", {})
+        self.run_cmd("tick")
+        self.assertEqual([(c["argv"][0], c["argv"][-1]) for c in self.calls("hubmsg")], [("Prometheus", "T-002")])
+
+    def test_a_reader_with_dispatch_off_holds_nothing_back(self):
+        """Hermes on 69790f3: a reader the dispatcher never offers to must not withhold read tasks."""
+        cfg = json.loads((self.hub / "factory.json").read_text())
+        cfg["agents"][-1]["dispatch"] = False
+        (self.hub / "factory.json").write_text(json.dumps(cfg))
+        self.pane("hub-prometheus", CLAUDE_IDLE)
+        self.board([task("T-002", owner=None, tags=["read"], created=hb_now(-1))])
+        self.run_cmd("tick")
+        self.assertEqual([(c["argv"][0], c["argv"][-1]) for c in self.calls("hubmsg")], [("Prometheus", "T-002")])
+
+
+def hb_now(minutes):
+    return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+
+
 class ResetTest(Factory):
     """Agent OS §1: an idle agent with nothing held, just stopped, gets a fresh session per task."""
 
@@ -483,11 +568,176 @@ class ResetTest(Factory):
                 self.assertFalse((self.hub / "wake").exists(), label)
                 self.assertEqual(self.state("dispatch.json")["woken"]["T-002"]["how"], "wake", label)
 
+    def test_agy_is_resettable(self):
+        cfg = json.loads((self.hub / "factory.json").read_text())
+        cfg["agents"][1]["kind"] = "agy"
+        (self.hub / "factory.json").write_text(json.dumps(cfg))
+        self.arrange()
+        self.assertIn("Hermes: idle, reset for T-002", self.run_cmd("tick"))
+        self.assertIn("kind=agy", (self.hub / "wake" / "Hermes.wake").read_text().splitlines())
+
     def test_dry_run_says_reset_and_writes_nothing(self):
         self.arrange()
         self.assertIn("Hermes: idle, would reset for T-002", self.run_cmd("tick", "--dry-run"))
         self.assertFalse((self.hub / "wake").exists())
         self.assertFalse((self.hub / "inbox").exists())
+
+class ConfigTest(Factory):
+    """Mistyped factory.json agent settings are loud (stderr, Zeus once, check-config) and fall back to off."""
+
+    arrange = ResetTest.arrange
+
+    def run_raw(self, *args):
+        return subprocess.run([sys.executable, str(HUB / "dispatch.py"), *args], env=self.env,
+                              text=True, capture_output=True, timeout=60)
+
+    def edit(self, **hermes):
+        cfg = json.loads((self.hub / "factory.json").read_text())
+        cfg["agents"][1].update(hermes)
+        (self.hub / "factory.json").write_text(json.dumps(cfg))
+
+    def zeus_inbox(self):
+        p = self.hub / "inbox" / "Zeus.jsonl"
+        return [json.loads(line)["text"] for line in p.read_text().splitlines()] if p.exists() else []
+
+    def test_reset_true_is_reported_once_and_treated_as_off(self):
+        self.arrange(reset=True)
+        line = 'factory.json: agent Hermes: reset=true is not allowed (allowed: false or "per-task"); treated as off'
+        r = self.run_raw("tick")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(line, r.stderr.splitlines())
+        self.assertIn("Hermes: idle, wake for T-002", r.stdout)
+        self.assertFalse((self.hub / "wake").exists())
+        [told] = self.zeus_inbox()
+        self.assertIn(line, told.splitlines())
+        self.run_raw("tick")
+        self.run_raw("watch")
+        self.assertEqual(len(self.zeus_inbox()), 1)
+        r = self.run_raw("check-config")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(line, r.stderr.splitlines())
+
+    def test_unknown_keys_kinds_and_values_are_reported(self):
+        cases = {
+            "unknown key": (dict(rest="per-task"), 'agent Hermes: unknown key "rest"; ignored'),
+            "unknown kind": (dict(kind="gemini"), 'agent Hermes: kind="gemini" is not allowed '
+                                                  '(allowed: "claude", "codex" or "agy"); no per-task reset'),
+            "string dispatch": (dict(dispatch="yes"), 'agent Hermes: dispatch="yes" is not allowed '
+                                                      '(allowed: true or false); treated as off'),
+        }
+        for label, (change, line) in cases.items():
+            with self.subTest(label):
+                self.setUp()
+                self.edit(**change)
+                r = self.run_raw("check-config")
+                self.assertEqual(r.returncode, 1, label)
+                [got] = r.stderr.splitlines()
+                self.assertIn(line, got, label)
+
+    def test_a_string_dispatch_is_off(self):
+        self.board([task("T-002", owner="Hermes")])
+        self.pane("hub-hermes", CLAUDE_IDLE)
+        self.edit(dispatch="yes")
+        self.run_raw("tick")
+        self.assertEqual(self.calls("hubmsg"), [])
+
+    def test_an_unreadable_config_dispatches_nobody_but_watch_still_lists_the_roster(self):
+        """The fallback roster ($HUB_CODEX_AGENTS, $HUB_CLAUDE_AGENTS) must not wake anyone, but watch still knows it."""
+        self.board([task("T-002", owner="Hermes"), task("T-003", owner=None)])
+        self.pane("hub-hermes", CLAUDE_IDLE)
+        (self.hub / "factory.json").write_text("{not json")
+        r = self.run_raw("tick")
+        self.assertIn("factory.json: unreadable", r.stderr)
+        self.assertEqual(self.calls("hubmsg"), [])
+        self.assertEqual(self.run_cmd("agents").split(), ["Prometheus", "Hermes", "Zeus"])
+        self.assertIn("Hermes:", self.run_cmd("watch", "--dry-run"))
+
+    def test_valid_configs_are_silent(self):
+        self.assertEqual(self.run_raw("tick").stderr, "")
+        self.assertEqual(self.zeus_inbox(), [])
+        for label, cfg in (("test fixture", None), ("factory.example.json", (HUB / "factory.example.json").read_text())):
+            with self.subTest(label):
+                if cfg:
+                    (self.hub / "factory.json").write_text(cfg)
+                r = self.run_raw("check-config")
+                self.assertEqual((r.returncode, r.stderr), (0, ""))
+
+
+class PhaseTest(Factory):
+    """Living spec §4: a phase, not hand-set dispatch/reset, says whether an agent is woken and reset."""
+
+    def test_configured_reviewer_is_not_offered_a_build(self):
+        cfg = json.loads((HUB / "factory.example.json").read_text())
+        cfg["projects"] = ["hub"]
+        cfg["repos"] = []
+        (self.hub / "factory.json").write_text(json.dumps(cfg))
+        self.board([task("T-002", owner="Prometheus")])
+        self.pane("hub-prometheus", CODEX_WARNING_IDLE)
+        self.write_state("Prometheus.json", {"at": datetime.now(timezone.utc).isoformat(), "event": "Stop"})
+        self.assertIn("Prometheus: dispatch off in factory.json", self.tick().stdout)
+        self.assertEqual(self.calls("hubmsg"), [])
+
+    def arrange(self, **hermes):
+        cfg = json.loads((self.hub / "factory.json").read_text())
+        cfg["autonomy"] = json.loads((HUB / "factory.example.json").read_text())["autonomy"]
+        cfg["agents"][1] = {"name": "Hermes", "session": "hub-hermes", **hermes}
+        (self.hub / "factory.json").write_text(json.dumps(cfg))
+        self.board([task("T-002", owner="Hermes")])
+        self.pane("hub-hermes", CLAUDE_IDLE)
+        self.write_state("Hermes.json", {"at": datetime.now(timezone.utc).isoformat(), "event": "Stop"})
+
+    def tick(self):
+        r = subprocess.run([sys.executable, str(HUB / "dispatch.py"), "tick"], env=self.env, text=True,
+                           capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r
+
+    def test_phase_trial_dispatches_without_reset(self):
+        self.arrange(kind="claude", phase="trial")
+        self.assertIn("Hermes: idle, wake for T-002", self.tick().stdout)
+        self.assertFalse((self.hub / "wake").exists())
+
+    def test_phase_trusted_resets_per_task(self):
+        self.arrange(kind="claude", phase="trusted")
+        self.assertIn("Hermes: idle, reset for T-002", self.tick().stdout)
+
+    def test_unknown_kind_is_off(self):
+        self.arrange(kind="gemini")
+        r = self.tick()
+        self.assertIn("Hermes: dispatch off in factory.json", r.stdout)
+        self.assertIn("factory.json: agent Hermes: unknown kind gemini, phase off", r.stderr.splitlines())
+        self.assertEqual(self.calls("hubmsg"), [])
+
+    def test_no_phase_known_kind_gets_default(self):
+        self.arrange(kind="claude")
+        r = self.tick()
+        self.assertIn("Hermes: idle, wake for T-002", r.stdout)  # trial: woken, never reset
+        self.assertEqual(r.stderr, "")
+
+    def test_phase_wins_over_dispatch_and_reset(self):
+        self.arrange(kind="claude", phase="reviewer", dispatch=True, reset="per-task")
+        self.assertIn("Hermes: dispatch off in factory.json", self.tick().stdout)
+        self.assertEqual(self.calls("hubmsg"), [])
+
+    def test_without_a_phase_hand_set_keys_still_work(self):
+        self.arrange(kind="claude", dispatch=False)
+        self.assertIn("Hermes: dispatch off in factory.json", self.tick().stdout)
+
+    def test_a_bad_phase_or_phase_setting_is_reported_and_off(self):
+        self.arrange(kind="claude", phase="boss")
+        r = self.tick()
+        self.assertIn('factory.json: agent Hermes: phase="boss" is not in autonomy.phases; phase off',
+                      r.stderr.splitlines())
+        self.assertIn("Hermes: dispatch off in factory.json", r.stdout)
+        cfg = json.loads((self.hub / "factory.json").read_text())
+        cfg["autonomy"]["phases"]["trial"]["dispatch"] = "yes"
+        cfg["agents"][1]["phase"] = "trial"
+        (self.hub / "factory.json").write_text(json.dumps(cfg))
+        r = self.tick()
+        self.assertIn('factory.json: autonomy phase trial: dispatch="yes" is not allowed (allowed: true or false); '
+                      'treated as off', r.stderr.splitlines())
+        self.assertEqual(self.calls("hubmsg"), [])
+
 
 class WeeklyTest(Factory):
     def test_opens_two_tasks_for_zeus_once(self):

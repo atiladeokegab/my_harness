@@ -1,14 +1,102 @@
 {
   "agents": [
-    {"name": "Prometheus", "kind": "codex", "session": "hub-prometheus", "reset": "per-task", "dispatch": true},
-    {"name": "Hermes", "kind": "claude", "session": "hub-hermes", "reset": false, "dispatch": true},
-    {"name": "Zeus", "kind": "claude", "session": "hub-zeus", "reset": false, "dispatch": false}
+    {
+      "name": "Prometheus",
+      "kind": "codex",
+      "session": "hub-prometheus",
+      "phase": "reviewer"
+    },
+    {
+      "name": "Hermes",
+      "kind": "claude",
+      "session": "hub-hermes",
+      "phase": "trusted"
+    },
+    {
+      "name": "Zeus",
+      "kind": "claude",
+      "session": "hub-zeus",
+      "phase": "lead"
+    }
   ],
+  "autonomy": {
+    "default_phase": "trial",
+    "known_kinds": [
+      "claude",
+      "codex"
+    ],
+    "promote_after": 5,
+    "phases": {
+      "off": {
+        "dispatch": false,
+        "reset": false,
+        "may": []
+      },
+      "trial": {
+        "dispatch": true,
+        "reset": false,
+        "budget_minutes": 90,
+        "may": [
+          "claim",
+          "push",
+          "open_pr"
+        ]
+      },
+      "trusted": {
+        "dispatch": true,
+        "reset": "per-task",
+        "budget_minutes": 180,
+        "may": [
+          "claim",
+          "push",
+          "open_pr",
+          "fast_lane",
+          "done_force",
+          "review"
+        ]
+      },
+      "reviewer": {
+        "dispatch": false,
+        "reset": false,
+        "budget_minutes": 120,
+        "may": [
+          "claim",
+          "push",
+          "open_pr",
+          "review",
+          "done_force"
+        ]
+      },
+      "lead": {
+        "dispatch": false,
+        "reset": false,
+        "may": [
+          "claim",
+          "push",
+          "open_pr",
+          "review",
+          "done_force",
+          "hand_merge",
+          "spec_apply",
+          "clear_tags"
+        ]
+      }
+    }
+  },
   "repos": [
-    {"repo": "your-org/your-app"},
-    {"repo": "your-org/your-other-app", "acceptance_cmd": "uv run pytest -q {test}"}
+    {
+      "repo": "your-org/your-app"
+    },
+    {
+      "repo": "your-org/your-other-app",
+      "acceptance_cmd": "uv run pytest -q {test}"
+    }
   ],
-  "projects": ["your-app", "your-other-app", "hub"],
+  "projects": [
+    "your-app",
+    "your-other-app",
+    "hub"
+  ],
   "snapshot_bucket": "gs://your-hub-snapshots",
   "lead_alert": [],
   "intervals": {

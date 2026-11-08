@@ -86,6 +86,17 @@ class WorkspaceTest(unittest.TestCase):
                          self.git(self.clone, "rev-parse", "origin/integration"))
         self.assertEqual((generated / ".env").read_text(), "TOKEN=local-only\n")
 
+    def test_failed_fetch_builds_from_the_local_ref_or_returns_none_without_one(self):
+        self.git(self.clone, "remote", "set-url", "origin", str(self.home / "unreachable.git"))
+        missing = {**self.task("T-2"), "detail": "Work on branch change/C-404."}
+        with unittest.mock.patch.object(workspace.time, "sleep"), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            path = workspace.create(self.task(generated=True), self.home)
+            self.assertIsNone(workspace.create(missing, self.home))
+        self.assertEqual(self.git(path, "rev-parse", "HEAD"), self.git(self.clone, "rev-parse", "origin/change/C-002"))
+        self.assertIn("UNFETCHED, last fetch", output.getvalue())
+        self.assertIn("origin/change/C-404", output.getvalue())
+
     def test_reclaim_preserves_local_work_and_gc_keeps_it(self):
         task = self.task(status="done")
         path = workspace.create(task, self.home)

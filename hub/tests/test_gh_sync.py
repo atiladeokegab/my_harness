@@ -1809,5 +1809,13 @@ class SpecSyncTest(unittest.TestCase):
         self.assertEqual(self.tasks()["T-001"]["detail"], "Context: x\nFiles: a/\nDeadline: submit")
 
 
+class LazySpecImportTest(unittest.TestCase):
+    def test_importing_gh_sync_does_not_load_spec(self):
+        # gh-sync and hub live must keep working when spec.py is broken: it is imported only when a path is asked for
+        code = "import sys; sys.path.insert(0, sys.argv[1]); import gh_sync; assert 'spec' not in sys.modules, 'spec'"
+        r = subprocess.run([sys.executable, "-c", code, str(HUB)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,7 @@ BOARD = ROOT / "board.py"
 HOOK = ROOT / "hooks/inbox-surface.js"
 STOP = ROOT / "hooks/stop-deliver.js"
 NODE = shutil.which("node")
+AGY = ROOT / "tests/fixtures/agy"  # agy 1.4.2 hook payloads
 STRIP = ("HUB_DIR", "HUB_AGENT", "HUB_PROJECT", "HUB_LEAD", "CLAUDE_CODE_SESSION_NAME", "PLUGIN_DATA", "CLAUDECODE")
 
 
@@ -87,8 +88,8 @@ class InboxSurface(HubBed):
         self.assertIn("for hermes", self.unseen("Hermes"))
 
     def test_noise_is_skipped(self):
-        self.send("dwelly: not accepted the invite yet: alice")
-        self.send("dwelly deployed 0123456789ab: https://x.example")
+        self.send("webapp: not accepted the invite yet: alice")
+        self.send("webapp deployed 0123456789ab: https://x.example")
         self.send("deploy started at 0123456789ab")
         self.send("Smoke failed on integration at 0123456789ab")
         out = self.unseen()
@@ -102,9 +103,14 @@ class InboxSurface(HubBed):
         out = self.unseen()
         lines = [l for l in out.splitlines() if l.strip().startswith("·")]
         self.assertEqual(len(lines), 8)
-        self.assertTrue(all(len(l) <= 300 for l in lines), [len(l) for l in lines])
-        self.assertIn("(+2 more: run hub inbox)", out)
+        # hub notify always mints a message id, and an id'd message is shown whole, never cut
+        self.assertTrue(all("x" * 400 in l for l in lines), [len(l) for l in lines])
+        self.assertIn("(+2 more, shown next time)", out)
         self.assertIn("alert 09", out)  # the newest are the ones shown
+        rest = self.unseen()  # 2026-10-21: the overflow used to be marked seen and never shown
+        self.assertIn("alert 00", rest)
+        self.assertIn("alert 01", rest)
+        self.assertNotIn("alert 09", rest)
         self.assertEqual(self.unseen(), "")
 
     def test_plain_inbox_unchanged(self):
@@ -127,6 +133,23 @@ class InboxSurface(HubBed):
         self.assertIn("Smoke failed", out["additionalContext"])
         self.assertEqual(self.hook("UserPromptSubmit"), "")
 
+    def test_post_tool_use_spawns_hub_only_when_mail_arrived(self):
+        """Token review 2026-10-20: the fs-stat gate, not the hub spawn, answers a tool call with no new mail."""
+        self.send("for hermes", to="Hermes")
+        shim = Path(self.tmp.name) / "bin/hub"
+        calls = Path(self.tmp.name) / "hub-calls"
+        shim.write_text(f'#!/bin/sh\necho x >> "{calls}"\n' + shim.read_text().split("\n", 1)[1])
+        self.assertIn("for hermes", self.hook("PostToolUse", agent="Hermes"))
+        self.assertEqual(self.hook("PostToolUse", agent="Hermes"), "")
+        self.assertEqual(calls.read_text().count("x"), 1)  # the second tool call never spawned hub
+
+    def test_watchdog_health_changes_are_noise(self):
+        self.send("[watchdog] Hermes: healthy -> permission prompt (❯ 1. Yes). The watchdog never relaunches")
+        self.send("[watchdog] Your session died and was relaunched at 12:00Z.")
+        out = self.unseen()
+        self.assertNotIn("permission prompt", out)
+        self.assertIn("relaunched at 12:00Z", out)
+
     def test_hook_survives_a_broken_hub(self):
         self.env["PATH"] = "/nonexistent"
         self.assertEqual(self.hook(), "")
@@ -138,6 +161,25 @@ class InboxSurface(HubBed):
         self.assertEqual(self.run_js(HOOK, codex, HUB_AGENT="Prometheus"), "")
         out = json.loads(self.run_js(HOOK, codex, "--agent", "Prometheus", CLAUDECODE=""))
         self.assertIn("for prometheus", out["hookSpecificOutput"]["additionalContext"])
+
+    def test_agy_format_injects_an_ephemeral_step_only_when_new(self):
+        """agy runs this before every model call (PreInvocation): silent with nothing new, and `hub` is not spawned
+        while the inbox file is older than the --unseen cursor."""
+        pre = json.loads((AGY / "hook-PreInvocation.json").read_text())
+        hook = lambda: self.run_js(HOOK, pre, "--agent", "Iris", "--format", "agy", CLAUDECODE="")
+        self.assertEqual(hook(), "")
+        self.send("review the factory-sandbox report", to="Iris")
+        out = json.loads(hook())
+        self.assertEqual(list(out), ["injectSteps"])
+        msg = out["injectSteps"][0]["ephemeralMessage"]
+        self.assertTrue(msg.startswith("[hub inbox] new since last check:"))
+        self.assertIn("review the factory-sandbox report", msg)
+        shim = Path(self.tmp.name) / "bin/hub"
+        shim.write_text(f'#!/bin/sh\ntouch "{self.tmp.name}/hub-ran"\nexec "{sys.executable}" "{BOARD}" "$@"\n')
+        self.assertEqual(hook(), "")
+        self.assertFalse(Path(self.tmp.name, "hub-ran").exists())
+        self.send("second", to="Iris")
+        self.assertIn("second", json.loads(hook())["injectSteps"][0]["ephemeralMessage"])
 
 
 class StopDeliver(HubBed):
@@ -206,7 +248,7 @@ class StopDeliver(HubBed):
         self.assertIn("nobody attached", json.loads(self.stop(HUB_AGENT="Hermes", FAKE_TMUX="0"))["reason"])
 
     def surface(self):
-        return self.run_js(HOOK, {"hook_event_name": "PostToolUse"}, HUB_AGENT="Hermes")
+        return self.run_js(HOOK, {"hook_event_name": "UserPromptSubmit"}, HUB_AGENT="Hermes")
 
     def test_message_surfaced_mid_turn_is_not_delivered_again(self):
         """Live rollout: inbox-surface showed a message mid-turn, then the Stop hook delivered it again."""
@@ -219,11 +261,37 @@ class StopDeliver(HubBed):
         self.assertIn("delivered at stop", json.loads(self.stop(HUB_AGENT="Hermes"))["reason"])
         self.assertEqual(self.surface(), "")
 
-    def test_truncated_message_still_arrives_in_full(self):
-        """inbox-surface cuts lines at 300 characters, so a cut message is left for the Stop hook."""
+    def test_long_message_surfaces_whole_and_once(self):
+        """2026-10-21: a cut message was left for the Stop hook, which Zeus never gets, so 22 went unreceived."""
         self.notify("long " + "x" * 400 + " END", "m-11")
-        self.assertNotIn("END", self.surface())
-        self.assertIn("END", json.loads(self.stop(HUB_AGENT="Hermes"))["reason"])
+        self.assertIn("END", self.surface())
+        self.assertEqual(self.stop(HUB_AGENT="Hermes"), "")
+
+    def test_long_message_to_zeus_is_received(self):
+        self.notify("long " + "x" * 400 + " END", "m-13", to="Zeus")
+        self.assertIn("END", self.run_js(HOOK, {"hook_event_name": "UserPromptSubmit"}, HUB_AGENT="Zeus"))
+        self.assertTrue((Path(self.env["HUB_DIR"]) / "inbox/.received/Zeus/m-13").exists())
+
+    def test_agy_format_continues_once_then_silence(self):
+        """agy's Stop payload has no stop_hook_active and no turn_id; {"decision":"continue"} runs one more turn."""
+        self.notify("for iris", "m-12", to="Iris")
+        stop = json.loads((AGY / "hook-Stop.json").read_text())
+        args = ("--agent", "Iris", "--format", "agy")
+        out = json.loads(self.run_js(STOP, stop, *args, CLAUDECODE=""))
+        self.assertEqual(out["decision"], "continue")
+        self.assertIn("for iris", out["reason"])
+        self.assertEqual(self.run_js(STOP, {**stop, "executionNum": 1}, *args, CLAUDECODE=""), "")
+
+    def test_a_probe_marked_hub_no_hooks_takes_no_mail(self):
+        """Hermes on 7146895: the launcher's probe fires PreInvocation and Stop as the seat; HUB_NO_HOOKS keeps the mail."""
+        self.notify("for the real seat", "m-13", to="Iris")
+        stop = json.loads((AGY / "hook-Stop.json").read_text())
+        pre = json.loads((AGY / "hook-PreInvocation.json").read_text())
+        args = ("--agent", "Iris", "--format", "agy")
+        self.assertEqual(self.run_js(HOOK, pre, *args, CLAUDECODE="", HUB_NO_HOOKS="1"), "")
+        self.assertEqual(self.run_js(STOP, stop, *args, CLAUDECODE="", HUB_NO_HOOKS="1"), "")
+        out = json.loads(self.run_js(STOP, stop, *args, CLAUDECODE=""))  # the real seat still gets it
+        self.assertIn("for the real seat", out["reason"])
 
     def test_silent_without_identity_or_hub(self):
         self.notify("hidden", "m-5")

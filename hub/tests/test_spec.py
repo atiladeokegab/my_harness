@@ -10,6 +10,7 @@ is a script that looks for its builders' lines, so a rewind turns exactly the ri
 
 import hashlib
 import json
+import shlex
 import os
 import shutil
 import subprocess
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HUB = Path(__file__).resolve().parent.parent
 FIXTURE = HUB / "tests" / "fixtures" / "spec_linkly"
@@ -202,6 +204,16 @@ class SpecTest(Fixture):
         self.assertIn("R-5 needs unknown R-9", out)
         self.assertIn("spec.lock: sha256 does not match", out)
 
+    def test_check_errors_when_prd_json_and_requirements_json_both_exist(self):
+        # Two spec files means two sources of truth: the half-migrated project must fail check, not pick one.
+        shutil.copy(self.spec / "requirements.json", self.spec / "prd.json")
+        out = self.hub_spec("check", ok=False)
+        self.assertIn("both prd.json and requirements.json", out)
+        self.approve("C-001")
+        before = self.unchanged()
+        self.assertIn("both prd.json and requirements.json", self.hub_spec("apply", "C-001", ok=False))
+        self.assertEqual(before, self.unchanged())
+
     def test_radius_is_exactly_T5_T7_T8_and_repeats_byte_identical(self):
         out = self.hub_spec("impact", "C-001")
         self.assertEqual(self.radius(out), {"T-005": "cites A-3.2@1 (modified)",
@@ -378,7 +390,13 @@ class SpecTest(Fixture):
         ])
         self.assertTrue(all(t["generated_from"] == "v5" and t["status"] == "open" for t in new.values()))
         self.assertTrue(all(t.get("kind") == "factory" for t in new.values()))  # claimable by a builder
-        self.assertTrue(all(t["verify"] == "make check && hub spec check --project linkly --repo ." for t in new.values()))
+        spec_check = "hub spec check --project linkly --repo ."
+        for t in new.values():  # its own lines only, never a sibling's unbuilt check, never make check
+            tests = [f"tests/acceptance/test_{r.split('@')[0].replace('-', '_').replace('.', '_')}.py" for r in t["reqs"]]
+            mine = ",".join(r.split("@")[0] for r in t["reqs"])  # scoped to its own lines (T-747)
+            self.assertEqual(t["verify"].split(" && ")[-1], f"{spec_check} --lines {mine}")
+            self.assertEqual([x for x in t["verify"].split(" && ")[:-1] if not any(p in x for p in tests)], [])
+            self.assertEqual(len(t["verify"].split(" && ")) - 1, len(tests))
         self.assertNotIn("clicks", "".join(t["title"] + t["detail"] for t in new.values()))
         files = {t: gh_sync.file_paths(new[t]["detail"]) for t in sorted(new)}  # the rewound commits' files
         self.assertEqual(files, {"T-011": [], "T-012": ["app/routes/stats.py"], "T-013": [],  # T-9 built nothing
@@ -607,6 +625,75 @@ class BootstrapShaTest(Fixture):
         self.assertIn("already has merge_sha", self.hub_spec("bootstrap-sha", f"T-5={other}", ok=False))
 
 
+class HeldoutSpecTest(Fixture):
+    """Living spec section 3: held-out checks live in projects/<p>/heldout/, outside spec/, and never reach a brief,
+    an issue body or the product repo. hub spec check warns about them; converge runs them on the live line."""
+
+    def heldout(self, index, body="import sys\nprint('HIDDEN-ASSERT')\nsys.exit(1)\n"):
+        root = self.hub / "projects" / "linkly" / "heldout"
+        for e in index.values():
+            for t in e.get("tests", []):
+                (root / t).parent.mkdir(parents=True, exist_ok=True)
+                (root / t).write_text("# HELDOUT_CANARY_t575 do not copy\n" + body)
+        (root / "heldout.json").write_text(json.dumps(index))
+        return root
+
+    def in_hub(self):
+        return mock.patch.object(gh_sync.hb, "HUB_DIR", str(self.hub))
+
+    def test_stale_heldout_skipped_and_warned(self):
+        root = self.heldout({"A-1.1": {"v": 1, "tests": ["A-1.1/test_a.py"]},
+                             "A-2.1": {"v": 1, "tests": ["A-2.1/test_b.py", "A-2.1/test_gone.py"]},
+                             "A-9.9": {"v": 1, "tests": ["A-9.9/test_c.py"]}})
+        (root / "A-2.1" / "test_b.py").write_text("import sys\n")  # no canary
+        (root / "A-2.1" / "test_gone.py").unlink()
+        req = self.spec / "requirements.json"
+        data = json.loads(req.read_text())
+        data["requirements"][0]["acceptance"][0]["v"] = 2  # A-1.1 moved on: its held-out check lags
+        req.write_text(json.dumps(data))
+        (self.spec / "spec.lock").write_text(json.dumps({"version": 4, "sha256": hashlib.sha256(req.read_bytes()).hexdigest()}))
+        out = self.hub_spec("check")  # warnings only: check is in every task's verify
+        self.assertEqual([x.strip() for x in out.splitlines() if "warning" in x], [
+            "warning: held-out A-1.1 (check v1, line v2): skipped by the gate",
+            "warning: held-out A-9.9 (check v1, line not active): skipped by the gate",
+            "warning: held-out A-2.1: A-2.1/test_b.py has no HELDOUT_CANARY line",
+            "warning: held-out A-2.1: A-2.1/test_gone.py missing"])
+        self.assertIn("spec ok: linkly", out)
+        with self.in_hub():
+            self.assertEqual([label for label, _ in gh_sync.heldout_checks("linkly")], ["held-out A-2.1"])
+
+    def test_converge_heldout_red_opens_task_without_content(self):
+        git(self.repo, "push", "-q", "origin", "main:integration")
+        self.heldout({"A-1.1": {"v": 1, "tests": ["A-1.1/test_red.py"]},
+                      "A-2.1": {"v": 1, "tests": ["A-2.1/test_green.py"]}}, body="")
+        (self.hub / "projects/linkly/heldout/A-1.1/test_red.py").write_text(
+            "# HELDOUT_CANARY_t575\nimport sys\nprint('HIDDEN-ASSERT')\nsys.exit(1)\n")
+        out = self.hub_spec("converge")
+        new = [t for tid, t in self.board().items() if int(tid[2:]) > 10]
+        held = [t for t in new if "held-out" in t["title"]]
+        self.assertEqual([t["title"] for t in held], ["linkly spec drift: held-out A-1.1 red on origin/integration"])
+        self.assertEqual((held[0]["owner"], held[0]["status"]), ("Zeus", "open"))
+        leak = json.dumps(new) + out
+        self.assertFalse([w for w in ("HIDDEN-ASSERT", "test_red", "CANARY") if w in leak], leak)
+        self.assertIn("HIDDEN-ASSERT", (self.hub / "projects/linkly/heldout/gate.log").read_text())
+
+    def test_briefs_issue_bodies_and_the_repo_never_carry_the_canary(self):
+        """Fergus lesson 2 (Hermes on T-581): a canary in every held-out file proves nothing a builder reads has one."""
+        self.heldout({"A-3.2": {"v": 2, "tests": ["A-3.2/test_by_day.py"]},
+                      "A-3.3": {"v": 1, "tests": ["A-3.3/test_once_a_day.py"]}})
+        self.hub_spec("apply", "C-001")
+        generated = [t for t in self.board().values() if t.get("generated_from")]
+        self.assertTrue(generated)
+        with self.in_hub():
+            self.assertEqual([label for label, _ in gh_sync.heldout_checks("linkly")], ["held-out A-3.2", "held-out A-3.3"])
+            bodies = [gh_sync.issue_body(t, self.board()) for t in generated]
+        self.assertTrue(any("A-3.3@1" in b for b in bodies))
+        self.assertFalse([b for b in bodies + [json.dumps(self.board())] if "CANARY" in b])
+        for repo in (self.repo, self.origin):
+            self.assertNotIn("CANARY", git(repo, "log", "--all", "-p"))
+            self.assertEqual(subprocess.run(["grep", "-rl", "CANARY", str(repo)], capture_output=True).returncode, 1)
+
+
 class ConvergeTest(Fixture):
     """The weekly converge reads origin's live line in a fresh clone, never the local checkout, and never the spec."""
 
@@ -642,6 +729,13 @@ class ConvergeTest(Fixture):
         self.assertIn("already open", out)
         self.assertEqual(before, ((self.spec / "requirements.json").read_bytes(), (self.spec / "spec.lock").read_bytes()))
         self.assertEqual(git(self.repo, "status", "--porcelain"), "")
+
+    def test_a_project_without_a_factory_repo_entry_is_skipped(self):
+        (self.hub / "factory.json").write_text(json.dumps({"repos": []}))  # archived: off the factory
+        r = subprocess.run([sys.executable, str(HUB / "board.py"), "spec", "converge"],  # weekly: every project
+                           env=self.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([tid for tid in self.board() if int(tid[2:]) > 10], [])
 
 
 class ConvergeRetryTest(Fixture):
@@ -703,5 +797,443 @@ class LiveLineTest(Fixture):
         self.assertEqual(set(self.radius(out)), {"T-005", "T-007"})  # T-8 is not on origin/main yet
 
 
+class PrdBriefTest(unittest.TestCase):
+    def test_apply_change_preserves_requirement_intent(self):
+        before = {"version": 1, "requirements": [{"id": "R-1", "title": "First", "needs": [],
+                                                   "why": "old reason", "rank": 1, "touches": ["src/old.py"],
+                                                   "acceptance": []}]}
+        change = {"id": "C-001", "added": [{"id": "R-2", "title": "Second", "needs": [],
+                                            "why": "new reason", "rank": 2, "touches": ["src/new.py"],
+                                            "acceptance": []}],
+                  "modified": [{"id": "R-1", "why": "better reason", "rank": 2,
+                                "touches": ["src/new.py"]}], "removed": []}
+
+        after = spec.apply_change(before, change)
+
+        self.assertEqual(after["requirements"][0]["why"], "better reason")
+        self.assertEqual(after["requirements"][0]["touches"], ["src/new.py"])
+        self.assertEqual(after["requirements"][1]["why"], "new reason")
+        self.assertEqual(after["requirements"][1]["rank"], 2)
+        self.assertEqual(after["requirements"][1]["touches"], ["src/new.py"])
+
+    def test_plan_tree_carries_context_and_sequences_declared_touches(self):
+        before = {"version": 1, "requirements": [],
+                  "constraints": {"stack": "docs/current-stack.md", "limits": ["Keep data local"],
+                                  "invariants": ["Never leak tokens"], "offline_tests": True,
+                                  "tags": ["trust_boundary"]}}
+        change = {"id": "C-001", "added": [
+            {"id": "R-2", "title": "Second", "why": "serve leads", "rank": 2, "needs": [],
+             "touches": ["src/a*.py"], "acceptance": [{"id": "A-2.1", "text": "do second"}]},
+            {"id": "R-3", "title": "Third", "why": "serve ops", "rank": 3, "needs": [],
+             "touches": ["src/*b.py"], "acceptance": [{"id": "A-3.1", "text": "do third"}]},
+            {"id": "R-1", "title": "First", "why": "serve agents", "rank": 1, "needs": [],
+             "touches": ["src/api.py"], "acceptance": [{"id": "A-1.1", "text": "do first"}]}],
+                  "modified": [], "removed": []}
+        after = spec.apply_change(before, change)
+        context = {"version": 1, "header": {"non_goals": ["No accounts"]},
+                   "constraints": {"stack": "docs/old-stack.md", "limits": ["Offline only"]},
+                   "references": {"spine": {"path": "docs/spine.md", "sha256": "abc"}}}
+        an = {"project": "sample", "spec": before, "new": after, "change": change, "k": set(),
+              "tasks": [], "revert": [], "cfg": {}, "changed": {}}
+
+        with mock.patch("prd.load", return_value=context) as load:
+            plan = spec.plan_tree(an, "C-001", [])
+
+        load.assert_called_once_with("sample")
+        first, second = (next(n for n in plan["new"] if n["key"] == rid) for rid in ("R-1", "R-2"))
+        self.assertIn("Why: serve agents", first["detail"])
+        self.assertIn("No accounts", first["detail"])
+        self.assertIn("Keep data local", first["detail"])
+        self.assertIn("Never leak tokens", first["detail"])
+        self.assertIn("Offline tests: required", first["detail"])
+        self.assertIn("trust_boundary", first["detail"])
+        self.assertIn("docs/current-stack.md", first["detail"])
+        self.assertNotIn("docs/old-stack.md", first["detail"])
+        self.assertIn("docs/spine.md", first["detail"])
+        self.assertIn("src/api.py", first["detail"])
+        self.assertIn("File conflict rule:", first["detail"])
+        self.assertIn("R-1", second["deps"])
+        third = next(n for n in plan["new"] if n["key"] == "R-3")
+        self.assertIn("R-2", third["deps"])
+
+
+class ApplyScopeTest(unittest.TestCase):
+    """T-747, from night-shift C-008: a change rebuilds only what it touches; the check-writer is done on expected reds."""
+
+    def plan(self):
+        before = {"version": 1, "requirements": [
+            {"id": "R-1", "title": "Built", "rank": 1, "needs": [], "acceptance": [{"id": "A-1.1", "v": 1, "text": "shipped, no check", "test": "tests/acceptance/test_A_1_1.py"}]}]}
+        change = {"id": "C-002", "added": [
+            {"id": "R-2", "title": "New", "rank": 2, "needs": [], "acceptance": [{"id": "A-2.1", "text": "do new"}]}],
+                  "modified": [], "removed": []}
+        after = spec.apply_change(before, change)
+        an = {"project": "sample", "spec": before, "new": after, "change": change, "k": {}, "tasks": [],
+              "revert": [], "cfg": {}, "changed": spec.changed_lines(before, change)}
+        with mock.patch("prd.load", return_value={}):
+            return an, spec.plan_tree(an, "C-002", [])
+
+    def test_untouched_requirement_without_checks_is_reported_not_rebuilt(self):
+        _, plan = self.plan()
+        self.assertEqual([n["key"] for n in plan["new"]], ["checks", "R-2"])
+        self.assertEqual(plan["new"][0]["reqs"], ["A-2.1@1"])
+        self.assertEqual(plan["unchecked"], ["A-1.1"])
+
+    def test_check_writer_is_done_on_expected_reds_and_never_builds(self):
+        an, plan = self.plan()
+        checks = plan["new"][0]
+        self.assertIn("fails only for the missing behaviour", checks["detail"])
+        self.assertIn("never builds a requirement it writes checks for", checks["detail"])
+        self.assertNotIn("Done when each new check passes", checks["detail"])
+        gate = spec.own_verify(an, checks["reqs"], "sample", collect=True)
+        self.assertIn("--collect-only", gate)
+        self.assertTrue(gate.endswith("hub spec check --project sample --repo . --lines A-2.1"))
+        self.assertNotIn("--collect-only", spec.own_verify(an, plan["new"][1]["reqs"], "sample"))
+
+    def test_check_writer_title_fits_a_github_issue(self):
+        """A change touching 89 lines; listing every id made a 922-character title,
+        GitHub refuses one over 256, and a generated title cannot be edited afterwards."""
+        before = {"version": 1, "requirements": []}
+        change = {"id": "C-001", "added": [{"id": "R-2", "title": "Big", "rank": 1, "needs": [], "acceptance": [
+            {"id": f"A-2.{i}", "text": f"line {i}"} for i in range(1, 90)]}], "modified": [], "removed": []}
+        after = spec.apply_change(before, change)
+        an = {"project": "sample", "spec": before, "new": after, "change": change, "k": {}, "tasks": [],
+              "revert": [], "cfg": {}, "changed": spec.changed_lines(before, change)}
+        with mock.patch("prd.load", return_value={}):
+            title = spec.plan_tree(an, "C-001", [])["new"][0]["title"]
+        self.assertLessEqual(len(title), 256)
+        self.assertEqual(title, "C-001: land acceptance checks for 89 lines, A-2.1@1 to A-2.89@1")
+        _, plan = self.plan()
+        self.assertEqual(plan["new"][0]["title"], "C-002: land acceptance checks for A-2.1@1")
+
+    def test_generated_verify_runs_green_on_a_partial_baseline(self):
+        """Prometheus on 91ada1b: R-1 shipped without its check file, so the full hub spec check fails;
+        the check-writer for R-2 must still be able to finish. Executes the generated verify."""
+        an, plan = self.plan()
+        an["cfg"] = {"collect_cmd": f"{sys.executable} -m py_compile {{test}}"}
+        with tempfile.TemporaryDirectory(prefix="hub-spec-partial-") as tmp:
+            root = Path(tmp)
+            d = root / "hub" / "projects" / "sample" / "spec"
+            d.mkdir(parents=True)
+            (d / "requirements.json").write_text(json.dumps(an["new"]))
+            (d / "spec.lock").write_text(json.dumps({"version": an["new"]["version"], "sha256": hashlib.sha256(
+                (d / "requirements.json").read_bytes()).hexdigest()}))
+            repo = root / "repo"
+            test = repo / spec.lines_of(an["new"])["A-2.1"][1]["test"]
+            test.parent.mkdir(parents=True)
+            test.write_text("def test_new():\n    assert False, 'R-2 not built yet'\n")
+            env = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
+            env["HUB_DIR"] = str(root / "hub")
+            hub = f"{shlex.quote(sys.executable)} {shlex.quote(str(HUB / 'board.py'))}"
+            run = lambda cmd: subprocess.run(cmd.replace("hub spec", f"{hub} spec"), shell=True, cwd=repo, env=env,
+                                             capture_output=True, text=True, timeout=120)
+            gate = run(spec.own_verify(an, plan["new"][0]["reqs"], "sample", collect=True))
+            self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+            full = run("hub spec check --project sample --repo .")  # the old gap stays visible, unscoped
+            self.assertNotEqual(full.returncode, 0)
+            self.assertIn("A-1.1: test file missing", full.stdout + full.stderr)
+            for bad in ("A-999.1", "A-2.1@1"):  # Prometheus on 717b723: an unknown id must not pass vacuously
+                r = run(f"hub spec check --project sample --repo . --lines {bad}")
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn(f"--lines {bad}: no active acceptance line", r.stdout + r.stderr)
+            self.assertEqual(run("hub spec check --project sample --repo . --lines ''").returncode, 0)  # deletion-only
+
+
+class PrdSourceTest(Fixture):
+    def test_approved_set_adds_header_to_locked_legacy_spec(self):
+        change = {"id": "C-002", "base_version": 4, "added": [], "modified": [], "removed": [],
+                  "set": {"header.problem": "Agents need links that fit in chat",
+                          "header.non_goals": ["No accounts"],
+                          "constraints.stack": "docs/stack.md",
+                          "references.spine": {"path": "docs/spine.md", "sha256": "0" * 64}}}
+        self.write_change(change)
+
+        lint = self.hub_spec("lint", "C-002")
+        self.assertNotIn("error ", lint)
+        self.hub_spec("apply", "C-002")
+
+        path = self.spec / "requirements.json"
+        result = json.loads(path.read_text())
+        self.assertEqual(result["header"]["problem"], "Agents need links that fit in chat")
+        self.assertEqual(result["header"]["non_goals"], ["No accounts"])
+        self.assertEqual(result["constraints"]["stack"], "docs/stack.md")
+        self.assertEqual(result["references"]["spine"]["path"], "docs/spine.md")
+        self.assertEqual(result["version"], 5)
+        self.assertFalse((self.spec / "prd.json").exists())
+        self.assertEqual(json.loads((self.spec / "spec.lock").read_text())["sha256"],
+                         hashlib.sha256(path.read_bytes()).hexdigest())
+        with mock.patch.object(spec.hb, "HUB_DIR", str(self.hub)):
+            import prd
+            self.assertEqual(prd.load("linkly")["header"]["problem"], result["header"]["problem"])
+
+    def test_prd_json_is_the_only_spec_file_and_its_header_survives_apply(self):
+        path = self.spec / "prd.json"
+        doc = json.loads((self.spec / "requirements.json").read_text())
+        doc["header"] = {"problem": "Keep links short", "non_goals": ["No accounts"]}
+        doc["constraints"] = {"stack": "docs/stack.md", "limits": ["Offline only"]}
+        for rank, req in enumerate(doc["requirements"], 1):
+            req["rank"] = rank
+        path.write_text(json.dumps(doc))
+        (self.spec / "requirements.json").unlink()
+        (self.spec / "spec.lock").write_text(json.dumps({
+            "version": doc["version"], "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}))
+        change = json.loads((self.spec / "changes" / "C-001.json").read_text())
+        change["added"][0]["test"] = "tests/acceptance/test_A_3_3.py"
+        self.write_change(change)
+
+        self.hub_spec("apply", "C-001")
+
+        result = json.loads(path.read_text())
+        self.assertEqual(result["version"], 5)
+        self.assertEqual(result["header"], doc["header"])
+        self.assertEqual(result["constraints"], doc["constraints"])
+        added = next(a for r in result["requirements"] for a in r["acceptance"] if a["id"] == "A-3.3")
+        self.assertNotIn("req", added)
+        self.assertFalse((self.spec / "requirements.json").exists())
+        self.assertEqual(json.loads((self.spec / "spec.lock").read_text())["sha256"],
+                         hashlib.sha256(path.read_bytes()).hexdigest())
+        with mock.patch.object(gh_sync.hb, "HUB_DIR", str(self.hub)):
+            self.assertEqual(gh_sync.current_lines("linkly")["A-3.2"], 2)
+
+
+class PrdInitTest(unittest.TestCase):
+    def test_init_from_prd_preserves_full_document_and_locks_prd_json(self):
+        with tempfile.TemporaryDirectory(prefix="hub-prd-init-") as tmp:
+            root = Path(tmp)
+            source = root / "source" / "spec" / "prd.json"
+            source.parent.mkdir(parents=True)
+            source.write_bytes((HUB / "templates" / "prd" / "example.prd.json").read_bytes())
+            env = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
+            env.update(HUB_DIR=str(root / "hub"), HUB_AGENT="Zeus")
+
+            result = subprocess.run([sys.executable, str(HUB / "board.py"), "spec", "init", "sample",
+                                     "--from", str(source)], env=env, capture_output=True, text=True, timeout=30)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            path = root / "hub" / "projects" / "sample" / "spec" / "prd.json"
+            self.assertEqual(json.loads(path.read_text()), json.loads(source.read_text()))
+            self.assertFalse((path.parent / "requirements.json").exists())
+            self.assertEqual(json.loads((path.parent / "spec.lock").read_text())["sha256"],
+                             hashlib.sha256(path.read_bytes()).hexdigest())
+
+
+class SpecAutonomyTests(Fixture):
+    def small_fix(self):
+        """A correction-sized edit of A-1.1: the current text plus a short clarifying tail."""
+        d = json.loads((self.spec / "requirements.json").read_text())
+        return next(a["text"] for r in d["requirements"] for a in r["acceptance"] if a["id"] == "A-1.1") + " (exactly)"
+
+    def setUp(self):
+        super().setUp()
+        factory_cfg = {
+            "agents": [
+                {"name": "Prometheus", "kind": "codex", "phase": "trusted"},
+                {"name": "Iris", "kind": "agy", "phase": "trial"},
+                {"name": "Hermes", "kind": "claude", "phase": "reviewer"},
+                {"name": "Zeus", "kind": "claude", "phase": "lead"},
+            ],
+            "autonomy": {
+                "default_phase": "trial",
+                "known_kinds": ["claude", "codex", "agy"],
+                "promote_after": 5,
+                "phases": {
+                    "off": {"dispatch": False, "reset": False, "may": []},
+                    "trial": {"dispatch": True, "reset": False, "budget_minutes": 90, "may": ["claim", "push", "open_pr"]},
+                    "trusted": {"dispatch": True, "reset": "per-task", "budget_minutes": 180, "may": ["claim", "push", "open_pr", "fast_lane", "done_force", "review"]},
+                    "reviewer": {"dispatch": False, "reset": False, "budget_minutes": 120, "may": ["claim", "push", "open_pr", "review", "done_force"]},
+                    "lead": {"dispatch": False, "reset": False, "may": ["claim", "push", "open_pr", "review", "done_force", "hand_merge", "spec_apply", "clear_tags"]},
+                },
+            },
+            "repos": [{"repo": "o/linkly", "shared": ["app/models.py"], "migrations": ["migrations/"], "acceptance_cmd": f"{sys.executable} {{test}}"}]
+        }
+        (self.hub / "factory.json").write_text(json.dumps(factory_cfg))
+
+    def test_apply_allowed_for_any_agent_with_lead_receipt(self):
+        # M7: the receipt is the gate; any non-off agent may apply with a valid lead receipt
+        self.env["HUB_AGENT"] = "Iris"
+        out = self.hub_spec("apply", "C-001", ok=True)
+        self.assertIn("applied C-001: spec v5", out)
+
+    def test_apply_refused_for_off_phase_agent(self):
+        factory_cfg = json.loads((self.hub / "factory.json").read_text())
+        factory_cfg["agents"] = [{"name": "Ghost", "phase": "off"}]
+        (self.hub / "factory.json").write_text(json.dumps(factory_cfg))
+        self.env["HUB_AGENT"] = "Ghost"
+        out = self.hub_spec("apply", "C-001", ok=False)
+        self.assertIn("agent Ghost is in phase off; cannot apply spec changes", out)
+
+    def test_apply_refused_without_lead_receipt(self):
+        path = self.spec / "changes" / "C-001.json"
+        reviews = self.hub / "projects" / "linkly" / "reviews"
+        (reviews / "C-001.json").write_text(json.dumps({
+            "name": "C-001", "decision": "approve", "reviewer": "Hermes", "approved_path": str(path),
+            "approved_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}))
+        self.env["HUB_AGENT"] = "Zeus"
+        out = self.hub_spec("apply", "C-001", ok=False)
+        self.assertIn("regular change requires lead approval receipt; receipt is from Hermes", out)
+
+    def test_correct_and_propose_ignore_input_id_and_never_overwrite_or_delete_existing_change(self):
+        c1_path = self.spec / "changes" / "C-001.json"
+        c1_orig = c1_path.read_text()
+        draft = self.temp.name + "/probe_c001.json"
+        Path(draft).write_text(json.dumps({
+            "id": "C-001",
+            "modified": [{"id": "A-99.99", "text": "bad id causes error"}]
+        }))
+        out = self.hub_spec("correct", draft, ok=False)
+        self.assertTrue(c1_path.exists())
+        self.assertEqual(c1_path.read_text(), c1_orig)
+
+        Path(draft).write_text(json.dumps({
+            "id": "C-001",
+            "added": [{"id": "A-3.3", "req": "R-3", "text": "a visitor counts once a day"}]
+        }))
+        self.hub_spec("propose", draft, ok=True)
+        c2_path = self.spec / "changes" / "C-002.json"
+        self.assertTrue(c2_path.exists())
+        c2 = json.loads(c2_path.read_text())
+        self.assertEqual(c2["id"], "C-002")
+        self.assertEqual(c1_path.read_text(), c1_orig)
+
+    def test_correction_records_author_and_forbids_self_approval(self):
+        draft = self.temp.name + "/corr.json"
+        Path(draft).write_text(json.dumps({"modified": [{"id": "A-1.1", "text": self.small_fix()}]}))
+        self.env["HUB_AGENT"] = "Hermes"
+        self.hub_spec("correct", draft, ok=True)
+        c2 = json.loads((self.spec / "changes" / "C-002.json").read_text())
+        self.assertEqual(c2.get("author"), "Hermes")
+
+        out = self.hub_spec("approve", "C-002", ok=False)
+        self.assertIn("cannot approve their own correction", out)
+
+    def test_correction_approval_requires_hermes_or_zeus_reviewer_or_lead(self):
+        draft = self.temp.name + "/corr.json"
+        Path(draft).write_text(json.dumps({"modified": [{"id": "A-1.1", "text": self.small_fix()}]}))
+        self.env["HUB_AGENT"] = "Iris"
+        self.hub_spec("correct", draft, ok=True)
+
+        self.env["HUB_AGENT"] = "Prometheus"
+        out = self.hub_spec("approve", "C-002", ok=False)
+        self.assertIn("must be approved by Hermes or Zeus", out)
+
+    def test_correction_rejects_disallowed_keys_and_large_edits(self):
+        draft = self.temp.name + "/corr_disallowed.json"
+        Path(draft).write_text(json.dumps({"modified": [{"id": "A-1.1", "text": "code", "fixtures": []}]}))
+        out = self.hub_spec("correct", draft, ok=False)
+        self.assertIn("disallowed fields", out)
+
+        Path(draft).write_text(json.dumps({"modified": [{"id": "A-1.1", "text": "code", "previous": {}}]}))
+        out = self.hub_spec("correct", draft, ok=False)
+        self.assertIn("disallowed fields", out)
+
+        Path(draft).write_text(json.dumps({"modified": [{
+            "id": "A-1.1",
+            "text": "This completely replaces the requirement with a novel sentence exceeding eighty changed characters limit."
+        }]}))
+        out = self.hub_spec("correct", draft, ok=False)
+        self.assertIn("change is too large", out)
+
+    def test_correction_cannot_rewrite_a_short_line_whole(self):
+        # Under 80 changed chars but a different line: either bound refuses it (Hermes nit on T-577).
+        draft = self.temp.name + "/corr_short.json"
+        Path(draft).write_text(json.dumps({"modified": [{"id": "A-1.1", "text": "returns 500 on every request"}]}))
+        out = self.hub_spec("correct", draft, ok=False)
+        self.assertIn("change is too large", out)
+
+    def test_spec_correct_creates_bounded_correction(self):
+        draft = self.temp.name + "/add.json"
+        Path(draft).write_text(json.dumps({"added": [{"id": "A-9.9", "text": "bad"}]}))
+        out = self.hub_spec("correct", draft, ok=False)
+        self.assertIn("corrections cannot add", out)
+
+        Path(draft).write_text(json.dumps({"modified": [{"id": "A-99.99", "text": "typo"}]}))
+        out = self.hub_spec("correct", draft, ok=False)
+        self.assertIn("unknown or non-acceptance line", out)
+
+        Path(draft).write_text(json.dumps({"modified": [{"id": "A-1.1", "text": self.small_fix()}]}))
+        self.hub_spec("correct", draft, ok=True)
+        c2_path = self.spec / "changes" / "C-002.json"
+        self.assertTrue(c2_path.exists())
+        c2 = json.loads(c2_path.read_text())
+        self.assertEqual(c2["kind"], "correction")
+        self.assertEqual(c2["base_version"], 4)
+        self.assertEqual(c2["based_on_sha256"], hashlib.sha256((self.spec / "requirements.json").read_bytes()).hexdigest())
+
+    def test_spec_correct_applies_with_hermes_receipt_by_any_agent(self):
+        draft = self.temp.name + "/corr.json"
+        self.env["HUB_AGENT"] = "Iris"
+        fixed = self.small_fix()
+        Path(draft).write_text(json.dumps({"modified": [{"id": "A-1.1", "text": fixed}]}))
+        self.hub_spec("correct", draft, ok=True)
+
+        self.env["HUB_AGENT"] = "Hermes"
+        self.hub_spec("approve", "C-002", "--why", "LGTM clarity")
+
+        self.env["HUB_AGENT"] = "Iris"
+        out = self.hub_spec("apply", "C-002", ok=True)
+        self.assertIn("applied C-002: spec v5", out)
+
+        reqs = json.loads((self.spec / "requirements.json").read_text())
+        a11 = next(a for r in reqs["requirements"] for a in r["acceptance"] if a["id"] == "A-1.1")
+        self.assertEqual(a11["v"], 1)
+        self.assertEqual(a11["text"], fixed)
+
+        inbox = (self.hub / "inbox" / "Zeus.jsonl").read_text()
+        self.assertIn("Correction C-002 applied on linkly", inbox)
+
+    def test_apply_refuses_correction_with_stale_based_on_hash(self):
+        c2 = {
+            "id": "C-002",
+            "kind": "correction",
+            "base_version": 4,
+            "based_on_sha256": "0" * 64,
+            "modified": [{"id": "A-1.1", "text": self.small_fix()}]
+        }
+        (self.spec / "changes" / "C-002.json").write_text(json.dumps(c2))
+        self.approve("C-002")
+        out = self.hub_spec("apply", "C-002", ok=False)
+        self.assertIn("was written against spec sha256", out)
+
+    def test_apply_refuses_correction_missing_based_on_hash(self):
+        c2 = {
+            "id": "C-002",
+            "kind": "correction",
+            "base_version": 4,
+            "modified": [{"id": "A-1.1", "text": self.small_fix()}]
+        }
+        (self.spec / "changes" / "C-002.json").write_text(json.dumps(c2))
+        self.approve("C-002")
+        out = self.hub_spec("apply", "C-002", ok=False)
+        self.assertIn("missing based_on_sha256", out)
+
+    def test_spec_propose_creates_proposal_and_review_page(self):
+        draft = self.temp.name + "/prop.json"
+        Path(draft).write_text(json.dumps({
+            "added": [{"id": "A-3.3", "req": "R-3", "text": "a visitor counts once a day"}],
+            "modified": [{"id": "A-3.2", "text": "stats returns {total, unique, by_day}"}]
+        }))
+        self.hub_spec("propose", draft, ok=True)
+        c2_path = self.spec / "changes" / "C-002.json"
+        self.assertTrue(c2_path.exists())
+        c2 = json.loads(c2_path.read_text())
+        self.assertEqual(c2["kind"], "proposal")
+        rev_path = self.spec / "review-C-002.html"
+        self.assertTrue(rev_path.exists())
+        self.assertIn('data-approves="changes/C-002.json"', rev_path.read_text())
+
+    def test_spec_revert_creates_reversing_correction(self):
+        draft = self.temp.name + "/corr.json"
+        Path(draft).write_text(json.dumps({"modified": [{"id": "A-1.1", "text": self.small_fix()}]}))
+        self.hub_spec("correct", draft, ok=True)
+
+        self.hub_spec("revert", "C-002", ok=True)
+        c3_path = self.spec / "changes" / "C-003.json"
+        self.assertTrue(c3_path.exists())
+        c3 = json.loads(c3_path.read_text())
+        self.assertEqual(c3["kind"], "correction")
+        self.assertEqual(c3["modified"][0]["id"], "A-1.1")
+        self.assertEqual(c3["modified"][0]["text"], "POST /links returns a 6-char code")
+
+
 if __name__ == "__main__":
     unittest.main()
+

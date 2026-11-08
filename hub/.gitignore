@@ -6,6 +6,7 @@ inbox/
 wake/
 .board.lock
 .board.wal
+.gh-sync.lock
 
 # Superseded by git itself — the reason this repo exists.
 *.bak

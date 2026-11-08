@@ -67,6 +67,8 @@ def command_for(task, args, env):
         native_turn_cap = False
     elif target in CLAUDE_AGENTS:
         kind = "claude"
+        if args.budget_usd is None:  # the lead usually has the bigger plan
+            args.budget_usd = 10.0 if target == LEAD else 2.0
         env["CLAUDE_CONFIG_DIR"] = str(Path.home() / (
             ".claude" if target == LEAD else f".claude-{target.lower()}"))  # as shell.sh's _hub_config_dir
         command = ["claude", "-p", "--output-format", "json",
@@ -284,7 +286,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task_id")
     parser.add_argument("--max-turns", type=positive_int, default=30)
-    parser.add_argument("--budget-usd", type=positive_float, default=2.0)
+    parser.add_argument("--budget-usd", type=positive_float,
+                        help="Claude only; default $10 for the lead ($HUB_LEAD), $2 otherwise")
     parser.add_argument("--timeout-seconds", type=positive_int,
                         help="wall-clock cap; default is at most 30 minutes")
     args = parser.parse_args()

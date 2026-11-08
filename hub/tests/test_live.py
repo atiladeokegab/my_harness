@@ -283,6 +283,116 @@ class LiveTest(unittest.TestCase):
         self.live.prs()
         self.assertEqual([a for a, t in self.fake.sent if "ready for review" in t], ["Hermes"])
 
+    def test_pr_goes_to_the_factory_reviewer(self):
+        with open(os.path.join(self.tmp, "factory.json"), "w") as f:
+            f.write(json.dumps({"agents": [{"name": "Hermes", "kind": "claude", "phase": "trusted"},
+                                           {"name": "Prometheus", "kind": "codex", "phase": "reviewer"}]}))
+        self.fake.answers["gh pr list"] = done(json.dumps(
+            [{"number": 7, "title": "web", "headRefOid": "a" * 40, "isDraft": False, "body": "Verified: x"}]))
+        self.live.tick()
+        self.assertEqual([a for a, t in self.fake.sent if "PR #" in t], ["Prometheus"])
+
+    def test_pr_uses_the_same_inherited_reviewer_phase_as_dispatch(self):
+        with open(os.path.join(self.tmp, "factory.json"), "w") as f:
+            json.dump({"agents": [{"name": "Hermes", "kind": "claude", "phase": "trusted"},
+                                 {"name": "Prometheus", "kind": "codex"}],
+                       "autonomy": {"default_phase": "reviewer", "known_kinds": ["codex"], "phases": {
+                           "trusted": {"dispatch": True, "reset": "per-task", "may": ["review"]},
+                           "reviewer": {"dispatch": False, "reset": False, "may": ["review"]}}}}, f)
+        self.fake.answers["gh pr list"] = done(json.dumps(
+            [{"number": 7, "title": "web", "headRefOid": "a" * 40, "isDraft": False, "body": "Verified: x"}]))
+        self.live.tick()
+        self.assertEqual([a for a, t in self.fake.sent if "PR #" in t], ["Prometheus"])
+
+    def test_trial_builder_pr_reaches_hermes_even_if_docs_only(self):
+        """Living spec §4: a trial builder's PR never takes the fast lane or docs-only lane; always asks Hermes."""
+        with open(os.path.join(self.tmp, "factory.json"), "w") as f:
+            f.write(json.dumps({
+                "agents": [{"name": "Iris", "kind": "agy", "phase": "trial"}],
+                "autonomy": {
+                    "phases": {
+                        "trial": {"dispatch": True, "reset": False, "may": ["claim", "push", "open_pr"]},
+                        "trusted": {"dispatch": True, "reset": "per-task", "may": ["claim", "push", "open_pr", "fast_lane", "done_force", "review"]}
+                    }
+                }
+            }))
+        self.fake.answers["gh issue view 4"] = done('{"labels": [{"name": "agent:iris"}]}')
+        lead_pr = {"number": 7, "title": "t", "headRefOid": "7" * 40, "isDraft": False, "author": {"login": "lead"},
+                   "body": "Closes #4\nVerified: rendered it", "files": [{"path": "README.md"}], "changedFiles": 1,
+                   "comments": [], "reviews": []}
+        self.fake.answers["gh pr list"] = lambda _: done(json.dumps([lead_pr]))
+        self.live.prs()
+        self.assertEqual([a for a, t in self.fake.sent if "ready for review" in t], ["Hermes"])
+
+    def test_task_branch_pr_gets_missing_board_lines_prepended_once(self):
+        """2026-10-18: PR #10 had no `Closes #12`, so the merge queue skipped it until a human stepped in."""
+        self.tasks({"issue": 12, "reqs": ["A-5.1@1", "A-5.2@1"], "kind": "factory"}, {"issue": 13})
+        prs = [{"number": n, "title": "t", "headRefOid": f"{n:040d}", "headRefName": head, "isDraft": False,
+                "author": {"login": "lead"}, "body": body, "files": [{"path": "app.py"}], "changedFiles": 1,
+                "comments": [], "reviews": []}
+               for n, head, body in ((10, "task/T-001", "Verified: make check"),
+                                     (11, "task/T-002", "Closes #13\nTask: T-002\nVerified: x"),
+                                     (12, "12-other", "Verified: x"))]
+        self.fake.answers["gh pr list"] = lambda _: done(json.dumps(prs))
+        self.fake.answers["gh pr view"] = done('{"commits": []}')
+        self.live.prs(); self.live.prs()
+        [edit] = [c for c in self.fake.calls if c[:3] == ["gh", "pr", "edit"]]
+        self.assertEqual(edit[3:6], ["10", "-R", "me/ev"])
+        self.assertEqual(edit[-1], "Closes #12\nReq: A-5.1@1, A-5.2@1\nTask: T-001\n\nVerified: make check")
+        self.assertIn("filled PR #10 body", (Path(self.tmp) / "projects" / "ev" / "live.log").read_text())
+
+    def test_task_branch_pr_whose_task_has_no_issue_is_reported_once_and_filled_later(self):
+        """2026-10-19: T-565's PR opened while paused, its task had no issue, and the PR sat silently."""
+        self.tasks({})
+        pr = {"number": 20, "title": "t", "headRefOid": "a" * 40, "headRefName": "task/T-001", "isDraft": False,
+              "body": "Task: T-001\nVerified: x"}
+        self.fake.answers["gh pr list"] = lambda _: done(json.dumps([pr]))
+        self.fake.answers["gh pr view"] = done('{"commits": []}')
+        self.live.prs(); self.live.prs()
+        self.assertEqual([t for _, t in self.fake.sent if "no issue" in t],
+                         ["ev: PR #20 (task/T-001) has no issue yet, so it cannot merge"])
+        self.assertFalse([c for c in self.fake.calls if c[:3] == ["gh", "pr", "edit"]])
+        self.tasks({"issue": 53})  # the poll published it
+        self.live.prs()
+        [edit] = [c for c in self.fake.calls if c[:3] == ["gh", "pr", "edit"]]
+        self.assertEqual(edit[-1], "Closes #53\n\nTask: T-001\nVerified: x")
+
+    def test_failed_body_fill_is_retried_next_pass(self):
+        self.tasks({"issue": 12})
+        pr = {"number": 10, "title": "t", "headRefOid": "a" * 40, "headRefName": "task/T-001", "isDraft": False,
+              "body": "Verified: x"}
+        self.fake.answers["gh pr list"] = lambda _: done(json.dumps([pr]))
+        self.fake.answers["gh pr view"] = done('{"commits": []}')
+        self.fake.answers["gh pr edit"] = done("", 1)
+        self.live.prs()
+        del self.fake.answers["gh pr edit"]
+        self.live.prs(); self.live.prs()
+        self.assertEqual(sum(c[:3] == ["gh", "pr", "edit"] for c in self.fake.calls), 2)
+
+    def test_fill_reads_req_and_task_trailers_from_commits(self):
+        """Hermes on 1b70add: a body Req: at the board's @1 would hide the commit's @2 from req_text, holding the PR."""
+        self.tasks({"issue": 12, "reqs": ["A-5.1@1"]})
+        pr = {"number": 10, "title": "t", "headRefOid": "a" * 40, "headRefName": "task/T-001", "isDraft": False,
+              "body": "Verified: x"}
+        self.fake.answers["gh pr list"] = lambda _: done(json.dumps([pr]))
+        self.fake.answers["gh pr view 10"] = done(json.dumps(
+            {"commits": [{"messageHeadline": "time", "messageBody": "Req: A-5.1@2\nTask: T-001"}]}))
+        self.live.prs()
+        [edit] = [c for c in self.fake.calls if c[:3] == ["gh", "pr", "edit"]]
+        self.assertEqual(edit[-1], "Closes #12\n\nVerified: x")
+
+    def test_complete_task_branch_pr_is_checked_once(self):
+        """Hermes nit on 1b70add: a PR with every line must not take the board lock every tick."""
+        self.tasks({"issue": 12})
+        pr = {"number": 10, "title": "t", "headRefOid": "a" * 40, "headRefName": "task/T-001", "isDraft": False,
+              "body": "Closes #12\nTask: T-001\nVerified: x"}
+        self.fake.answers["gh pr list"] = lambda _: done(json.dumps([pr]))
+        self.fake.answers["gh pr view"] = done('{"commits": []}')
+        self.live.prs()
+        with mock.patch.object(self.live_mod.hb, "board", side_effect=AssertionError("board read")):
+            self.live.prs()
+        self.assertFalse([c for c in self.fake.calls if c[:3] == ["gh", "pr", "edit"]])
+
     def test_with_a_hackathon_config_docs_outside_files_or_gated_go_to_hermes(self):
         """Hermes review of 4ac34c0: in an event repo docs_only adds nothing to the fast lane."""
         self.config(review_before=["docs/CONTRACT.md"])
@@ -937,6 +1047,15 @@ class LiveTest(unittest.TestCase):
         self.assertEqual(sum(a == "Zeus" and "9-web" in t and "still silent" in t
                              for a, t in self.fake.sent), 1)
 
+    def test_parked_archive_and_backup_branches_are_never_nudged(self):
+        self.fake.answers["gh api repos/me/ev/branches"] = done('archive/task/T-5\nbackup/wip/T-6\n')
+        self.fake.answers["gh api repos/me/ev/compare/"] = done('{"ahead_by": 1}')
+        self.fake.answers["gh api repos/me/ev/commits/"] = done('{"sha": "s1", "at": "2026-10-01T10:00:00Z"}')
+        self.live.tick()
+        self.at(46); self.live.tick()
+        self.assertFalse(any(c[:3] == ["gh", "issue", "comment"] or "compare" in " ".join(c) for c in self.fake.calls))
+        self.assertFalse(any("still silent" in t for _, t in self.fake.sent))
+
     def test_review_ready_pr_branch_is_not_nudged_but_draft_is(self):
         self.fake.answers["gh api repos/me/ev/branches"] = done('8-ui\n9-draft\n')
         self.fake.answers["gh api repos/me/ev/compare/"] = done('{"ahead_by": 1}')
@@ -999,7 +1118,7 @@ SPEC = {"version": 2, "requirements": [{"id": "R-1", "title": "Create link", "ne
 
 class SpecLiveTest(unittest.TestCase):
     """T-517: in a project with spec/requirements.json, hub live enforces Req: and protects the spec."""
-    make, tasks = LiveTest.make, LiveTest.tasks
+    make, tasks, board_task = LiveTest.make, LiveTest.tasks, LiveTest.board_task
 
     def setUp(self):
         env = mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}, clear=True)
@@ -1101,7 +1220,8 @@ class SpecLiveTest(unittest.TestCase):
         self.assertEqual(seen[1], {"req_lines": {"A-1.1": 2}, "change_tasks": ["T-001"], "acceptance_timeout": 300,
                                    "change_issues": {"change/C-002": [7, 8]},
                                    "ci_fix_tasks": {}, "change_timeout": 1800, "gate_dir": self.live.dir,
-                                   "acceptance": [["uv", "run", "pytest", "-q", "tests/acceptance/test_A_1_1.py"]]})
+                                   "acceptance": [["uv", "run", "pytest", "-q", "tests/acceptance/test_A_1_1.py"]],
+                                   "heldout": []})
         (Path(self.tmp) / "factory.json").write_text(json.dumps({"repos": [
             {"repo": "me/other"}, {"repo": "me/ev", "acceptance_cmd": "make accept T={test}", "acceptance_timeout": 60,
                                    "change_timeout": 2400}]}))
@@ -1109,6 +1229,129 @@ class SpecLiveTest(unittest.TestCase):
         self.assertEqual((seen[2]["acceptance"], seen[2]["acceptance_timeout"]),
                          ([["make", "accept", "T=tests/acceptance/test_A_1_1.py"]], 60))
         self.assertEqual(seen[2]["change_timeout"], 2400)
+
+    def test_change_branch_cap_tells_zeus_once_without_holding_merge(self):
+        self.write_spec()
+        lock = Path(self.tmp) / "projects" / "ev" / "spec" / "spec.lock"
+        lock.write_text(json.dumps({"version": 2, "change": "C-002"}))
+        os.utime(lock, (T0.timestamp(), T0.timestamp()))
+        self.tasks({"generated_from": "v2", "status": "open"})
+        self.fake.answers["gh api repos/me/ev/branches?"] = done("integration\nchange/C-002\n")
+        merged = []
+        sys.modules["live_merge"] = types.SimpleNamespace(merge_tick=lambda *a, **kw: merged.append(True))
+
+        self.clock[0] = T0 + timedelta(hours=47)
+        self.live.merge()
+        self.assertFalse(any("48" in text for _, text in self.fake.sent))
+        self.clock[0] = T0 + timedelta(hours=49)
+        self.live.merge(); self.live.merge()
+
+        notices = [(agent, text) for agent, text in self.fake.sent if "48" in text]
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices[0][0], "Zeus")
+        self.assertIn("change/C-002", notices[0][1])
+        self.assertIn("T-001", notices[0][1])
+        self.assertEqual(len(merged), 3)
+
+    def test_change_branch_cap_skips_absent_branch_or_finished_tasks(self):
+        self.write_spec()
+        lock = Path(self.tmp) / "projects" / "ev" / "spec" / "spec.lock"
+        lock.write_text(json.dumps({"version": 2, "change": "C-002"}))
+        os.utime(lock, (T0.timestamp(), T0.timestamp()))
+        self.clock[0] = T0 + timedelta(hours=49)
+        sys.modules["live_merge"] = types.SimpleNamespace(merge_tick=lambda *a, **kw: None)
+        self.tasks({"generated_from": "v2", "status": "open"})
+        self.live.merge()
+        self.assertFalse(any("48" in text for _, text in self.fake.sent))
+        self.live._branches = None
+        self.fake.answers["gh api repos/me/ev/branches?"] = done("integration\nchange/C-002\n")
+        self.tasks({"generated_from": "v2", "status": "done"})
+        self.live.merge()
+        self.assertFalse(any("48" in text for _, text in self.fake.sent))
+
+    def test_change_branch_cap_lookup_failure_does_not_hold_merge(self):
+        self.write_spec()
+        lock = Path(self.tmp) / "projects" / "ev" / "spec" / "spec.lock"
+        lock.write_text(json.dumps({"version": 2, "change": "C-002"}))
+        os.utime(lock, (T0.timestamp(), T0.timestamp()))
+        self.clock[0] = T0 + timedelta(hours=49)
+        self.tasks({"generated_from": "v2", "status": "open"})
+        merged = []
+        sys.modules["live_merge"] = types.SimpleNamespace(merge_tick=lambda *a, **kw: merged.append(True))
+
+        with mock.patch.object(self.live, "branches", side_effect=self.live_mod.Throttled("rate limited")):
+            self.live.merge()
+
+        self.assertEqual(merged, [True])
+    def test_undeclared_dependency_holds_pr_with_comment_and_no_review(self):
+        sha = "a" * 40
+        self.fake.answers["gh pr list"] = done(json.dumps([self.pr(path="pyproject.toml", sha=sha)]))
+        raw = "gh api -H Accept: application/vnd.github.raw repos/me/ev/contents/"
+        self.fake.answers[f"{raw}docs/stack.md?ref={sha}"] = done("| Lib | requests | Decided | http |\n")
+        self.fake.answers[f"{raw}docs/stack.md?ref=main"] = done("| Lib | requests | Decided | http |\n")
+        self.fake.answers[f"{raw}pyproject.toml?ref=main"] = done('[project]\ndependencies = ["requests"]\n')
+        self.fake.answers[f"{raw}pyproject.toml?ref={sha}"] = done('[project]\ndependencies = ["requests", "redis"]\n')
+        self.live.prs(); self.live.prs()
+        self.assertEqual(self.reviews(), [])
+        self.assertEqual(len(self.comments()), 1)
+        self.assertIn("Held: this PR adds `redis` (pyproject.toml)", self.comments()[0][-1])
+        self.assertIn("not on a Decided row of `docs/stack.md`", self.comments()[0][-1])
+
+    def test_unreadable_stack_check_comments_once(self):
+        sha = "a" * 40
+        self.fake.answers["gh pr list"] = done(json.dumps([self.pr(path="pyproject.toml", sha=sha)]))
+        raw = "gh api -H Accept: application/vnd.github.raw repos/me/ev/contents/"
+        self.fake.answers[f"{raw}docs/stack.md?ref=main"] = done("| Lib | requests | Decided | http |\n")
+        self.fake.answers[f"{raw}pyproject.toml?ref=main"] = done('[project]\ndependencies = ["requests"]\n')
+        self.fake.answers[f"{raw}pyproject.toml?ref={sha}"] = done("", 1)
+        self.live.prs(); self.live.prs()
+        self.assertEqual(self.reviews(), [])
+        self.assertEqual(len(self.comments()), 1)
+        self.assertIn("Held: dependency files or stack table could not be read", self.comments()[0][-1])
+
+
+
+    def heldout(self, index):
+        root = Path(self.tmp) / "projects" / "ev" / "heldout"
+        (root / "A-1.1").mkdir(parents=True, exist_ok=True)
+        (root / "A-1.1" / "test_codes_unique.py").write_text("# HELDOUT_CANARY_t575 do not copy\nassert False\n")
+        (root / "heldout.json").write_text(json.dumps(index))
+
+    def test_merge_passes_the_current_heldout_checks_and_tells_zeus_once_of_stale_ones(self):
+        self.write_spec()
+        self.heldout({"A-1.1": {"v": 2, "tests": ["A-1.1/test_codes_unique.py"]},
+                      "A-1.2": {"v": 1, "tests": ["A-1.2/test_gone.py"]}})  # a line no longer in the PRD
+        seen = []
+        sys.modules["live_merge"] = types.SimpleNamespace(merge_tick=lambda *a, **kw: seen.append(kw))
+        self.live.merge(); self.live.merge()
+        self.assertEqual([label for label, _ in seen[0]["heldout"]], ["held-out A-1.1"])
+        self.assertEqual([t for a, t in self.fake.sent if "held-out" in t],
+                         ["ev: the change gate skips stale held-out checks: A-1.2 (check v1, line not active)"])
+
+    def test_heldout_red_notes_the_tasks_citing_the_line_alone(self):
+        """Design section 3: the builder hears the line id and nothing of the check."""
+        self.write_spec()
+        self.heldout({"A-1.1": {"v": 2, "tests": ["A-1.1/test_codes_unique.py"]}})
+        branch = "Work on branch change/C-002."
+        self.tasks({"issue": 12, "reqs": ["A-1.1@2"], "status": "done", "detail": branch},
+                   {"issue": 13, "reqs": ["A-1.2@1"], "status": "done", "detail": branch},
+                   {"issue": 14, "reqs": ["A-1.1@2"], "status": "done", "detail": "Work on branch change/C-003."})
+        self.live.state["heldout_red"] = [{"at": "2026-10-20T09:00:00+00:00", "branch": "change/C-002",
+                                          "sha": "d" * 40, "line": "A-1.1"}]
+        self.live.heldout_notes(); self.live.heldout_notes()
+        text = "A held-out check of A-1.1 is red. Re-read A-1.1's text and its edge cases. Do not ask for the check."
+        self.assertEqual([n["text"] for n in self.board_task(1)["notes"]], [text])
+        self.assertEqual((self.board_task(2)["notes"], self.board_task(3)["notes"]), ([], []))
+        self.assertEqual([c for c in self.fake.calls if c[:3] == ["gh", "issue", "comment"]],
+                         [["gh", "issue", "comment", "12", "-R", "me/ev", "--body", text]])
+        self.assertNotIn("test_codes_unique", json.dumps(self.board_task(1)) + json.dumps(self.fake.calls))
+
+    def test_heldout_red_on_a_carried_over_line_notes_every_task_on_the_branch(self):
+        self.write_spec()
+        self.tasks({"issue": 13, "reqs": ["A-1.2@1"], "status": "done", "detail": "Work on branch change/C-002."})
+        self.live.state["heldout_red"] = [{"at": "x", "branch": "change/C-002", "sha": "d" * 40, "line": "A-1.1"}]
+        self.live.heldout_notes()
+        self.assertEqual(len(self.board_task(1)["notes"]), 1)
 
 
 if __name__ == "__main__":

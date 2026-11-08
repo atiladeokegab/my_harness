@@ -11,6 +11,7 @@
 #   HUB_CLAUDE_AGENTS  Claude Code agents, space-separated     (default "Zeus Apollo Hermes Athena")
 #   HUB_CODEX_AGENTS   Codex agents, space-separated           (default "Prometheus")
 #   HUB_RELAY_SESSION  tmux session name of the wake relay     (default hub-relay)
+#   HUB_DASHBOARD      0 to not start the local dashboard (hub dashboard) with an agent
 #
 # Each agent name becomes a shell command: `zeus`, `apollo`, `prometheus`, ...
 
@@ -152,6 +153,7 @@ _hub_enter() {
     # hubmsg defers a wake to an attached pane and hands it to the relay. Without a relay,
     # a deferred or relayed wake is never delivered, so start it for every agent.
     _hub_start_relay
+    _hub_start_dashboard
 
     if ! tmux has-session -t "$sess" 2>/dev/null; then
         # Env is passed to the tmux session only — never exported into this shell, or it
@@ -164,9 +166,17 @@ _hub_enter() {
         local brief; brief="$(HUB_AGENT="$name" HUB_PROJECT="$proj" \
             "$HUB_DIR/board.py" brief 2>/dev/null)"
 
+        # Token and cost metrics go to the dashboard's local OTLP sink, tagged by agent.
+        local otel=()
+        [ "${HUB_DASHBOARD:-1}" = 0 ] || otel=(-e CLAUDE_CODE_ENABLE_TELEMETRY=1
+            -e OTEL_METRICS_EXPORTER=otlp
+            -e OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=http/json
+            -e OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://127.0.0.1:8765/v1/metrics
+            -e OTEL_RESOURCE_ATTRIBUTES="agent=$name")
         tmux new-session -d -s "$sess" -c "$dir" \
             -e CLAUDE_CONFIG_DIR="$cfg" \
             -e CLAUDE_CODE_SESSION_NAME="$name" \
+            "${otel[@]}" \
             -e HUB_AGENT="$name" \
             -e HUB_DIR="$HUB_DIR" \
             -e HUB_PROJECT="$proj" \
@@ -190,6 +200,10 @@ _hub_enter() {
 # itself -- hubmsg queues the keystroke and this relay, running outside the sandbox,
 # performs it. Only needed while a sandboxed agent is up, so it starts with one.
 _hub_start_relay() {
+    # A current relay is enough wherever it runs: one whose tmux server lost its socket (the default
+    # socket was recreated) is invisible to has-session, and the watchdog then started a doomed
+    # second relay every minute.
+    "$HUB_DIR/hubwaked" --status >/dev/null 2>&1 && return 0
     # A relay started before a hubwaked upgrade has no current pidfile/status contract.
     # Replace that stale-code session instead of reporting a live daemon as down.
     if tmux has-session -t "$HUB_RELAY_SESSION" 2>/dev/null \
@@ -205,6 +219,17 @@ _hub_start_relay() {
     fi
 }
 
+# The dashboard is a page you glance at, so it should already be there: one background
+# session, started with the first agent of the day, idempotent after that.
+# HUB_DASHBOARD=0 turns it off.
+_hub_start_dashboard() {
+    [ "${HUB_DASHBOARD:-1}" = 0 ] && return 0
+    tmux has-session -t hub-dashboard 2>/dev/null && return 0
+    tmux new-session -d -s hub-dashboard -c "$HUB_DIR" -e HUB_DIR="$HUB_DIR" \
+        "$HUB_DIR/board.py" dashboard
+    echo "started dashboard (http://127.0.0.1:8765/, hub dashboard --open for a window)"
+}
+
 _hub_enter_codex() {
     local name="$1" want="$2"
     local sess; sess="$(_hub_session "$name")"
@@ -216,6 +241,7 @@ _hub_enter_codex() {
     fi
 
     _hub_start_relay
+    _hub_start_dashboard
 
     if ! tmux has-session -t "$sess" 2>/dev/null; then
         # Codex sandboxes writes to the workspace root (wherever you launched it). The hub
@@ -242,6 +268,8 @@ _hub_enter_codex() {
         # launch had -- the tmux -e values never reach them.
         # ~/work holds each claim's worktree (hub claim), so it is writable too, and so is
         # $HUB_CODE_DIR: a worktree's commits land in its clone's .git ($HUB_CODE_DIR/<p>/.git).
+        # No worktrees feature: hub claim makes the worktrees, and with it /new in a git repo opens a
+        # "Where should the new conversation run?" picker that ate a reset's handover.
         local proj; proj="$(_hub_project_for "$dir")"
         mkdir -p "$HOME/work"
         local ccfg="${CODEX_HOME:-$HOME/.codex}/config.toml"
@@ -251,7 +279,9 @@ _hub_enter_codex() {
             -e HUB_AGENT="$name" \
             -e HUB_DIR="$HUB_DIR" \
             -e HUB_PROJECT="$proj" \
+            -e CODEX_HOME="${CODEX_HOME:-$HOME/.codex}" \
             codex --sandbox workspace-write --add-dir "$HUB_DIR" --add-dir "$HOME/work" --add-dir "$HUB_CODE_DIR" \
+                --disable worktrees \
                 -c "shell_environment_policy.set.HUB_AGENT=\"$name\"" \
                 -c "shell_environment_policy.set.HUB_DIR=\"$HUB_DIR\"" \
                 -c "shell_environment_policy.set.HUB_PROJECT=\"$proj\""
