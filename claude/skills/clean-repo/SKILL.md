@@ -1,6 +1,6 @@
 ---
 name: clean-repo
-description: "Keeps harness output out of repos other people work in. Load BEFORE creating any file in a shared repo that is not code or a test — plans, roadmaps, reviews, audits, handoffs, summaries, CLAUDE.md/AGENTS.md, .claude/, debate transcripts, scratch scripts — and before any commit or push to a repo with teammates. Triggers on: 'write up', 'make a plan', 'make a .md', 'document this', 'add a doc', 'commit', 'push', 'PR', 'hackathon', 'my team', 'teammate', 'shared repo', 'don't touch their work'. Not for a repo only you use, and not for docs a teammate actually asked for."
+description: "Keeps harness output out of repos other people work in. Load BEFORE creating any file in a shared repo that is not code or a test — plans, roadmaps, reviews, audits, handoffs, summaries, CLAUDE.md/AGENTS.md, .claude/, debate transcripts, scratch scripts — and before any commit or push to a repo with teammates. Triggers on: 'write up', 'make a plan', 'make a .md', 'document this', 'add a doc', 'commit', 'push', 'PR', 'hackathon', 'my team', 'teammate', 'shared repo', 'don't touch their work'. Not for a repo only the user works in, and not for docs a teammate actually asked for."
 ---
 
 # Don't ship the harness
