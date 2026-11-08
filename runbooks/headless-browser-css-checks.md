@@ -2,7 +2,7 @@
 
 **Symptom.** You need to know what a page actually looks like — is it overflowing, is
 content hidden, where does an anchor land — and every measurement you take disagrees with
-what the user sees. On Refinery this produced three separate wrong conclusions in one
+what the user sees. This once produced three separate wrong conclusions in one
 session, including telling the user two components were broken when they were already
 fixed and live.
 
@@ -17,7 +17,7 @@ Windows Chrome, from WSL, at `/mnt/c/Program Files/Google/Chrome/Application/chr
 ```
 
 **To measure rather than eyeball, serve a probe from the site's own origin.** Put an HTML
-file in `website/public/`, load it from the same host, and iframe the site inside it. Same
+file in the site's static folder (`public/`), load it from the same host, and iframe the site inside it. Same
 origin means you can scroll the iframe and read `getBoundingClientRect` and
 `getComputedStyle`. A `file://` wrapper cannot: cross-origin blocks `contentDocument`.
 Report results by setting `document.title` and reading it back with `--dump-dom`. Delete
@@ -49,7 +49,7 @@ from WSL at all — the firewall blocks it — so the same-origin probe is the t
 
 ## Cost when missed
 
-Hours, twice. Once reporting live components as broken on WeasyPrint evidence after
-Prometheus had explicitly warned that WeasyPrint does not resolve Tailwind's screen media
+Hours, twice. Once reporting live components as broken on WeasyPrint evidence after a
+reviewer had explicitly warned that WeasyPrint does not resolve Tailwind's screen media
 queries; once nearly reporting a site-wide horizontal overflow that was the window-width
 clamp.

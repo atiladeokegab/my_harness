@@ -67,7 +67,7 @@ longer matches the executable on disk.
 shell with no error:
 
 ```
-started Prometheus in ~/code/refinery  (codex, account: ~/.codex)
+started Prometheus in ~/code/<project>  (codex, account: ~/.codex)
   writable: $PWD and ~/hub
 [exited]
 ```
@@ -86,12 +86,12 @@ danger-full-access to allow them.
 
 codex exits 1, tmux tears down the session, and the launcher's own banner scrolls past
 before you can read the error. Only a Windows home directory was ever marked trusted in
-`~/.codex/config.toml`, so launching from any repo — including `~/code/refinery` — hits it.
+`~/.codex/config.toml`, so launching from any repo hits it.
 
 **See the real error.** Run codex in a tmux session that outlives it:
 
 ```bash
-tmux new-session -d -s probe -c ~/code/refinery \
+tmux new-session -d -s probe -c ~/code/<project> \
   'codex --add-dir ~/hub; echo "EXIT=$?"; sleep 600'
 sleep 8 && tmux capture-pane -p -t probe
 ```
@@ -114,9 +114,18 @@ codex sandbox -c 'sandbox_mode="workspace-write"' \
 #   -> succeeds
 ```
 
-**One-time prompt.** The first launch in a new directory asks whether you trust it. Answer
-`1. Yes, continue`; that records the directory in `~/.codex/config.toml`. It is a prompt,
-not a failure — the session stays up either way once the sandbox mode is correct.
+**Trust prompt, now skipped.** The first launch in a new directory asks "Trust this
+folder?". Left unanswered, it eats a wake: the keystrokes pick `2. Back to Agent Command
+Center` and `hubmsg` still says `confirmed`. A `-c` override does not skip the prompt, so
+`_hub_enter_codex` appends `[projects."<dir>"] trust_level = "trusted"` to
+`~/.codex/config.toml` before launching, the same record clicking "Trust" writes.
+
+**`hub show 1` resolves against the wrong project inside Codex.** Codex runs tool commands in
+its shared app-server daemon, whose environment is whatever the first launch had, so
+`tmux -e HUB_PROJECT=...` never reaches them. Check:
+`tr '\0' '\n' < /proc/$(pgrep -of 'app-server')/environ | grep HUB_`. The launcher passes
+the hub variables with `-c shell_environment_policy.set.HUB_AGENT=...` (and `.HUB_DIR`,
+`.HUB_PROJECT`).
 
 ## Related hazard: keystroke wakes collide with a human typing
 

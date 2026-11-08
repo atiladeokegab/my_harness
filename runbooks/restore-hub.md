@@ -51,6 +51,7 @@ Do **not** extract a nightly over a live `~/hub`: it rolls `projects/` and `inbo
 4. The newer board and ledger from `live/` (at most 15 minutes old):
 
    ```bash
+   gcloud storage ls -l "$B/live/"                       # the time they were copied
    gcloud storage cp "$B/live/board.json" "$B/live/events.jsonl" ~/hub/
    ```
 
@@ -59,8 +60,17 @@ Do **not** extract a nightly over a live `~/hub`: it rolls `projects/` and `inbo
    `gcloud storage cp "$B/live/board.json#<generation>" ~/hub/board.json`. Take `events.jsonl`
    from the same copy time, so the ledger matches the board.
 
-5. Check: `hub list` reads cleanly and `tail -3 ~/hub/events.jsonl` matches the newest work you
-   remember. A torn last ledger line (copied mid-append) can be deleted.
+5. Check:
+
+   ```bash
+   hub list | head                                       # loads; exit 0
+   uv run --no-project python -c 'import json,os; [json.loads(l) for l in open(os.path.expanduser("~/hub/events.jsonl"))]'
+   tail -3 ~/hub/events.jsonl                            # the newest work you remember
+   ls ~/hub/inbox ~/hub/projects | head                  # Case B
+   ```
+
+   A parse error on the last ledger line means it was copied mid-append (a torn line): delete
+   that line. Any other bad line, try an older generation.
 6. Start again: `hub resume`, start the timers (`install-factory-timers.md` on a new machine),
    relaunch the agents. Tell them the board was
    restored to <time>; work after that time is gone from the board and must be re-noted from git
@@ -76,6 +86,7 @@ S=$(mktemp -d); mkdir $S/hub
 gcloud storage cp "$N" $S/ && tar -xzf $S/$(basename "$N") -C $S/hub
 gcloud storage cp "$B/live/board.json" "$B/live/events.jsonl" $S/hub/
 env -u HUB_AGENT -u HUB_PROJECT -u CLAUDE_CODE_SESSION_NAME HUB_DIR=$S/hub hub list
+cmp <(head -n $(wc -l < $S/hub/events.jsonl) ~/hub/events.jsonl) $S/hub/events.jsonl   # a prefix of live
 rm -rf $S
 ```
 

@@ -26,7 +26,7 @@ order.
 - Tailwind's own utilities are already in `utilities` and will then win, which is what you
   want: a utility on an element should override the component class.
 
-**Both halves of this bit Refinery in one session.** First an unlayered `.btn-primary`
+**Both halves of this bit one site in one session.** First an unlayered `.btn-primary`
 overrode `hidden`, so the nav CTA rendered on phones next to the hamburger. Then moving it
 into `@layer components` dropped it below an unlayered `a { color: inherit }` in the same
 file, and every green button on the site rendered ink text on green: **1.79:1**, failing

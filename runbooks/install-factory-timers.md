@@ -176,6 +176,11 @@ for f in ~/.claude/settings.json ~/.claude-*/settings.json; do
 done
 ```
 
+A third, `session-ship-check.js`, runs `hub ship-check --quiet` at `SessionStart` and warns when
+harness files (plans, reviews, agent notes) would reach a shared repo; a clean repo prints nothing.
+Add it the same way: `.hooks.SessionStart += [{"hooks": [{"type": "command", "command":
+"node $HUB_DIR/hooks/session-ship-check.js", "timeout": 10}]}]`.
+
 Hooks load when a session starts: restart each agent at a quiet moment. Then:
 
 ```bash
