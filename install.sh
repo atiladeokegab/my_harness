@@ -110,7 +110,14 @@ step "hub -> $HUB_DIR"
 run mkdir -p "$HUB_DIR/tests" "$HUB_DIR/runbooks"
 for f in board.py hubmsg hubwaked hubctl; do put "$REPO/hub/$f" "$HUB_DIR/$f" 755 owned; done
 put "$REPO/hub/gh_sync.py" "$HUB_DIR/gh_sync.py" 644 owned   # imported by board.py: missing = hub crashes
-for f in gh_board.py live.py live_merge.py review.py spec.py workspace.py; do put "$REPO/hub/$f" "$HUB_DIR/$f" 644 owned; done   # imported by board.py / gh_sync.py
+for f in autonomy.py clean_repo.py dashboard.py gh_board.py hub_trace.py live.py live_merge.py map.py prd.py prd_grill.py \
+         review.py spec.py spec_lint.py stack_check.py workspace.py; do
+    put "$REPO/hub/$f" "$HUB_DIR/$f" 644 owned   # imported by board.py / gh_sync.py / spec.py: missing = hub crashes
+done
+for f in dashboard.html phases.html; do put "$REPO/hub/$f" "$HUB_DIR/$f" 644 owned; done   # served by hub dashboard
+run mkdir -p "$HUB_DIR/bin" "$HUB_DIR/templates/prd"
+put "$REPO/hub/bin/ws-node-modules" "$HUB_DIR/bin/ws-node-modules" 755 owned   # hub ws: per-workspace node_modules
+for f in "$REPO"/hub/templates/prd/*; do put "$f" "$HUB_DIR/templates/prd/$(basename "$f")" 644 owned; done   # hub prd
 put "$REPO/hub/Makefile" "$HUB_DIR/Makefile" 644 owned   # make check: every hub suite, and hub done's default verify for hub tasks
 # Optional Claude/Codex hooks (need node): runbooks/install-factory-timers.md section 4 wires them in.
 run mkdir -p "$HUB_DIR/hooks"
@@ -126,9 +133,11 @@ for f in "$REPO"/hub/systemd/*; do put "$f" "$HUB_DIR/systemd/$(basename "$f")" 
 put "$REPO/hub/.gitignore" "$HUB_DIR/.gitignore" 644 owned
 # Docs and the Codex protocol are yours to edit (docs/customizing.md tells you to rename
 # agents in AGENTS-codex.md), so a differing copy is backed up before it is refreshed.
-for f in HUB.md OVERVIEW.md ARCHITECTURE.md AGENTS-codex.md; do
+for f in HUB.md OVERVIEW.md ARCHITECTURE.md AGENTS-codex.md CLEAN-REPO.md; do
     put_text "$REPO/hub/$f" "$HUB_DIR/$f"
 done
+run mkdir -p "$HUB_DIR/docs/hub"
+for f in "$REPO"/hub/docs/hub/*.md; do [ -e "$f" ] && put_text "$f" "$HUB_DIR/docs/hub/$(basename "$f")"; done   # HUB.md's topic pages
 for f in "$REPO"/hub/tests/*.py; do put "$f" "$HUB_DIR/tests/$(basename "$f")" 644 owned; done
 # The Spec Tree suites' worked example.
 (cd "$REPO/hub" && find tests/fixtures -type f) | while read -r f; do
