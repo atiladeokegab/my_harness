@@ -1,7 +1,7 @@
 # The demo bar: never go easy on the demo
 
 Read when writing IDEA.md's demo line and storyboard (approval 1), the demo script and recording
-tasks (§3), and before calling the film done. Why it exists: at Night Shift (2026-10-25) the judges
+tasks (§3), and before calling the film done. Why it exists: at a past overnight hackathon the judges
 called the build great, but it placed 4th overall and missed the top three. Their words: the demo had
 "no sparkle". It had no side-by-side against anything else and not enough visualisation, and good
 audio earned no points. Remember that loss.
@@ -42,7 +42,7 @@ approval 1, so they get built rather than bolted on at freeze.
    Shift, the cutter's own 2 s pass called clean a cut that the independent pass then failed on six
    problems.
 7. **Sell it: the pitch checklist.** We keep losing on the pitch, not the build. The
-   Night Shift film had the spark built but never filmed, the narrator talking over the product, and an
+   film at a past overnight hackathon had the spark built but never filmed, the narrator talking over the product, and an
    ending with no ask. Before submission, all of these pass:
    - one promise sentence about the user ("gives a blind fan the match nobody described"), said in the
      first 15 s and again in the last 10 s; a cold viewer can say who it is for after 0:10;
@@ -54,7 +54,7 @@ approval 1, so they get built rather than bolted on at freeze.
    - the last spoken words are the promise and the ask (a pilot, a user, a buyer); an end card with
      URL, team and event holds 4 s or more; nothing on screen sits still for 6 s outside it.
 8. **Score every criterion, not just the build.** Engineering is one criterion of several; we beat
-   Quell on it and still lost.
+   the winner on it and still lost.
    - The idea's corrector must already do the correcting today and gain from it.
    - Ship one "teach it" action and one before/after number on held-out cases, shown in the product, in
      the README's first screen and in the film's first 30 s.

@@ -32,14 +32,14 @@ played it safe. We undershot by a lot; a team that let two LLMs debate won. Neve
   the goal is a finding, the same as a bug.
 - **Judge the demo as the judges will.** On every direction check and the release review, hold the
   demo script and the live first screen to the demo bar (hackathon skill §3): one measured comparison,
-  the problem statement first, then the spark, and a chart only where it proves a claim. A missing one is a `DIRECTION:`. Night Shift (2026-10-25)
+  the problem statement first, then the spark, and a chart only where it proves a claim. A missing one is a `DIRECTION:`. At a past overnight hackathon we
   placed 4th with a great build because the demo had none of them.
   Also open the live product cold, as a judge would: can you name its key feature within 5 seconds,
   and does one big button on the first screen run the main workflow end to end? If not, that's a
-  `DIRECTION:` (lessons ledger #20: judges couldn't find the key feature on the lead's page).
+  `DIRECTION:` (judges once couldn't find the key feature on the lead's page).
   And does the demo show how we used the host's tech on screen, as a chart or infographic with real
-  numbers, not only in the narration? Missing is a `DIRECTION:` (lessons ledger #21: Night Shift judges
-  wanted charts of how we used Mubit).
+  numbers, not only in the narration? Missing is a `DIRECTION:` (judges at a past
+  hackathon wanted charts of how we used the host's tech).
 - **A comparison must be fair before it is shown.** Return `CHANGES:` for a claim that presumes the
   winner, a baseline that is a strawman, a sample picked after the calls, labels made with our own
   checker or with the side visible, a rate without its n, or missing and unverifiable lines left out.

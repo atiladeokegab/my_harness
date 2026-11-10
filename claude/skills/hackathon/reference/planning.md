@@ -90,7 +90,7 @@ Always add four tasks:
 - **the README page**, `Deadline: spine + 30 min`: what it is, how to run it, the live URL and a
   screenshot, refreshed after the final run. Docs only, so it merges on a green smoke.
 
-**The demo bar: never go easy on the demo.** We placed 4th at Night Shift on a build the judges called
+**The demo bar: never go easy on the demo.** We once placed 4th on a build the judges called
 great, because the demo had "no sparkle". The eight rules (one fair hero comparison, one chart that
 proves the claim, problem then spark, polish is table stakes, film on the pipeline, record clean and
 frame-check independently, the pitch checklist, score every criterion) and the outside-viewer check at

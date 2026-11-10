@@ -147,7 +147,7 @@
   3. *Brave Search API*: Privacy-first web search API fallback.
 * **Operational Failure Resolved:**
   * *`runbooks/hubfetch-agent-hung.md`:* Unbounded HTTP fetches hung agent subshells when network drops occurred.
-  * *DevDay & Murmur API Mismatches:* Outdated assumptions on API payloads (e.g. enum arrays vs objects, Node 24 read-only properties) caused runtime 400s; verified fresh documentation eliminates spec guesswork.
+  * *Event API Mismatches:* Outdated assumptions on API payloads (e.g. enum arrays vs objects, Node 24 read-only properties) caused runtime 400s; verified fresh documentation eliminates spec guesswork.
 * **Source & Pricing (Nov 2026):**
   * `[Free / Local]` Jina Reader: https://jina.ai/reader (Free tier: 20 RPM without key; 10M free tokens at 500 RPM with free key).
   * `[Free / Local]` Trafilatura: https://trafilatura.readthedocs.io (GPL 3.0, free local Python).
@@ -197,7 +197,7 @@
   2. *RunPod Serverless*: On-demand container GPU instances.
   3. *Headless Chrome SwiftShader (`--use-gl=swiftshader`)*: Strict geometry smoke tests ONLY; never for visual sign-off.
 * **Operational Failure Resolved:**
-  * *Strata Hackathon (1 Nov 2026, Lesson 27 & 36):* Software GL rendered black/stale frames (15 min lost). 20 builders on 8-core CPU VM pushed load to 17, swinging render timings from 5s to 33s. Timings must be measured on GPU.
+  * *Strata Hackathon:* Software GL rendered black/stale frames (15 min lost). 20 builders on 8-core CPU VM pushed load to 17, swinging render timings from 5s to 33s. Timings must be measured on GPU.
   * *`runbooks/subagent-misses-background-notice.md`:* `build-gpu` sub-agent launched a background job and sat idle for 2.5 hours waiting for a completion notice that arrived only after turn end.
 * **Source & Pricing (Nov 2026):**
   * `[Proposal: Paid]` GCP Compute Engine L4: ~$0.70 / hour (spot/preemptible ~$0.30/hr).
@@ -225,7 +225,7 @@
 * **Operational Failure Resolved:**
   * *Murmur OS (7 Nov 2026):* New worktrees deployed without `.env`, silently booting on offline demo providers with audio disabled. Deploy scripts must refuse when `/health` fails to report `"provider": "live"`.
   * *`runbooks/vercel-deploy-blocked.md`:* Vercel silently blocked deployments for months because git-author identity was not linked to the team organization.
-  * *Strata (Lesson 34):* Subshell pipes masked non-zero exit codes during builds (`set -eo pipefail` required).
+  * *Strata:* Subshell pipes masked non-zero exit codes during builds (`set -eo pipefail` required).
 * **Source & Pricing (Nov 2026):**
   * `[Free / Local]` Built-in `curl`, `jq`, and hub CLI.
 
@@ -249,7 +249,7 @@
   1. *Lighthouse CLI*: Automated accessibility and contrast audit (`lighthouse --chrome-flags="--headless" --output=json`).
   2. *Manual contrast verification*: `getComputedStyle` luminance ratio calculation script.
 * **Operational Failure Resolved:**
-  * *Hackathon Retros (Night Shift Lesson 1, DevDay Lesson 25):* "We lose on the story, not the build. The demo had no sparkle." "Judges really want something that looks pretty... make it pretty first, then go from there."
+  * *Hackathon Retros:* "We lose on the story, not the build. The demo had no sparkle." "Judges really want something that looks pretty... make it pretty first, then go from there."
   * *`runbooks/tailwind-layer-order.md`:* Unlayered CSS classes overriding Tailwind utility classes.
 * **Source & Pricing (Nov 2026):**
   * `[Free / Local]` Impeccable: https://github.com/pbakaus/impeccable (Open source, pinned binary 0.1.18).
@@ -293,7 +293,7 @@
 * **Fallback Chain:**
   1. *`tee` with pipefail*: `set -o pipefail; command 2>&1 | tee output.log`.
 * **Operational Failure Resolved:**
-  * *Strata (Lesson 34):* Silent failure hiding in multi-command pipelines.
+  * *Strata:* Silent failure hiding in multi-command pipelines.
   * *`runbooks/pytest-looks-hung-cobc-compiles.md`:* Agents killing compiling tasks under the mistaken assumption that 0% CPU meant deadlocks.
 * **Source & Pricing (Nov 2026):**
   * `[Free / Local]` Hub CLI built-in.

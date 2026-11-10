@@ -18,7 +18,7 @@ Cloud Run Job with an NVIDIA L4 in europe-west1. Scripts: `gpu-stills/` under th
 
 Build the image and deploy the job once, as `gpu-stills/README.md` says (it also lists what each task
 does: GPU selection, the referer route, the poses and the `phone`, `ttff`, `home` and `tourstills` shots).
-Know what the stills do not prove (DevDay traps):
+Know what the stills do not prove (traps from a past event):
 - The warm-up waits for place data only: it does not prove textures or tiles finished loading.
 - `phone` (390x844 on an L4) checks layout, not phone performance: measure that on a real phone.
 - `ttff` is a trend, not proof of first interaction.

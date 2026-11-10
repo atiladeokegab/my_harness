@@ -54,7 +54,7 @@ which ones change this event's plan. When an event ends, add its lessons there t
 
 When the idea is put forward (IDEA.md, approval 1), think it through against the lessons: the approval
 page lists every lesson with one line on how this idea answers it, or why it does not apply. An idea
-that fails a Night Shift lesson (who corrects, one number, judging contract) goes back before approval,
+that fails a past event's lesson (who corrects, one number, judging contract) goes back before approval,
 not after the build.
 
 **Lessons go into the build plan, not only the idea.** Once
@@ -106,8 +106,8 @@ the brief's submission requirements and judging criteria: item, criterion or poi
 writing what earns full marks, naming the ambiguity (e.g. "does a prompt rule count as a model update,
 or must a trained model serve?"). Their answers go in the checklist's criterion column. Where no answer
 comes, plan for the loosest reading the judges could reward and build the strict one only if it is also
-on screen. Why: at Night Shift the brief said "corrections become model updates"; we built to the
-letter and said honestly we had no adapter serving, and the winner (Quell) took first with prompt rules
+on screen. Why: at a past overnight hackathon the brief said "corrections become model updates"; we built to the
+letter and said honestly we had no adapter serving, and the winner took first with prompt rules
 and an 82% → 91% number up front. The comparison is in the event's notes (not shipped).
 
 **Film kickoff, as soon as the event is known**, before any

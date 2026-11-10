@@ -11,14 +11,14 @@ description: >
 
 # 3D model workflow
 
-Proven on Strata (DevDay London, 1 Nov 2026): Tower Bridge from UK LiDAR, about 20 parallel builders in 2 h,
+Proven on Strata (a one-day hackathon): Tower Bridge from UK LiDAR, about 20 parallel builders in 2 h,
 then overnight. Judges: different and better engineered, but they had seen the category and wanted it
 **pretty**. So: contract, then a beautiful first screen, then the rest.
 
 ## Start here (following this cold)
 
 Run these steps in order. The sections below tell you how to do each one, and "Lessons on 3D spaces" says why.
-Lesson numbers in brackets (L25 and so on) cite the DevDay event's lessons ledger, which is not shipped; "Lessons on 3D spaces" below carries the points that matter here.
+Lesson numbers in brackets (L25 and so on) cite an event's lessons ledger, which is not shipped; "Lessons on 3D spaces" below carries the points that matter here.
 
 1. Name the subject, the origin point and the era range. Write the contract (§1) into the brief and give out paths (§2).
    Put test addresses (tag URLs, localhost, the GPU job's referer) on every restricted API key now (L35).
