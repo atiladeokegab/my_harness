@@ -204,8 +204,7 @@ They never type into a real agent's pane.
 
 ## Related repos
 
-Three tools the author runs beside the hub live in their own repos, each optional. Their links
-appear only here, so a repo rename is one edit:
+Three tools the author runs beside the hub live in their own repos, each optional:
 
 - [Studio](https://github.com/atiladeokegab/studio): a self-hosted Penpot plus a CLI that imports live
   product pages as editable boards and turns design comments into hub tasks. The

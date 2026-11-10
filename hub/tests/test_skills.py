@@ -12,6 +12,8 @@ from pathlib import Path
 
 HUB = Path(__file__).resolve().parent.parent
 SKILLS = HUB / "plugin" / "skills"
+if not SKILLS.is_dir():  # a checkout keeps skills in claude/skills, an install in plugin/skills
+    SKILLS = HUB.parent / "claude" / "skills"
 
 
 def frontmatter(text):

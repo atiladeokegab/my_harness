@@ -10,6 +10,8 @@ from pathlib import Path
 
 HUB = Path(__file__).resolve().parent.parent
 SKILLS_DIR = HUB / "plugin" / "skills"
+if not SKILLS_DIR.is_dir():  # a checkout keeps skills in claude/skills, an install in plugin/skills
+    SKILLS_DIR = HUB.parent / "claude" / "skills"
 BAD_FIXTURE = HUB / "tests" / "fixtures" / "bad_skill" / "SKILL.md"
 
 

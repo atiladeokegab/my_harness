@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parents[1] / "plugin/hooks/paste-intake.js"
+HOOK = Path(__file__).resolve().parents[1] / "hooks/paste-intake.js"  # both a checkout and an install have hub/hooks
 DICT = "the general idea was to think about different and fresh principles and then see how you put the cards"
 DOC = "Section 4.2 of the vendor contract requires all deliverables to be submitted by Friday noon."
 
