@@ -1105,7 +1105,7 @@ class TestOwnership(unittest.TestCase):
         self.assert_ok(self.run_hub("block", "6", "waiting", agent="Hermes", project="hk"))
         (self.root / "factory.json").write_text(json.dumps({
             "autonomy": {"phases": {"lead": {}}}, "agents": [{"name": "Zeus", "phase": "lead"}]}))
-        for agent in ("Hermes", "Matrix", "Zeus"):
+        for agent in ("Hermes", "Robin", "Zeus"):
             with self.subTest(agent=agent):
                 out = self.run_hub("brief", agent=agent, project="hk").stdout
                 self.assertIn("BLOCKED —", out)
