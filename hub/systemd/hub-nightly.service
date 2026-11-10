@@ -11,4 +11,6 @@ TimeoutStartSec=1h
 # A leading '-' lets the snapshot run even when the inbox archive fails.
 ExecStart=-/usr/bin/env python3 ${HUB_DIR}/inbox_gc.py
 ExecStart=-/usr/bin/env python3 ${HUB_DIR}/board.py ws gc
+# Optional: also remove old, recoverable scratch checkouts under /tmp (disk_gc.py --dry-run shows what).
+# ExecStart=-/usr/bin/env python3 ${HUB_DIR}/disk_gc.py
 ExecStart=-/bin/bash ${HUB_DIR}/snapshot.sh full

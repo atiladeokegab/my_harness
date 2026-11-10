@@ -2025,6 +2025,8 @@ def main():
     gh_sync.register(sub)
     import live
     live.register(sub)
+    import host
+    host.register(sub)
     # Repo hygiene lives in its own module -- this file is a task board, and the two
     # concerns should not grow into each other. See ~/hub/CLEAN-REPO.md.
     import clean_repo

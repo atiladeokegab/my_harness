@@ -1,0 +1,11 @@
+[Unit]
+Description=Hub spend guard: scale down warm Cloud Run revisions, report stray VMs, long jobs and budget alerts (T-1101)
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin
+Environment=HUB_DIR=%h/hub
+# Your roster, HUB_DIR and HUB_CODE_DIR, if not the defaults (runbooks/install-factory-timers.md).
+EnvironmentFile=-%h/.config/hub/env
+TimeoutStartSec=20min
+ExecStart=/usr/bin/env python3 ${HUB_DIR}/cloudrun_check.py

@@ -1,0 +1,14 @@
+[Unit]
+Description=Hand the lead's WhatsApp messages to Zeus every 5 s (hubwa poll)
+
+[Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HUB_DIR=%h/hub
+# Your roster, HUB_DIR and HUB_CODE_DIR, if not the defaults (runbooks/install-factory-timers.md).
+EnvironmentFile=-%h/.config/hub/env
+ExecStart=/bin/bash -c 'while true; do timeout 30 "$HUB_DIR/hubwa" poll | grep -v "^0 new"; sleep 5; done'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

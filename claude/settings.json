@@ -24,5 +24,41 @@
     "soft_deny": [
       "$defaults"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${HUB_DIR:-$HOME/hub}/heartbeat.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${HUB_DIR:-$HOME/hub}/heartbeat.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${HUB_DIR:-$HOME/hub}/heartbeat.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }

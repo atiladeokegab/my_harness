@@ -1,0 +1,7 @@
+# State can hold secrets and is per-machine: never commit it.
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfplan
+crash.log
+crash.*.log

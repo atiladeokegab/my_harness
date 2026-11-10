@@ -1,6 +1,6 @@
 ---
 name: design-system
-description: Build, reconcile and enforce a binding design system for a product — typefaces, palette and contrast, spacing scale, radii, effects, components and their states, icons, the brand mark, section rhythm, motion and content doctrine — then verify the built result in a real browser. Load before any visual or copy work - website pages and components, landing pages, pitch decks, one-pagers, OG images, favicons, diagrams. Triggers on "design system", "design", "styling", "brand", "typeface", "font", "colour", "color", "palette", "contrast", "spacing", "layout", "section", "deck", "slide", "logo", "wordmark", "landing page", "hero", "Figma", "tokens", "copy for the site".
+description: Build, reconcile and enforce a binding design system for a product — typefaces, palette and contrast, spacing scale, radii, effects, components and their states, icons, the brand mark, section rhythm, motion and content doctrine — then verify the built result in a real browser. Load before any visual or copy work - website pages and components, landing pages, pitch decks, one-pagers, OG images, favicons, diagrams. Triggers on "design system", "design", "styling", "brand", "typeface", "font", "colour", "color", "palette", "contrast", "spacing", "layout", "section", "deck", "slide", "logo", "wordmark", "landing page", "hero", "Figma", "tokens", "copy for the site". Not for a product's intent and UX before a design exists (designing-products), or a code-only fix with no visual change.
 ---
 
 # Design system

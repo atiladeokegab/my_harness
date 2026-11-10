@@ -1,0 +1,10 @@
+{
+  "artifactReviewPolicy": "always-proceed",
+  "useG1Credits": false,
+  "enableTelemetry": false,
+  "statusLine": {
+    "type": "command",
+    "command": "<HUB>/agy-status.sh --agent <Name>",
+    "stack_with_default": true
+  }
+}

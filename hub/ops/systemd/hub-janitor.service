@@ -1,0 +1,8 @@
+[Unit]
+Description=Hub VM disk janitor: keep / under 75% automatically
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin
+TimeoutStartSec=30m
+ExecStart=%h/hub/ops/janitor.sh

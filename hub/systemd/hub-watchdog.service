@@ -1,0 +1,10 @@
+[Unit]
+Description=Relaunch hub agents whose tmux session died
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HUB_DIR=%h/hub
+# Your roster, HUB_DIR and HUB_CODE_DIR, if not the defaults (runbooks/install-factory-timers.md).
+EnvironmentFile=-%h/.config/hub/env
+ExecStart=${HUB_DIR}/hubwatchdog

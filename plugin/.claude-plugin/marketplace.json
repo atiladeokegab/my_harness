@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "hub",
+  "description": "Skills for the agent hub on this machine, loaded identically by Claude Code and Codex.",
+  "owner": {
+    "name": "the my_harness authors"
+  },
+  "plugins": [
+    {
+      "name": "hub",
+      "description": "Focused development, team planning and board handoffs, clean repos, paste intake, hackathon setup and independent PR reviews. Self-contained workflows shared by Claude Code and Codex.",
+      "source": "./",
+      "category": "workflow"
+    }
+  ]
+}

@@ -10,6 +10,7 @@
 #   HUB_REVIEWER       the hackathon reviewer agent `hub live` sends PRs to  (default Hermes)
 #   HUB_CLAUDE_AGENTS  Claude Code agents, space-separated     (default "Zeus Apollo Hermes Athena")
 #   HUB_CODEX_AGENTS   Codex agents, space-separated           (default "Prometheus")
+#   HUB_AGY_AGENTS     Antigravity (agy) agents, space-separated (default none; runbooks/antigravity-seat.md)
 #   HUB_RELAY_SESSION  tmux session name of the wake relay     (default hub-relay)
 #   HUB_DASHBOARD      0 to not start the local dashboard (hub dashboard) with an agent
 #
@@ -24,7 +25,8 @@ HUB_REVIEWER="${HUB_REVIEWER:-Hermes}"
 # setup) is honoured; only an unset variable falls back to the default.
 HUB_CLAUDE_AGENTS="${HUB_CLAUDE_AGENTS-Zeus Apollo Hermes Athena}"
 HUB_CODEX_AGENTS="${HUB_CODEX_AGENTS-Prometheus}"
-export HUB_LEAD HUB_REVIEWER HUB_CLAUDE_AGENTS HUB_CODEX_AGENTS  # `hub gh-sync`, `hub live` and dispatch read these
+HUB_AGY_AGENTS="${HUB_AGY_AGENTS-}"
+export HUB_LEAD HUB_REVIEWER HUB_CLAUDE_AGENTS HUB_CODEX_AGENTS HUB_AGY_AGENTS  # `hub gh-sync`, `hub live` and dispatch read these
 HUB_RELAY_SESSION="${HUB_RELAY_SESSION:-hub-relay}"
 
 # `timeout` is GNU coreutils. macOS has none by default; Homebrew's coreutils installs it
@@ -295,6 +297,114 @@ _hub_enter_codex() {
     _hub_attach "$sess"
 }
 
+# --- Antigravity (agy) agents ---------------------------------------------------
+# An agy agent runs Google's Antigravity CLI on a Google AI Pro login, which
+# lives under ~/.gemini (shared with the unused Gemini CLI: never rm it). Its hooks and
+# statusLine come from the templates in $HUB_DIR/agy/, merged key by key into agy's own files
+# so your trusted folders and agy's own keys survive. runbooks/antigravity-seat.md.
+_hub_agy_config() {
+    python3 - "$HUB_DIR" "$1" "$2" <<'PY'
+import json, os, sys, tempfile
+hub, name, cwd = sys.argv[1:]
+home = os.path.expanduser("~/.gemini")
+
+def render(template):
+    text = open(os.path.join(hub, "agy", template)).read()
+    return json.loads(text.replace("<HUB>", json.dumps(hub)[1:-1]).replace("<Name>", name))
+
+def merge(path, update, trust=None):
+    try:
+        cur = json.load(open(path))
+    except FileNotFoundError:
+        cur = {}
+    except ValueError as e:
+        sys.exit(f"{path} is not valid JSON ({e}); left alone, fix it by hand")
+    if not isinstance(cur, dict):
+        sys.exit(f"{path} is not a JSON object; left alone, fix it by hand")
+    cur.update(update)
+    # shortcut: assumes trustedWorkspaces is a list of paths (unseen); any other shape is left alone.
+    tw = cur.get("trustedWorkspaces")
+    if trust and isinstance(tw, list) and all(isinstance(p, str) for p in tw) and trust not in tw:
+        tw.append(trust)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    mode = os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o644
+    with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False) as f:
+        json.dump(cur, f, indent=2)
+        f.write("\n")
+    os.chmod(f.name, mode)
+    os.replace(f.name, path)
+
+merge(os.path.join(home, "config", "hooks.json"), render("hooks.json"))
+merge(os.path.join(home, "antigravity-cli", "settings.json"), render("settings.json"), cwd)
+PY
+}
+
+_hub_enter_agy() {
+    local name="$1" want="$2"
+    local sess; sess="$(_hub_session "$name")"
+    local dir
+    # Its last workspace (what the watchdog recorded), unless told otherwise; never ~.
+    if [ -n "$want" ]; then dir="$(_hub_launch_dir "$want")" || return 1
+    else dir="$(cat "$HOME/.local/state/hub-watchdog/$name" 2>/dev/null)"; fi
+    # Else a scratch checkout the reader may write in (create it once: git init $HUB_CODE_DIR/factory-sandbox).
+    if [ ! -d "$dir" ] || [ "$dir" -ef "$HOME" ]; then dir="$HUB_CODE_DIR/factory-sandbox"; fi
+    [ -d "$dir" ] || { echo "no launch dir: $dir (create it, or name a project)" >&2; return 1; }
+
+    local v; v="$(AGY_CLI_DISABLE_AUTO_UPDATE=true timeout 20 agy --version 2>&1)"
+    # agy's self-update keeps the old binary as agy.<id>.old; put back the one matching the pinned hash.
+    if ! grep -qE '(^|[^0-9.])1\.4\.2([^0-9.]|$)' <<<"$v"; then
+        local old; for old in "$HOME"/.local/bin/agy.*.old; do
+            [ "$(sha256sum "$old" 2>/dev/null | cut -d' ' -f1)" = 085f43e0d0628a8a8dabe1e547067818fa2c0adc86cfac98a3c4492918f455ef ] || continue
+            mv "$HOME/.local/bin/agy" "$HOME/.local/bin/agy.$(date +%s).unpinned" 2>/dev/null
+            cp -p "$old" "$HOME/.local/bin/agy" && echo "agy was ${v:-missing}; restored pinned 1.4.2 from $old" >&2
+            v="$(AGY_CLI_DISABLE_AUTO_UPDATE=true timeout 20 agy --version 2>&1)"; break
+        done
+    fi
+    if ! grep -qE '(^|[^0-9.])1\.4\.2([^0-9.]|$)' <<<"$v"; then
+        echo "agy 1.4.2 needed, found: ${v:-not installed}" >&2
+        echo "  pin it from the versioned tarball (never install.sh): $HUB_DIR/runbooks/antigravity-seat.md" >&2
+        return 1
+    fi
+
+    _hub_start_relay
+    _hub_start_dashboard
+
+    if ! tmux has-session -t "$sess" 2>/dev/null; then
+        mkdir -p "$HOME/work" "$HOME/.gemini"
+        # agy reads ~/.gemini/GEMINI.md; a real file there is someone's own, so it is kept.
+        local md="$HOME/.gemini/GEMINI.md"
+        if [ ! -e "$md" ] || [ -L "$md" ]; then ln -sfn "$HUB_DIR/AGENTS-gemini.md" "$md"
+        else echo "  $md is a real file, left alone: $name will not see AGENTS-gemini.md" >&2; fi
+        _hub_agy_config "$name" "$dir" || return 1
+        # Flash by default: the Pro model's weekly bucket runs dry first. HUB_AGY_MODEL picks another
+        # Gemini model, probed once.
+        local model=gemini-3.8-flash-medium m="${HUB_AGY_MODEL:-}"
+        case "$m" in
+            ""|"$model") ;;
+            gemini-*)
+                # HUB_NO_HOOKS: the global hooks fire in -p mode too and would beat, surface and deliver as the seat.
+                if (cd /tmp && HUB_NO_HOOKS=1 AGY_CLI_DISABLE_AUTO_UPDATE=true timeout 90 env -u GEMINI_API_KEY -u AGY_ADC_AUTH \
+                        agy -p "Reply with the single word OK" --model "$m" --output-format json 2>/dev/null) \
+                        | grep -q '"status":"SUCCESS"'; then model=$m
+                else echo "  $m did not answer a probe; starting on $model" >&2; fi ;;
+            *) echo "  HUB_AGY_MODEL=$m refused: only Gemini models run in agy; starting on $model" >&2 ;;
+        esac
+        # HUB_PROJECT empty: the reader works across projects, like the lead. env -u keeps a stray
+        # key in the tmux server's env from moving agy off the AI Pro login.
+        tmux new-session -d -s "$sess" -x 200 -y 50 -c "$dir" \
+            -e HUB_AGENT="$name" \
+            -e HUB_DIR="$HUB_DIR" \
+            -e HUB_PROJECT= \
+            -e AGY_CLI_DISABLE_AUTO_UPDATE=true \
+            env -u GEMINI_API_KEY -u AGY_ADC_AUTH agy --dangerously-skip-permissions --model "$model"
+        echo "started $name in $dir  (agy $model, login: ~/.gemini/antigravity-cli)"
+        [ -e "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] || \
+            echo "  not signed in yet -- sign in with Google inside the session, once (runbook)."
+    fi
+
+    _hub_attach "$sess"
+}
+
 # One shell command per agent, named after it in lower case.
 for _hub_a in $HUB_CLAUDE_AGENTS; do
     eval "$(echo "$_hub_a" | tr '[:upper:]' '[:lower:]')() { _hub_enter $_hub_a \"\$1\"; }"
@@ -302,12 +412,25 @@ done
 for _hub_a in $HUB_CODEX_AGENTS; do
     eval "$(echo "$_hub_a" | tr '[:upper:]' '[:lower:]')() { _hub_enter_codex $_hub_a \"\$1\"; }"
 done
+for _hub_a in $HUB_AGY_AGENTS; do
+    eval "$(echo "$_hub_a" | tr '[:upper:]' '[:lower:]')() { _hub_enter_agy $_hub_a \"\$1\"; }"
+done
 unset _hub_a
 
 # Which account each agent uses, and whether it has been signed in yet.
+# Names of factory.json's agents of one kind (claude, codex, agy); nothing without a factory.json.
+_hub_factory_agents() {
+    python3 -c 'import json, sys
+try: agents = json.load(open(sys.argv[1])).get("agents") or []
+except (OSError, ValueError): agents = []
+print(" ".join(a["name"] for a in agents if isinstance(a, dict) and a.get("kind") == sys.argv[2] and a.get("name")))' \
+        "$HUB_DIR/factory.json" "$1" 2>/dev/null
+}
+
 hubaccounts() {
-    local a cfg
-    for a in $HUB_CLAUDE_AGENTS; do
+    local a cfg claudes agys
+    claudes="$(_hub_factory_agents claude)"; claudes="${claudes:-$HUB_CLAUDE_AGENTS}"
+    for a in $claudes; do
         cfg="$(_hub_config_dir "$a")"
         if [ ! -d "$cfg" ]; then
             printf "  %-11s %-28s not created yet\n" "$a" "$cfg"
@@ -326,6 +449,18 @@ hubaccounts() {
             printf "  %-11s %-28s signed in (codex)\n" "$a" "$cfg"
         else
             printf "  %-11s %-28s NEEDS LOGIN (codex)\n" "$a" "$cfg"
+        fi
+    done
+    # agy keeps its Google login in one token file (checked, never read).
+    agys="$(_hub_factory_agents agy)"; agys="${agys:-$HUB_AGY_AGENTS}"
+    cfg="$HOME/.gemini/antigravity-cli"
+    for a in $agys; do
+        if ! command -v agy >/dev/null 2>&1; then
+            printf "  %-11s %-28s agy CLI not installed\n" "$a" "$cfg"
+        elif [ -e "$cfg/antigravity-oauth-token" ]; then
+            printf "  %-11s %-28s signed in (agy)\n" "$a" "$cfg"
+        else
+            printf "  %-11s %-28s NEEDS LOGIN (agy)\n" "$a" "$cfg"
         fi
     done
 }
@@ -358,5 +493,8 @@ hubkill() {
         local sess; sess="$(_hub_session "$1")"
         tmux kill-session -t "$sess" && echo "stopped $sess"
     fi
+    # Forget it in the watchdog too, or it relaunches a deliberately stopped agent.
+    if [ "$1" = "all" ]; then rm -f "$HOME"/.local/state/hub-watchdog/*
+    else rm -f "$HOME/.local/state/hub-watchdog/$(echo "${1:0:1}" | tr '[:lower:]' '[:upper:]')${1:1}"*; fi
     _hub_prune_sockets
 }

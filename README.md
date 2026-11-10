@@ -66,11 +66,12 @@ acceptance criterion in a skill.
 | [`install.sh`](install.sh) | Idempotent installer. Backs up anything it replaces and never touches board data. Re-run it after `git pull` to upgrade. |
 | [`hub/`](hub/) | The multi-agent hub: `board.py` (the `hub` CLI), `gh_sync.py` (`hub gh-sync`), `live.py` (`hub live`), `spec.py` and `prd.py` (`hub spec`, `hub prd`: the PRD tree), `autonomy.py` (`hub agents`: per-agent phases), `workspace.py` (`hub ws`, a worktree per claim), `clean_repo.py` (`hub init-repo`, `hub ship-check`, `hub scrub`), `dashboard.py` (`hub dashboard`), `hub_trace.py` (`hub trace`), `map.py` (`hub map`), `hubmsg`, `hubwaked`, `shell.sh`, optional agent hooks (`hooks/`), the optional factory (`dispatch.py`, `run.py`, `systemd/`, `factory.example.json`), and their test suites (`make check`). [`HUB.md`](hub/HUB.md) is the index to the operating manual in [`hub/docs/hub/`](hub/docs/hub/). |
 | [`claude/CLAUDE.md`](claude/CLAUDE.md) | Global instructions for every session: the hub protocol, how I like to work, and engineering defaults (uv, testing, deploys). |
-| [`claude/settings.json`](claude/settings.json) | Settings template with agent teams on and an auto-mode skeleton. |
-| [`claude/skills/`](claude/skills/) | Eleven skills every agent shares: planning, development, grilling, first-principles checks, intake, clean-repo, product design, a design system, 3D models and the hackathon pair. The [skills index](claude/skills/README.md) says when each loads and what it needs. |
+| [`claude/settings.json`](claude/settings.json) | Settings template with agent teams on, the heartbeat hooks and an auto-mode skeleton. What the installer does to `~/.claude`, the plugin and the memory layout: [docs/claude-code.md](docs/claude-code.md). |
+| [`plugin/`](plugin/) | Manifests for packaging the skills and hooks as a Claude Code and Codex plugin; `install.sh` assembles it in `$HUB_DIR/plugin/`. |
+| [`claude/skills/`](claude/skills/) | Twelve skills every agent shares: planning, development, grilling, first-principles checks, intake, clean-repo, product design, a design system, Penpot design, 3D models and the hackathon pair. The [skills index](claude/skills/README.md) says when each loads and what it needs. |
 | [`examples/refinery-design/`](examples/refinery-design/) | A real, filled-in design skill from a shipping product: the worked example. |
 | [`runbooks/`](runbooks/) | Problems that already cost real time, each with the symptom, how to confirm it, and the fix. |
-| [`templates/`](templates/) | Starting points for a project `CLAUDE.md` and `AGENTS.md`, project settings, runbooks and hub tasks. |
+| [`templates/`](templates/) | Starting points for a project `CLAUDE.md` and `AGENTS.md`, project settings, runbooks, hub tasks, a memory layout, and a self-hosted Penpot. |
 | [`docs/`](docs/) | The guides below. |
 
 ## The factory (optional)
@@ -121,6 +122,12 @@ works: the factory section of [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
    arguing about.
 7. [**Learnings**](docs/learnings.md): the lessons that cost real time, each with why and how
    to apply it.
+8. [**The Claude Code layer**](docs/claude-code.md): instructions, settings and hooks, skills and
+   the plugin, and the memory layout.
+9. **Optional modules**, each off until you configure it: [WhatsApp to the lead](docs/optional/whatsapp.md),
+   [a cloud VM and the Cloud Run spend guard](docs/optional/cloud-run.md), [an agy seat](docs/optional/agy.md),
+   [a self-hosted Penpot](docs/optional/penpot.md). The watchdog that relaunches dead sessions is in
+   [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
 
 ---
 
@@ -136,6 +143,7 @@ that sources it). Names are case-insensitive; the tmux session is `hub-<name>`.
 | `HUB_LEAD` | `Zeus` | The planning agent. It runs on the default `~/.claude` account and gets lead-only messages |
 | `HUB_CLAUDE_AGENTS` | `Zeus Apollo Hermes Athena` | Claude Code agents, space-separated. Each non-lead one uses `~/.claude-<name>` |
 | `HUB_CODEX_AGENTS` | `Prometheus` | Codex agents. Set it to `""` for a Claude-only team |
+| `HUB_AGY_AGENTS` | empty | Antigravity CLI agents ([setup](docs/optional/agy.md)) |
 | `HUB_REVIEWER` | `Hermes` | The agent `hub live` sends event PRs to |
 | `HUB_HOME_PROJECT` | unset | Where a bare agent command starts when you are not inside a repo |
 | `HUB_DASHBOARD` | on | `0` stops the launcher starting `hub dashboard` |
@@ -151,9 +159,9 @@ a command can use them. The rest is per CLI:
 
 | | Claude Code | Codex CLI | agy (Antigravity CLI) |
 |---|---|---|---|
-| Instructions | `~/.claude/CLAUDE.md` | `~/.codex/AGENTS.md` → `$HUB_DIR/AGENTS-codex.md` | none shipped |
-| Skills | `claude/skills/`, all installed | not loaded; point it at the file path | not loaded |
-| Launcher | `shell.sh`, one config dir per agent | `shell.sh`, `--sandbox workspace-write --add-dir $HUB_DIR` | **not shipped**; add your own |
+| Instructions | `~/.claude/CLAUDE.md` | `~/.codex/AGENTS.md` → `$HUB_DIR/AGENTS-codex.md` | `~/.gemini/GEMINI.md` → `$HUB_DIR/AGENTS-gemini.md` |
+| Skills | `claude/skills/`, all installed | through the plugin (`$HUB_DIR/plugin`, [docs/claude-code.md](docs/claude-code.md)) | not loaded |
+| Launcher | `shell.sh`, one config dir per agent | `shell.sh`, `--sandbox workspace-write --add-dir $HUB_DIR` | `shell.sh`, for each name in `HUB_AGY_AGENTS`, pinned version ([setup](docs/optional/agy.md)) |
 | Wakes | typed into the tmux pane, guarded | through the `hubwaked` relay (its sandbox can't reach tmux) | the relay and dialog guards recognise agy panes |
 | Turn-end delivery hook (optional, needs `node`; [setup](runbooks/install-factory-timers.md)) | `hub/hooks/stop-deliver.js` | the same hook, from `~/.codex/hooks.json` | the same hook, `--format agy` |
 | Agent-to-agent | `hubmsg`, plus Claude's own SendMessage between Claude sessions | `hubmsg` only | `hubmsg` only |

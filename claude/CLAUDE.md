@@ -18,7 +18,8 @@ than an hour to diagnose and could recur.
 Your name is in `$HUB_AGENT`, falling back to `$CLAUDE_CODE_SESSION_NAME` (neither set
 means you're an ad-hoc session, not a hub agent). By default **Zeus** leads and plans;
 **Apollo**, **Hermes** and **Athena** execute. **Prometheus** also executes, but runs Codex
-rather than Claude Code — see Messaging, it cannot be reached with `SendMessage`.
+rather than Claude Code — see Messaging, it cannot be reached with `SendMessage`. An optional
+agy seat (`HUB_AGY_AGENTS`, Google's Antigravity CLI) is reached the same way, with `hubmsg`.
 
 `factory.json` is the source of truth for the roster and autonomy phases: use `hub agents`
 and `hub brief` for current policy and reviewer routing. The board and current inbox
@@ -33,7 +34,8 @@ never saw the conversation, so `--detail` carries the context, the files, the ap
 and the acceptance criteria. A task that needs a follow-up question was underwritten.
 Every file a task touches has exactly one owner for the cycle, written into the task.
 Small, clear tasks go straight to the change and an appropriate check; no mandatory
-planning or skill loading for simple questions and edits. Do not ask again for an action
+planning or skill loading for simple questions and edits. For nontrivial debugging,
+behaviour changes and completion checks, load the `development` skill. Do not ask again for an action
 the user already authorized.
 
 ## Files and repos (every agent)

@@ -126,6 +126,17 @@ put "$REPO/hub/shell.sh" "$HUB_DIR/shell.sh" 644 owned
 # The factory (hub/OVERVIEW.md): dispatcher, headless runner, heartbeat hook, snapshots, systemd units.
 # factory.json is yours: copy factory.example.json and edit it (runbooks/install-factory-timers.md).
 for f in dispatch.py run.py heartbeat.sh snapshot.sh; do put "$REPO/hub/$f" "$HUB_DIR/$f" 755 owned; done
+# Optional modules: inert until you set them up (docs/optional/). The watchdog relaunches dead agents;
+# hubwa is the WhatsApp bridge; cloudrun_check.py the hourly spend guard; host.py `hub host` for a cloud VM;
+# agy-status.sh the agy seat's status line; disk_gc.py an opt-in nightly /tmp cleanup.
+for f in hubwatchdog hubwa agy-status.sh; do put "$REPO/hub/$f" "$HUB_DIR/$f" 755 owned; done
+for f in host.py cloudrun_check.py disk_gc.py; do put "$REPO/hub/$f" "$HUB_DIR/$f" 644 owned; done
+for d in agy cloud ops; do
+    (cd "$REPO/hub" && find "$d" -type f) | while read -r f; do
+        run mkdir -p "$HUB_DIR/$(dirname "$f")"
+        put "$REPO/hub/$f" "$HUB_DIR/$f" "$([ -x "$REPO/hub/$f" ] && echo 755 || echo 644)" owned
+    done
+done
 put "$REPO/hub/inbox_gc.py" "$HUB_DIR/inbox_gc.py" 644 owned
 put "$REPO/hub/factory.example.json" "$HUB_DIR/factory.example.json" 644 owned
 run mkdir -p "$HUB_DIR/systemd"
@@ -133,7 +144,7 @@ for f in "$REPO"/hub/systemd/*; do put "$f" "$HUB_DIR/systemd/$(basename "$f")" 
 put "$REPO/hub/.gitignore" "$HUB_DIR/.gitignore" 644 owned
 # Docs and the Codex protocol are yours to edit (docs/customizing.md tells you to rename
 # agents in AGENTS-codex.md), so a differing copy is backed up before it is refreshed.
-for f in HUB.md OVERVIEW.md ARCHITECTURE.md AGENTS-codex.md CLEAN-REPO.md; do
+for f in HUB.md OVERVIEW.md ARCHITECTURE.md AGENTS-codex.md AGENTS-gemini.md CLEAN-REPO.md; do
     put_text "$REPO/hub/$f" "$HUB_DIR/$f"
 done
 run mkdir -p "$HUB_DIR/docs/hub"
@@ -147,6 +158,21 @@ done
 # Runbooks you wrote yourself are left alone; shipped ones are refreshed, with a backup
 # if you edited them.
 for f in "$REPO"/runbooks/*.md; do put_text "$f" "$HUB_DIR/runbooks/$(basename "$f")"; done
+
+# The plugin: the same skills and hooks packaged for `claude plugin install` and `codex plugin add`
+# (plugin/README.md). Built from claude/skills and hub/hooks, so there is one copy of each in this repo.
+(cd "$REPO/plugin" && find . -type f) | while read -r f; do
+    run mkdir -p "$HUB_DIR/plugin/$(dirname "$f")"
+    put "$REPO/plugin/$f" "$HUB_DIR/plugin/$f" 644 owned
+done
+for f in "$REPO"/hub/hooks/*.js; do put "$f" "$HUB_DIR/plugin/hooks/$(basename "$f")" 644 owned; done
+for skill in "$REPO"/claude/skills/*/; do
+    name="$(basename "$skill")"
+    (cd "$skill" && find . -type f) | while read -r f; do
+        run mkdir -p "$HUB_DIR/plugin/skills/$name/$(dirname "$f")"
+        put "$skill/$f" "$HUB_DIR/plugin/skills/$name/$f" 644 owned
+    done
+done
 
 if [ ! -f "$HUB_DIR/board.json" ]; then
     if [ "$DRY" = 1 ]; then say "  would: seed $HUB_DIR/board.json"
@@ -165,8 +191,8 @@ if [ "$DO_BIN" = 1 ]; then
     # Agent launchers and hubs/hubaccounts/hubkill are also linked to hubctl, so they work
     # from any shell (macOS logs in to zsh; shell.sh is bash). Re-run the installer after
     # changing the roster to link new names.
-    pairs="hub:board.py hubmsg:hubmsg hubwaked:hubwaked hubctl:hubctl hubrun:run.py"
-    for name in ${HUB_CLAUDE_AGENTS-Zeus Apollo Hermes Athena} ${HUB_CODEX_AGENTS-Prometheus} hubs hubaccounts hubkill; do
+    pairs="hub:board.py hubmsg:hubmsg hubwaked:hubwaked hubctl:hubctl hubrun:run.py hubwa:hubwa"
+    for name in ${HUB_CLAUDE_AGENTS-Zeus Apollo Hermes Athena} ${HUB_CODEX_AGENTS-Prometheus} ${HUB_AGY_AGENTS-} hubs hubaccounts hubkill; do
         pairs="$pairs $(echo "$name" | tr '[:upper:]' '[:lower:]'):hubctl"
     done
     for pair in $pairs; do

@@ -1,0 +1,20 @@
+{
+  "hub-<Name>": {
+    "enabled": true,
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {"type": "command", "command": "<HUB>/heartbeat.sh --agent <Name> --event PostToolUse", "timeout": 10}
+        ]
+      }
+    ],
+    "PreInvocation": [
+      {"type": "command", "command": "node <HUB>/plugin/hooks/inbox-surface.js --agent <Name> --format agy", "timeout": 10}
+    ],
+    "Stop": [
+      {"type": "command", "command": "<HUB>/heartbeat.sh --agent <Name> --event Stop", "timeout": 10},
+      {"type": "command", "command": "node <HUB>/plugin/hooks/stop-deliver.js --agent <Name> --format agy", "timeout": 10}
+    ]
+  }
+}

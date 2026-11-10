@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Keeps hub agents running. Run once a minute by the hub-watchdog systemd user timer.
+# Agent list: factory.json (via dispatch.py agents). Health classification: dispatch.py watch.
+#
+# An agent is kept alive once the watchdog has seen it running: each tick records every
+# live hub-<agent> session's directory, and a recorded agent whose session is gone is
+# relaunched there with its own launcher, then woken to resume from the board.
+# hubkill forgets the agent, so a deliberate stop stays stopped.
+# Why: 2026-10-13 an unattended upgrade killed every agent and nothing brought them back
+# (runbooks/agents-die-on-unattended-upgrade.md).
+
+HUB_DIR="${HUB_DIR:-$HOME/hub}"
+. "$HUB_DIR/shell.sh"
+unset TMUX                      # the launchers would otherwise switch a client to the new session
+state="$HOME/.local/state/hub-watchdog"
+mkdir -p "$state"
+now=$(date +%s)
+
+# Agents come from factory.json; the active-seat fallback keeps relaunch working if discovery fails.
+agents=$(timeout 20 python3 "$HUB_DIR/dispatch.py" agents 2>/dev/null)
+[ -n "$agents" ] || agents="Zeus Hermes Prometheus Hephaestus"
+for name in $agents; do
+    sess="hub-$(echo "$name" | tr '[:upper:]' '[:lower:]')"
+    # One relaunch per 5 minutes, so an agent that dies on start (expired login) doesn't loop.
+    last=$(cat "$state/$name.restarted" 2>/dev/null || echo 0)
+    why="died and was relaunched"
+    if tmux has-session -t "$sess" 2>/dev/null; then
+        tmux display-message -p -t "$sess" '#{pane_current_path}' > "$state/$name"
+        # An agy seat whose model's bucket is empty while Flash's have room restarts on Flash (the launcher's default).
+        [ -f "$HUB_DIR/state/$name.agy.json" ] && [ $((now - last)) -ge 300 ] && timeout 20 python3 "$HUB_DIR/dispatch.py" flash-fallback "$name" --since "$last" \
+            || continue
+        tmux kill-session -t "$sess"
+        why="was restarted on Flash because its model's quota ran out"
+        echo "$name: its model's quota is used up and Flash has room; relaunching on Flash"
+    fi
+    [ -f "$state/$name" ] || continue
+    if [ $((now - last)) -lt 300 ]; then
+        echo "$name: down, relaunched $((now - last))s ago, waiting"
+        continue
+    fi
+    echo "$now" > "$state/$name.restarted"
+    dir=$(cat "$state/$name")
+    launcher=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+    # Own scope, so a tmux server started here outlives this oneshot unit.
+    systemd-run --user --scope --quiet bash -c ". '$HUB_DIR/shell.sh'; unset TMUX HUB_AGY_MODEL; cd '$dir' && $launcher . </dev/null" 2>&1 \
+        | grep -v 'not a terminal'
+    echo "$name: relaunched in $dir"
+    HUB_AGENT=Watchdog timeout 60 hubmsg "$name" "[watchdog] Your session $why at $(date -u +%H:%MZ). Run hub brief and hub receive --pending, then resume your claimed tasks. Check your worktrees for uncommitted work before redoing anything; sub-agents you had running are gone, start them again. Zeus: re-arm the WhatsApp watch (Monitor: tail -n0 -F ~/hub/inbox/Zeus.jsonl for \[whatsapp from the lead) so the lead gets instant replies." 2>&1 | tail -1
+done
+
+# Health of the live sessions (T-501): classify each pane, log changes to ~/hub/watchdog.log and
+# alert Zeus. It only reads panes and writes state; the one live session the loop above restarts is an agy
+# seat whose model's quota ran out while Flash's has room.
+timeout 60 python3 "$HUB_DIR/dispatch.py" watch | grep -v ': healthy$' || true
+
+# Disk at 90%+ alerts Zeus hourly: 2026-10-18 scratch clones (~600 MB each) filled / to 100% unnoticed.
+used=$(df --output=pcent / | tail -1 | tr -dc 0-9)
+last=$(cat "$state/disk.alerted" 2>/dev/null || echo 0)
+if [ "${used:-0}" -ge 90 ] && [ $((now - last)) -ge 3600 ]; then
+    echo "$now" > "$state/disk.alerted"
+    HUB_AGENT=Watchdog timeout 60 hubmsg "${HUB_LEAD:-Zeus}" "[watchdog] Disk / is ${used}% full. Biggest: $(timeout 60 du -xsh /tmp/claude-*/*/* ~/work/* ~/code/* ~/.cache/* ~/hub/logs 2>/dev/null | sort -h | tail -3 | tr '\n' ' ')- delete scratch clones whose commits are all in ~/hub (save uncommitted diffs first)." --key watchdog:disk 2>&1 | tail -1
+fi
+
+# The wake relay and dashboard are idempotent to (re)start; Prometheus and Hephaestus can't be woken without it.
+{ tmux has-session -t hub-prometheus || tmux has-session -t hub-hephaestus; } 2>/dev/null && _hub_start_relay
+_hub_start_dashboard >/dev/null
+

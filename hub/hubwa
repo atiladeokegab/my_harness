@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""WhatsApp to the lead, through Wassist (wassist.app).
+
+  hubwa send "text"   message the lead in one or two plain sentences (any agent may); prints "sent", or
+                      "held" when the 24 h window is closed: it then goes when the lead next writes, or
+                      exits non-zero with "dropped" for technical text (paths, commands, hashes, percentages,
+                      disk, quota...): never treat that as delivered
+  hubwa read          print the lead's recent WhatsApp messages
+  hubwa read --json   the last 100 as [{id, from, text, sent_at_unix_ms}] (film's `lead <shot>` replies)
+  hubwa poll          hand new messages from the lead to Zeus's inbox (hub-whatsapp service, every 5 s);
+                      when Zeus is down (rate limited, logged out, at a prompt, no session) also to a stand-in
+
+Setup lives in ~/.config/hub (wassist.key, wassist.agent, wassist.number, whatsapp.number), never in a repo.
+The chat exists once the lead has opened the agent's connect link; WhatsApp only lets us send
+free text while the 24-hour window from the lead's last message is open (held messages, at most 10,
+follow the next "Got it" receipt).
+"""
+import json
+import os
+import re
+from datetime import datetime, timezone
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+CFG = Path.home() / ".config/hub"
+STATE = Path.home() / ".local/state/hubwa"
+API = "https://backend.wassist.app/api/v1"
+LEAD = os.environ.get("HUB_LEAD", "Zeus")
+
+
+def cfg(name):
+    return (CFG / name).read_text().strip()
+
+
+def call(method, path, body=None, tries=3):
+    """A GET is retried on a 5xx or a dropped connection: Wassist answers 502 a few times a day, which
+    failed film's `hubwa read` (2026-11-01). A POST is never retried: a 502 may still have sent it."""
+    req = urllib.request.Request(
+        API + path, method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"X-API-Key": cfg("wassist.key"), "Content-Type": "application/json"})
+    for left in range(tries - 1 if method == "GET" else 0, -1, -1):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or not left:
+                sys.exit(f"wassist {method} {path}: {e.code} {e.read().decode()[:300]}")
+        except (urllib.error.URLError, TimeoutError) as e:
+            if not left:
+                sys.exit(f"wassist {method} {path}: {e}")
+        time.sleep(2)
+
+
+def conversation():
+    """The lead's chat with our agent. Only the lead's own number counts: anyone with the
+    connect link could open a chat, and their words must never reach Zeus as the lead's."""
+    agent, lead = cfg("wassist.agent"), cfg("whatsapp.number").lstrip("+")
+    for c in call("GET", f"/conversations/?contact={lead}&ordering=-last_message_time")["results"]:
+        if c["contact"]["phoneNumber"].lstrip("+") == lead:
+            return c
+    sys.exit("no WhatsApp chat with the lead yet: they must open "
+             f"https://wa.me/{cfg('wassist.number')}?text=/connect:{agent} and send it")
+
+
+def lead_messages(conv):
+    msgs = call("GET", f"/conversations/{conv['id']}/messages/")
+    msgs = msgs["results"] if isinstance(msgs, dict) else msgs  # paginated or a bare list
+    # Wassist gives no media URL or id for a video or photo (R-29), so it reaches Zeus as a note, never dropped
+    return [m if m.get("text") else {**m, "text": {"body": f"[the lead sent a {m.get('type') or 'non-text message'}; "
+                                                           "Wassist can't hand it over; reply: Share it as a Drive "
+                                                           "link (anyone with the link) and paste it here.]"}}
+            for m in reversed(msgs) if m["role"] == "user"]
+
+
+READ_JSON = 100  # film's watcher reads every 20 s while a clip download may run minutes: no link may scroll out
+HUB = Path(__file__).resolve().parent
+DOWN = {"rate limited", "logged out", "at a prompt", "asking a question"}  # dispatch watch causes where Zeus cannot answer
+
+
+def stand_in(watch, roster, alive, default_phase="trial"):
+    """None while Zeus can answer; else the first healthy agent with a live session, Claude first, then roster order.
+    `watch` is state/watch.json, `roster` factory.json's agents, `alive(session)` whether its tmux session exists."""
+    zeus = next((a for a in roster if a["name"] == LEAD), None)
+    if zeus and alive(zeus["session"]) and (watch.get(LEAD) or {}).get("cause") not in DOWN:
+        return None
+    ok = [a for a in roster if a["name"] != LEAD and (watch.get(a["name"]) or {}).get("cause") == "healthy"
+          and (a.get("phase") or default_phase) != "off" and alive(a["session"])]  # the off phase may do nothing
+    return next(iter(sorted(ok, key=lambda a: a.get("kind") != "claude")), None)
+
+
+def zeus_cover():
+    """(stand-in name, why) when Zeus is down, else None; any unreadable state leaves the lead's words with Zeus"""
+    try:
+        watch = json.loads((HUB / "state/watch.json").read_text())
+        factory = json.loads((HUB / "factory.json").read_text())
+        roster, default_phase = factory["agents"], factory.get("autonomy", {}).get("default_phase", "trial")
+    except (OSError, ValueError, KeyError):
+        return None
+    alive = lambda s: subprocess.run(["tmux", "has-session", "-t", s], capture_output=True).returncode == 0
+    pick = stand_in(watch, roster, alive, default_phase)
+    zeus = watch.get(LEAD) or {}
+    return pick and (pick["name"], zeus.get("cause") if zeus.get("cause") in DOWN else "not running")
+
+
+def queue(name, text, secs):
+    """hubmsg `text` to `name`; True once it is in their durable inbox (hubmsg prints "queued" only after hub notify
+    succeeds), whatever became of the wake, which the relay retries by itself"""
+    try:
+        out = subprocess.run(["hubmsg", name, text], env={**os.environ, "HUB_AGENT": "WhatsApp"},
+                             capture_output=True, text=True, timeout=secs).stdout
+    except subprocess.TimeoutExpired as e:
+        out = e.stdout.decode() if isinstance(e.stdout, bytes) else e.stdout or ""
+    except OSError:
+        return False
+    return f"queued  -> {name} inbox" in out
+
+
+def save(path, text):
+    """write whole or not at all: a poll the service kills mid-write leaves the old file"""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+# The lead reads WhatsApp on a phone and asked for plain English only (2026-11-09): no paths, commands, hashes,
+# pane ids, percentages, quotas, disk space or watchdog states. Such text is dropped and logged, never sent.
+TECHNICAL = {
+    "a path": r"(?:^|[\s(])(?:~|\.{1,2})?/[\w.-]+/|\b[\w-]+\.(?:py|sh|jsonl?|log|md|ya?ml|service|timer)\b",
+    "a command": r"`|\b(?:tmux|gcloud|systemctl|sudo|git|hubmsg|hubwa|uv run|du|df|rm -\w+|kill)\b|\bhub (?:brief|receive|inbox|show|sh|claim|done)\b",
+    "a hash": r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b",
+    "a percentage": r"\d\s?%",
+    "ops wording": r"(?i)\b(?:watchdog|quota|disk|pane|pid|tmux)\b|%\d",
+}
+
+
+def technical(text):
+    """What makes `text` unfit for the lead's phone, or None when it is plain English."""
+    return next((why for why, rx in TECHNICAL.items() if re.search(rx, text)), None)
+
+
+SPEND_PREFIX = "Cloud spend guard:"  # every spend alert queued before 6381ca8; some (a shutdown only) pass technical()
+
+
+def unfit(text):
+    """technical(), plus the legacy spend-guard format by its prefix, so each of those goes through rewrite()."""
+    return "an old spend-guard report" if text.startswith(SPEND_PREFIX) else technical(text)
+
+
+SPEND_CORRUPT = ("The cloud spending check found its saved notes damaged and set them aside. Nothing was deleted "
+                 "because of it, but Zeus should check whether an alert was lost.")
+SPEND_NEUTRALIZED = ("The cloud spending check cleared an old, mistaken shutdown instruction. Nothing was deleted "
+                     "because of it.")
+UNKNOWN = "Something needs a look; details are in the hub."
+OFF = {"TERMINATED", "STOPPED", "SUSPENDED"}  # Compute Engine states where the machine is not running
+
+
+def machine(status):
+    if status == "RUNNING":
+        return "An unexpected cloud machine is running and may be costing money. Should it stay on?"
+    if status in OFF:
+        return ("An unexpected cloud machine is switched off but still exists, which can still cost a little. "
+                "Should it be deleted?")
+    return "An unexpected cloud machine exists and may be costing money. Should it be kept?"
+
+
+def legacy_spend(line):
+    """One line of a spend-guard alert queued before 6381ca8, in plain words; None for routine fixes (journal only)."""
+    if m := re.fullmatch(r"budget .*: ([\d.]+) of ([\d.]+) (\w*) spent \((\d+)% crossed\)", line):
+        cost, amount, cur, pct = m.groups()
+        money = lambda x: f"£{float(x):.0f}" if cur == "GBP" else f"{float(x):.0f} {cur}".strip()
+        state = "is used up" if int(pct) >= 100 else "is nearly used up" if int(pct) >= 90 else "is over half used"
+        return f"A cloud budget {state}: about {money(cost)} of {money(amount)} spent."
+    if m := re.fullmatch(r"VM .* \(.*, (\w+), \d+ GPU\) is not hub-host: check it", line):
+        return machine(m[1])
+    if re.fullmatch(r"job execution .* has run [\d.]+h", line):
+        return "A cloud job has been running longer than expected."
+    if re.fullmatch(r"deleted \S+ service .*", line):
+        return "To stop the charges, Hub switched off the hackathon event's apps."
+    if re.fullmatch(r"\S+ services are not all deleted yet: retrying next hour", line):
+        return "Some of the hackathon event's apps could not be switched off yet; Hub will try again within the hour."
+    if re.fullmatch(r"WARNING .* was corrupt and is kept as .*", line):
+        return SPEND_CORRUPT
+    if re.fullmatch(r"WARNING the legacy corrupt-state delete marker .* was neutralized; .*", line):
+        return SPEND_NEUTRALIZED
+    if re.match(r"(?:ran|would run): |would delete ", line):
+        return None
+    return UNKNOWN
+
+
+def rewrite(text):
+    """Technical text queued before the plain-English rule (spend outbox, held queue), by its known format: a
+    spend-guard alert line by line in plain words; watchdog and disk alerts None (operations, never the phone);
+    anything else a neutral note, so an important alert is never lost or misread."""
+    if text.startswith(SPEND_PREFIX):
+        lines = [line.strip() for line in text[len(SPEND_PREFIX):].splitlines() if line.strip()]
+        return " ".join(dict.fromkeys(filter(None, map(legacy_spend, lines)))) or None
+    if text.startswith("[watchdog]") or text.startswith("hub-host root disk"):
+        return None
+    return UNKNOWN
+
+
+def drop(text, why):
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / "dropped.jsonl").open("a") as f:
+        f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "why": why, "text": text}) + "\n")
+
+
+HELD_MAX = 10  # a day of held alerts must not flood the lead's phone when the window opens
+
+
+def send_held():
+    """The lead just wrote, so the window is open: send what `hubwa send` held while it was closed, latest last."""
+    held = STATE / "held.jsonl"
+    if not held.exists():
+        return
+    msgs = [json.loads(line) for line in held.read_text().splitlines() if line.strip()]
+    conv = conversation()["id"]
+    if len(msgs) > HELD_MAX:
+        call("POST", f"/conversations/{conv}/messages/", {"type": "text", "text": {
+            "body": f"{len(msgs) - HELD_MAX} older held messages skipped; the latest {HELD_MAX} follow."}})
+    for m in msgs[-HELD_MAX:]:
+        text = m["text"]
+        if why := unfit(text):  # held before the plain-English rule: translated, or ops kept off the phone
+            drop(text, why)
+            if not (text := rewrite(text)):
+                continue
+        call("POST", f"/conversations/{conv}/messages/",
+             {"type": "text", "text": {"body": f"(Written {m['at'].replace('Z', '')}) {text}"[:1024]}})
+    held.unlink()
+
+
+POLL_S = 20  # the service kills a poll at 30 s; a message not handed over by then waits, unseen, for the next one
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "send" and len(sys.argv) == 3:
+        if why := unfit(sys.argv[2]):
+            drop(sys.argv[2], why)
+            sys.exit(f"dropped, not sent: it contains {why}. Rewrite it as one or two plain sentences for the lead.")
+        conv = conversation()
+        if not conv["chatWindowRemainingTime"]:
+            # WhatsApp allows free text only within 24 h of the lead's last message; held, it goes when they next write
+            STATE.mkdir(parents=True, exist_ok=True)
+            with (STATE / "held.jsonl").open("a") as f:
+                f.write(json.dumps({"at": datetime.now(timezone.utc).strftime("%H:%MZ %d %b"), "text": sys.argv[2]}) + "\n")
+            print("held: the 24 h WhatsApp window is closed; it goes when the lead next messages")
+            return
+        call("POST", f"/conversations/{conv['id']}/messages/",
+             {"type": "text", "text": {"body": sys.argv[2][:1024]}})
+        print("sent")
+    elif cmd == "read" and sys.argv[2:] == ["--json"]:
+        conv = conversation()  # the lead's own chat, so every message in it is from the lead's number
+        print(json.dumps([{"id": m["id"], "from": conv["contact"]["phoneNumber"], "text": m["text"]["body"],
+                           "sent_at_unix_ms": int(datetime.fromisoformat(m["createdAt"].replace("Z", "+00:00"))
+                                                  .timestamp() * 1000)} for m in lead_messages(conv)[-READ_JSON:]]))
+    elif cmd == "read":
+        for m in lead_messages(conversation())[-10:]:
+            print(f"[{m['createdAt'][:16]}Z] {m['text']['body']}")
+    elif cmd == "poll":
+        STATE.mkdir(parents=True, exist_ok=True)
+        seen_file = STATE / "seen"
+        seen = set(seen_file.read_text().split()) if seen_file.exists() else set()
+        new = [m for m in lead_messages(conversation()) if m["id"] not in seen]
+        pending_file = STATE / "zeus-pending"  # Zeus's copies of what a stand-in took, not yet in his inbox
+        pending = json.loads(pending_file.read_text()) if pending_file.exists() else {}  # message id -> Zeus's copy
+        if isinstance(pending, list):  # 510b172 kept a list of copies with no ids
+            pending = {f"510b172-{n}": copy for n, copy in enumerate(pending)}
+        cover = zeus_cover() if new else None
+        start, handed = time.monotonic(), 0
+        for m in new:
+            left = POLL_S - (time.monotonic() - start)
+            if left < 4:
+                break
+            # Labelled as WhatsApp so Zeus weighs it as the lead's words from a phone, not a peer's.
+            head = f"[whatsapp from the lead, {m['createdAt'][:16]}Z]"
+            if cover:  # the stand-in answers now, so it is handed over first; Zeus keeps a copy for when he is back
+                first = (cover[0], f"{head} ({LEAD} is {cover[1]}: you are answering the lead for him; reply with "
+                                   f"hubwa send, and leave Zeus a hub note of what you did) {m['text']['body']}")
+            else:
+                first = (LEAD, f"{head} {m['text']['body']}")
+            # a pending Zeus copy is saved only after a hand-over, so after a crash it means "already handed over"
+            if m["id"] not in pending:
+                if not queue(*first, secs=min(8, left - 1)):
+                    break  # not handed over: stays unseen, retried next poll, in order
+                handed += 1
+                if cover:  # Zeus's copy for when he is back, saved before the message counts as seen
+                    pending[m["id"]] = f"{head} (handed to {cover[0]}: you were {cover[1]}) {m['text']['body']}"
+                    save(pending_file, json.dumps(pending))
+            seen.add(m["id"])
+            save(seen_file, "\n".join(sorted(seen)))
+        for mid in list(pending):  # kept until queued, never re-handing the stand-in's part
+            if POLL_S - (time.monotonic() - start) < 2 or \
+                    not queue(LEAD, pending[mid], secs=max(1, min(5, POLL_S - (time.monotonic() - start)))):
+                break
+            del pending[mid]
+            save(pending_file, json.dumps(pending))
+        if handed:  # instant receipt, only for what someone now holds; the real answer follows
+            who = f"{cover[0]} is on it ({LEAD} is {cover[1]})" if cover else f"{LEAD} is on it"
+            call("POST", f"/conversations/{conversation()['id']}/messages/",
+                 {"type": "text", "text": {"body": f"Got it, {who}."}})
+            send_held()
+        print(f"{handed} new" + (f", {len(new) - handed} left for the next poll" if handed < len(new) else ""))
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()

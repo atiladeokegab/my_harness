@@ -46,7 +46,7 @@ are recorded.
 
 ### Messaging
 
-Two mechanisms, because two vendors:
+Two mechanisms, because more than one vendor (Claude Code, Codex, and optionally Google's Antigravity CLI, `agy`):
 
 | Path | Mechanism | Works across vendors |
 |---|---|---|
@@ -136,6 +136,9 @@ are systemd user units, so this part is Linux only.
 | `hub-nightly.timer` | 02:30 UTC | `inbox_gc.py` (inbox lines and `logs/sh` over 7 days), `hub ws gc`, then `snapshot.sh full` |
 | `hub-weekly.timer` | Monday 07:00 UTC | `dispatch.py weekly`, then `hub spec converge` |
 | `hub-live@<p>.service` | always, one per project | `hub live --project <p>`, restarted 30 s after a crash; output to `projects/<p>/live.out` |
+| `hub-watchdog.timer` (optional) | every minute | `hubwatchdog`, then `dispatch.py watch` (replaces `hub-watch.timer`) |
+| `hub-whatsapp.service` (optional) | every 5 s | `hubwa poll`: the lead's WhatsApp messages become lead wakes (`docs/optional/whatsapp.md`) |
+| `hub-spend.timer` (optional) | hourly | `cloudrun_check.py`: scales down warm Cloud Run revisions, reports stray VMs, long jobs and budget alerts (`docs/optional/cloud-run.md`) |
 
 **The dispatcher** (`dispatch.py tick`). For each agent in `factory.json` whose autonomy phase
 enables dispatch (`hub agents` shows it; the reviewer and lead phases do not), it checks the agent holds no claimed task (a task tagged `standing` does not count), is not rate
@@ -165,11 +168,19 @@ what it asks), asking a question (a numbered choice), rate limited, logged out, 
 prose, so an agent quoting an error is not flagged. Stuck means a claimed task and no heartbeat for
 30 minutes; `heartbeat.sh`, a `UserPromptSubmit`, `PostToolUse` and `Stop` hook, writes
 `state/<agent>.json`. Claude seats run it from `settings.json`, a Codex seat from `~/.codex/hooks.json`
-with `--agent <Name>`. Without a Codex heartbeat, stuck for a Codex agent means the pane has not changed
+with `--agent <Name>`, an agy seat from `~/.gemini/config/hooks.json` (merged from `agy/` by its launcher);
+agy's statusLine runs `agy-status.sh`, which keeps its state and quota buckets (never the account email) in
+`state/<agent>.agy.json`, so watch can mark it rate limited until the bucket resets. Without a Codex heartbeat, stuck for a Codex agent means the pane has not changed
 for 30 minutes.
 A rate limit trips a breaker until the reset time shown, and the dispatcher wakes nobody behind it.
 Changes go to `watchdog.log` and to the lead agent's inbox, which also hears of any agent at a prompt
 or asking for 3 minutes, again every 15 minutes until it is answered. It never kills or relaunches a session.
+
+**The watchdog** (`hubwatchdog`, optional, `hub-watchdog.timer`). Relaunches any agent whose tmux session it
+has seen and which has vanished, in the directory it last ran in, at most once per 5 minutes, then wakes it to
+resume from the board. `hubkill` tells it to forget an agent, so a deliberate stop stays stopped. It also
+restarts the relay and dashboard, then runs `dispatch.py watch`, so with it installed `hub-watch.timer` is not
+needed. Why it exists: `runbooks/agents-die-on-unattended-upgrade.md`.
 
 **Weekly** (`dispatch.py weekly`). Two tasks for the lead: a cleanup of stale tasks, branches and
 worktrees, and a promotion of the week's `rule candidate:` lines from the reviewer into rules,
@@ -356,7 +367,13 @@ no longer confirm a dialog it happens to land on.
 | `dashboard.py`, `dashboard.html`, `phases.html` | Dashboard, phases page, metrics sink |
 | `run.py` (`hubrun`) | Headless runner for one task |
 | `hubmsg`, `hubwaked` | Queue one wake per agent; the relay, with busy, attached, dialog and reset handling |
-| `hooks/` | Optional hooks (need `node`): `stop-deliver.js`, `inbox-surface.js`, `session-ship-check.js` |
+| `hooks/` | Optional hooks (need `node`): `stop-deliver.js`, `inbox-surface.js`, `session-ship-check.js`, `paste-intake.js` |
+| `plugin/` | The skills and hooks packaged as a Claude Code and Codex plugin, built by `install.sh` |
+| `hubwatchdog` | Optional: relaunch dead agent sessions (`hub-watchdog.timer`) |
+| `agy/`, `agy-status.sh`, `AGENTS-gemini.md` | Optional agy seat: hooks and settings templates, statusLine, its instructions |
+| `hubwa` | Optional WhatsApp bridge to the lead (`hub-whatsapp.service`) |
+| `host.py`, `cloud/`, `cloudrun_check.py` | Optional cloud VM: `hub host`, Terraform and bootstrap, the hourly spend guard |
+| `ops/janitor.sh`, `disk_gc.py` | Optional disk housekeeping for a small VM |
 | `heartbeat.sh`, `snapshot.sh`, `inbox_gc.py` | Heartbeat hook and dispatch kick, bucket snapshots, nightly inbox and log prune |
 | `shell.sh`, `hubctl` | Launchers, account status, relay supervision; the executables zsh shells use |
 | `Makefile`, `tests/` | `make check`: every hub suite |

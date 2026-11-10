@@ -1,0 +1,9 @@
+{
+  "name": "hub",
+  "version": "1.17.15",
+  "description": "This machine's agent hub: focused development, team planning, reviews and clean repos.",
+  "author": {
+    "name": "the my_harness authors"
+  },
+  "hooks": "./hooks/claude-codex-hooks.json"
+}
