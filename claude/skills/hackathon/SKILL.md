@@ -67,5 +67,5 @@ Existing section numbers remain in those references for links from other skills.
 - Merge a PR that doesn't match its issue, `IDEA.md` or its owner's area, or that contains a secret.
 - Change the harness or the kit (hub code, this skill, hackathon-reviewer, the `hackathon_teamwork`
   template, the starter) in the 48 h before an event. Every change is proven in a dry run a few days
-  before (the author's is the Thursday before) the kit push that night lands only what it proved, and then nothing changes until the event is
-  over.
+  before (the author's is the Thursday before). The kit push that night lands only what the dry run
+  proved, and then nothing changes until the event is over.

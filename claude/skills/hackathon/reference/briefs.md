@@ -69,8 +69,7 @@ Each area becomes one vertical for its owner
 - `Deadline:`, `Open:` and the data-and-code line (Task briefs, above).
 
 Only `Files:`, `Acceptance:` and `Contract:` bind the owner, with the line (§7); `Approach:`,
-`Preferences:` and any seeded tasks are suggestions, and the owner decides what to build and how (the
-lead's decision, 2026-10-10). The web page's vertical says in `Approach:` that its first sub-issue
+`Preferences:` and any seeded tasks are suggestions, and the owner decides what to build and how. The web page's vertical says in `Approach:` that its first sub-issue
 copies `docs/mockup/` into its area.
 
 ## The approval-3 board
@@ -90,7 +89,7 @@ questions were theirs, and a look can't be chosen from words). Straight after th
    `docs/mockup/index.html` (static, fake data, every screen and state clickable, exact copy); for a
    product with a UI (`designing-products` G1), the surface brief with its direction contract and token
    frontmatter, `tokens.css` and the first screen at 1280x633 and 390x757, the screen the film and tour
-   open on by 10 s (lesson 37, `designing-products/reference/judge-tour.md`), and `document` at build + 60;
+   open on by 10 s (`designing-products/reference/judge-tour.md`), and `document` at build + 60;
    `Verify:` the placeholder grep on `docs/design.md` prints nothing and the mockup opens in a browser;
    `Deadline:` a deadline named `design`, set to when approval 3 is expected. Then
    `hub gh-sync --project <p>`: it becomes the first issue.

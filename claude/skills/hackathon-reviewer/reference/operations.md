@@ -6,7 +6,7 @@ hub live merges a PR **without you** only when every changed file is outside `re
 changed file is inside its issue's `Files:`, its `DONE:` has a `Verified:` line, and the smoke is
 green. Everything else waits for your `LGTM`; you see the rest after merge, in the digest (§2).
 
-Prometheus reviews first and Atlas second (the lead's decisions since 2026-10-23, updated 2026-10-30):
+Prometheus reviews first and Atlas second:
 
 - **One `LGTM` merges by default; two (Prometheus and Atlas) for a gate, privacy, delivery or security
   change.**

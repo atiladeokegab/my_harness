@@ -41,7 +41,7 @@ approval 1, so they get built rather than bolted on at freeze.
    cut, and fails it on any half-word, OS chrome, pop-up, tooltip, overlap or blank frame. Why: at Night
    Shift, the cutter's own 2 s pass called clean a cut that the independent pass then failed on six
    problems.
-7. **Sell it: the pitch checklist.** We keep losing on the pitch, not the build (the lead, 26 Oct). The
+7. **Sell it: the pitch checklist.** We keep losing on the pitch, not the build. The
    Night Shift film had the spark built but never filmed, the narrator talking over the product, and an
    ending with no ask. Before submission, all of these pass:
    - one promise sentence about the user ("gives a blind fan the match nobody described"), said in the

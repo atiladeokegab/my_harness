@@ -27,7 +27,7 @@ At each checkpoint, re-read the plan's `Lessons applied` table; at freeze minus 
 what shipped, beside Prometheus's release review (§0 "Where the lessons bite"). The reviewers enforce
 the ledger on every PR, plan and spec with hackathon-reviewer check 13 (a missing `Lessons applied`
 table or line, or a repeated ledger failure, is `CHANGES:`).
-By build + 60 the first screen is live and judged (`designing-products` G4; lessons 25, 26), then `document` writes `DESIGN.md`.
+By build + 60 the first screen is live and judged (`designing-products` G4), then `document` writes `DESIGN.md`.
 
 **Never relay through a human.** Every request to a teammate goes on GitHub as a review, a question or
 a brief change; their agent runs `scripts/team-inbox.sh` after each push and every 5 minutes and acts

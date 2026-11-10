@@ -13,7 +13,7 @@ the current task and phase decide authorization. The summary is in SKILL.md "Cur
 
 ## Zeus's builder sub-agents
 
-Zeus builds the lead's bigger tasks through background sub-agents (the lead's decision, 2026-09-29),
+Zeus builds the lead's bigger tasks through background sub-agents,
 and never in its own session, so it can always answer the lead and the queue.
 
 - One sub-agent per task, in its own worktree:
@@ -31,9 +31,9 @@ and never in its own session, so it can always answer the lead and the queue.
                  exactly: it overrides AGENTS.md §5 (worktree, never the shared clone).")
   ```
   The prompt names the rules file because a session loads agent definitions only when it starts: a
-  Zeus started before `builder.md` existed gets a plain sub-agent that never sees them (builder test,
-  2026-09-29: it checked out in the shared clone and skipped the smoke). The builder test on
-  2026-09-29 (issue #12) passed every step with this prompt.
+  Zeus started before `builder.md` existed gets a plain sub-agent that never sees them (in a builder
+  test it checked out in the shared clone and skipped the smoke). A builder test with this prompt
+  passed every step.
 - When a reviewer asks for changes, hub live tells the agent in the issue's label: for a Zeus
   sub-agent, Zeus resumes `build-N` by name with the review's text; Hermes fixes its own.
 - Lessons: Zeus names the lessons that bear on the task (SKILL.md §0 "Where the lessons bite").
@@ -63,7 +63,7 @@ the release review at freeze minus 45.
   then checks those lines before the merge.
 - A reviewer never builds what it reviews.
 - Prometheus also owns every test task (SKILL.md §3) and scores the C4 at approval 1.
-- Both work on GitHub **with the lead's token** (the lead's decision, 2026-09-28 for Prometheus), so to
+- Both work on GitHub **with the lead's token**, so to
   GitHub their work is the lead's. The event repo's AGENTS.md does not name them; these are their rules.
 - **Relaunch Prometheus in the event repo** before giving it event work: `hubkill prometheus`, then
   `prometheus <event>`, and leave its window with `Ctrl-b d` (never `Ctrl-c` or `/quit`, which end the

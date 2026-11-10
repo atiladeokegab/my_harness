@@ -97,7 +97,7 @@ frame-check independently, the pitch checklist, score every criterion) and the o
 the rough cut and freeze minus 4 h: [demo-bar.md](demo-bar.md). The demo script's Acceptance
 includes every rule (1 to 8).
 
-**Prometheus owns every test task** (since 2026-10-23): the sample data, the unseen sets, the eval
+**Prometheus owns every test task**: the sample data, the unseen sets, the eval
 cases and the dry reality test. Prometheus is the reviewer and is never a rules owner: a sample written
 by the rules' author only tests what the author already thought of. It writes them from the goal, not
 the given dataset: held-out, adversarial and production-shaped cases, per hackathon-reviewer "Tests and
@@ -119,7 +119,7 @@ debate won).
 (`hub new "<area>: <what it delivers>" --vertical --owner <person> --project <p>`); its brief fields
 are in [briefs.md](briefs.md) "Vertical briefs". Only `Files:`, `Acceptance:` and `Contract:`
 bind the owner, with the line (§7); everything else is a suggestion, and the owner decides what to
-build and how (the lead's decision, 2026-10-10). Owners break their own vertical into sub-issues in the
+build and how. Owners break their own vertical into sub-issues in the
 room, then live (§6 step 9, [live.md](live.md) "Watching the breakdowns"). The core and the
 submission track stay ordinary tasks.
 

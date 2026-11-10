@@ -1136,6 +1136,8 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
                 self.assertEqual(r.returncode, 1, r.stderr)
                 self.assertNotIn("Traceback", r.stderr)
                 self.assertIn("hackathon.json", r.stderr)
+                if why == "template not owner/name":  # check_config's own message, not repo_state's later refusal
+                    self.assertIn("template must be owner/name", r.stderr)
 
     def test_two_designers_are_refused_and_named(self):
         self.write_cfg(roster=[{**CFG["roster"][0], "designer": True},

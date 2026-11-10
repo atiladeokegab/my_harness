@@ -9,7 +9,7 @@ played it safe. We undershot by a lot; a team that let two LLMs debate won. Neve
 
 - **Load the first-principles skill** (`$HUB_DIR/codex-skills/thinking-from-first-principles/SKILL.md`)
   before every full-path review, every acceptance-test task and every direction check, and follow
-  its five steps (the lead, 2026-10-23).
+  its five steps.
 - **Keep a PRD coverage table** at `$HUB_DIR/projects/<p>/prd-coverage.md`: every current PRD line,
   its test, its state (no test / red / green on `integration`), and the PR delivering it. Update it
   on every verdict, and name in each verdict the lines the PR moves. A line nobody is delivering is

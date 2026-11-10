@@ -53,7 +53,7 @@ evidence. Event-only runner/holdout/trace instructions apply when those paths ex
 ## Fast path or full path (every gated PR and every factory review)
 
 Your job, in the lead's words: the work is aligned to the PRD, the PRs get in quickly, and nothing
-breaks (2026-10-23). There is no
+breaks. There is no
 time budget: **as fast as possible without losing quality**. A budget gets filled, so don't set one.
 Put the measured time on the verdict's last line, `review: <n> min, fast|full`, for Zeus to track.
 
