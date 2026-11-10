@@ -22,15 +22,17 @@ Plans, specs and reviews live only in `$HUB_DIR/projects/<project>/`, never in t
 
 ## Current roles and boundaries
 
-The agent names in this skill are the author's roster: Zeus the lead, Hermes the builder, Prometheus
-and Atlas two Codex reviewers, Hephaestus an agy seat. Read them as the matching roles in yours
-(`HUB_LEAD`, `HUB_REVIEWER`, `HUB_CLAUDE_AGENTS`, `HUB_CODEX_AGENTS`).
+The agent names in this skill (and hackathon-reviewer) are the author's roster. Map them onto yours:
+Zeus is your lead (`$HUB_LEAD`); Prometheus is your reviewer (`$HUB_REVIEWER`, or the factory.json agent
+in phase `reviewer`); Atlas is a second reviewer if you have one (without one, every PR needs only the
+one `LGTM`); Hermes is a Claude worker that builds the lead's smaller tasks (any of
+`$HUB_CLAUDE_AGENTS` other than the lead and the reviewer); Hephaestus is an agy seat, if you run one.
+With the default roster the reviewer is Hermes, so pick another worker for Hermes's building role.
 
 `hub agents` / factory.json and the current task are authoritative for permissions and
 ownership. All available agents can build when assigned; reviewers never review their
 own changes. Zeus delegates builds and never builds in his own session, so he remains
-available to the lead. Use the runtime's available capacity, without the retired
-three-builder cap. The reviewer order and required approvals come from current policy.
+available to the lead. Run as many builders as your accounts' capacity allows. The reviewer order and required approvals come from current policy.
 
 The event's owners are humans; agents are delegates acting on the lead's account.
 They take no pool issues and never `hub done` a task with a GitHub issue: gh-sync closes
@@ -64,6 +66,6 @@ Existing section numbers remain in those references for links from other skills.
 - Edit `AGENTS.md` for one event. Event details go in `HACKATHON.md`.
 - Merge a PR that doesn't match its issue, `IDEA.md` or its owner's area, or that contains a secret.
 - Change the harness or the kit (hub code, this skill, hackathon-reviewer, the `hackathon_teamwork`
-  template, the starter) in the 48 h before an event. Every change is proven in the Thursday dry run
-  first; the kit push that night lands only what it proved, and then nothing changes until the event is
+  template, the starter) in the 48 h before an event. Every change is proven in a dry run a few days
+  before (the author's is the Thursday before) the kit push that night lands only what it proved, and then nothing changes until the event is
   over.

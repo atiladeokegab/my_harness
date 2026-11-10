@@ -1127,6 +1127,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
             "handle not a handle": json.dumps({**CFG, "roster": [*CFG["roster"], {"name": "Bo", "github": "bo gh!"}]}),
             "deadline without a name": json.dumps({**CFG, "deadlines": [*CFG["deadlines"], {"at": "2026-10-04T16:00+01:00"}]}),
             "duplicate deadline": json.dumps({**CFG, "deadlines": [*CFG["deadlines"], CFG["deadlines"][1]]}),
+            "template not owner/name": json.dumps({**CFG, "template": "hackathon_teamwork"}),
         }
         for why, text in cases.items():
             with self.subTest(why):
@@ -1219,7 +1220,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertNotIn("warning", r.stdout)
 
     def test_refuses_a_repo_not_made_from_the_template(self):
-        self.env["GH_TEMPLATE"] = ""                  # e.g. hackathon.json typo'd to a real repo
+        self.env["GH_TEMPLATE"] = ""                  # e.g. hackathon.json names a repo not made from the template
         self.add_task("T-001")
         for args in ((), ("--init",)):
             with self.subTest(args=args):
@@ -1228,6 +1229,19 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
                 self.assertIn("refusing", r.stderr)
                 self.assertNotIn("Traceback", r.stderr)
         self.assertEqual(self.writes(), [])           # no issue, no invite, no protection
+
+    def test_your_own_template_copy_is_used_when_hackathon_json_names_it(self):
+        self.write_cfg(template="me/hackathon_teamwork")
+        self.env["GH_TEMPLATE"] = "me/hackathon_teamwork"
+        self.add_task("T-001")
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.use_agents({**AGENT_CFG, "template": "me/hackathon_teamwork"})
+        self.env["GH_REPO_MISSING"] = "1"
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(["repo", "create", "o/hk", "--template", "me/hackathon_teamwork", "--public", "--clone"],
+                      self.calls())
 
     def test_repo_name_must_match_the_project(self):
         self.write_cfg(repo="o/refinery")

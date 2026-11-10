@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import board as hb
 
-TEMPLATE = "atiladeokegab/hackathon_teamwork"
+TEMPLATE = "atiladeokegab/hackathon_teamwork"  # the public template; hackathon.json "template" names your own copy
 # The same roster shell.sh uses. Hub agents' issues are assigned to the lead's GitHub
 # handle and labelled agent:<name>; change-requests go to the lead agent's inbox.
 LEAD_AGENT = hb.canon(os.environ.get("HUB_LEAD") or "Zeus")
@@ -346,6 +346,8 @@ def check_config(cfg, project, init=False):
             or not isinstance(cfg.get("deadlines"), list):
         return ["needs an object with repo, deadlines (a list) and roster (a list)"]
     problems = []
+    if "template" in cfg and not re.fullmatch(r"[\w.-]+/[\w.-]+", str(cfg["template"])):
+        problems.append("template must be owner/name: your copy of the hackathon_teamwork template repo")
     if init:
         for field in ("event", "title", "summary", "smoke"):
             if not isinstance(cfg.get(field), str) or not cfg[field].strip():
@@ -477,7 +479,7 @@ def apply(changes, dry):
             hb.log(events, who, event, tid, **{k: v for k, v in fields.items() if k in ("status", "owner")})
 
 
-def repo_state(gh, repo):
+def repo_state(gh, repo, template=TEMPLATE):
     """'missing', or 'ours' for a repo made from the template. Anything else is refused
     before a single write: --init rewrites branch protection and invites people."""
     try:
@@ -489,8 +491,8 @@ def repo_state(gh, repo):
         sys.exit(f"gh-sync: can't read {repo}: {e}")
     tpl = (info or {}).get("templateRepository") or {}
     made_from = f"{(tpl.get('owner') or {}).get('login')}/{tpl.get('name')}"
-    if made_from.lower() != TEMPLATE.lower():
-        sys.exit(f"gh-sync: refusing to touch {repo}: it was not created from {TEMPLATE}. "
+    if made_from.lower() != template.lower():
+        sys.exit(f"gh-sync: refusing to touch {repo}: it was not created from {template}. "
                  "Check the repo in hackathon.json.")
     return "ours"
 
@@ -1182,7 +1184,7 @@ def init(cfg, gh, repo, failures, exists):
     if not gh.dry:
         os.makedirs(code, exist_ok=True)  # a fresh machine has no code dir yet
     if new:
-        gh("repo", "create", repo, "--template", TEMPLATE, "--public", "--clone", cwd=code)
+        gh("repo", "create", repo, "--template", cfg.get("template") or TEMPLATE, "--public", "--clone", cwd=code)
     elif not os.path.isdir(dest):  # a rerun on another machine, or after a clean-up
         gh("repo", "clone", repo, dest)
     if os.path.isdir(dest) and gh.dry:
@@ -1290,7 +1292,7 @@ def cmd_gh_sync(a):
         except BlockingIOError:
             sys.exit(f"gh-sync: another gh-sync is already running for {project}; try again in a minute")
     repo, failures = cfg["repo"], []
-    exists = repo_state(gh, repo) == "ours"
+    exists = repo_state(gh, repo, cfg.get("template") or TEMPLATE) == "ours"
     if not exists and not a.init:
         sys.exit(f"gh-sync: {repo} doesn't exist yet -- run with --init first")
     try:

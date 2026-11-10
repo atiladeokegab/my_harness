@@ -202,6 +202,12 @@ the transport wakes agents by typing into their tmux pane. That is guarded (it n
 into a pane a human is attached to, or one showing a confirmation dialog), but it is still
 keystrokes. See the known limitations in [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
 
+Some code paths serve the author's private tools, which are not shipped and stay inert without
+them. The main one: `hub done` on a task tagged `ui` asks Studio (a design-approval tool built on
+Penpot) whether the design was approved. With no Studio configured it skips the check silently. Studio is
+its own repo. The `penpot-comment` and `penpot-design` intake sources are labels
+for tasks Studio files.
+
 ## Contributing
 
 Issues and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) covers the checks a

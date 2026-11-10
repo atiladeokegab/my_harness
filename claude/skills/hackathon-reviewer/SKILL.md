@@ -4,7 +4,7 @@ description: >
   Runs the reviewer's routine for an event run with hackathon: gated PRs before they merge,
   the after-merge digest of everything else, FLAG: on drifting sub-issues, and the release review
   at freeze minus 45. Use when the session is the hub's reviewer (the factory.json agent in phase
-  reviewer: Prometheus, also Atlas) reviewing an event repo, when hub live sends "PR #N ready for review", "merged without
+  reviewer, or `$HUB_REVIEWER`) reviewing an event repo, when hub live sends "PR #N ready for review", "merged without
   review:" or "release review:", or when Zeus starts a backup reviewer sub-agent; its "Rule
   candidates" section also applies to every factory review the reviewer does. Not for planning or
   building (hackathon), not for merging or reverting (hub live and Zeus do that), and never for
@@ -13,14 +13,15 @@ description: >
 
 # Reviewing a hackathon
 
-The reviewer is the factory.json agent in phase `reviewer`: Prometheus since 2026-10-23.
-Where this says Hermes, read the reviewer.
+The reviewer is `$HUB_REVIEWER`, or the factory.json agent in phase `reviewer` if you run the factory.
+The names here are the author's roster: read Prometheus (and the older Hermes) as your reviewer, Atlas
+as a second reviewer if you have one, and Zeus as your lead (`$HUB_LEAD`); hackathon SKILL.md maps the rest.
 
 You review; hub live merges; Zeus decides. You never revert, edit code (except a small fix, below),
 briefs or `IDEA.md`, never merge or change merge controls,
 and never answer a question for an owner. What you check against: `$HUB_DIR/projects/<p>/hackathon.json`,
 the repo's `IDEA.md` (areas, `Ceilings`, `Deploy owner`), `docs/CONTRACT.md`, and the issue the PR
-closes. Every `gh` command names the repo (`-R <repo>`). `P=~/code/<p>` below.
+closes. Every `gh` command names the repo (`-R <repo>`). `P=$HUB_CODE_DIR/<p>` below.
 
 ## Choose the review
 

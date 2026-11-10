@@ -19,11 +19,12 @@ export HUB_DIR="${HUB_DIR:-$HOME/hub}"
 export HUB_CODE_DIR="${HUB_CODE_DIR:-$HOME/code}"
 export HUB_HOME_PROJECT="${HUB_HOME_PROJECT:-}"
 HUB_LEAD="${HUB_LEAD:-Zeus}"
+HUB_REVIEWER="${HUB_REVIEWER:-Hermes}"
 # `-` not `:-`: an explicitly empty roster (e.g. HUB_CODEX_AGENTS="" for a Claude-only
 # setup) is honoured; only an unset variable falls back to the default.
 HUB_CLAUDE_AGENTS="${HUB_CLAUDE_AGENTS-Zeus Apollo Hermes Athena}"
 HUB_CODEX_AGENTS="${HUB_CODEX_AGENTS-Prometheus}"
-export HUB_LEAD HUB_CLAUDE_AGENTS HUB_CODEX_AGENTS  # `hub gh-sync` reads the roster
+export HUB_LEAD HUB_REVIEWER HUB_CLAUDE_AGENTS HUB_CODEX_AGENTS  # `hub gh-sync`, `hub live` and dispatch read these
 HUB_RELAY_SESSION="${HUB_RELAY_SESSION:-hub-relay}"
 
 # `timeout` is GNU coreutils. macOS has none by default; Homebrew's coreutils installs it

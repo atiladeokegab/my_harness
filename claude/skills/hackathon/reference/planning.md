@@ -43,7 +43,7 @@ At approval 1 Zeus also:
 - asks one question: "Needs UDP, a stable IP or a GPU?" If yes, the answer goes in "Changes to the
   platform spec:" with the deploy owner's plan;
 - turns the storyboard into the film's story: fills event.json, runs `film.story prepare`, writes
-  `criteria-map.md` and applies lesson 7 (the film is the pitch), per your film pipeline's notes (not shipped)
+  `criteria-map.md` and applies the lesson that the film is the pitch, per your film pipeline's notes (not shipped)
   "At approval 1";
 - **publishes the repo**: runs §6 steps 0–5 straight after it, so the designer's agent has a repo to
   work in (§2a) while Zeus writes the spec, plan and board. The issues for the verticals still wait for

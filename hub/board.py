@@ -1411,14 +1411,13 @@ def pr_evidence_guard(t):
 def studio_gate(t):
     """A task tagged ui, on a product in Studio's sites.yaml, needs `studio gate` to pass: an approved design
     proposal, or a lead waiver recorded in Studio. --force does not skip it; the waiver is the bypass.
-    No Studio configured leaves the task ungated; once it is, any failure to get a clear pass refuses."""
+    No Studio configured leaves the task ungated, with nothing printed; once it is, any failure to get a clear pass refuses."""
     if "ui" not in (t.get("tags") or []):
         return
     studio = os.path.expanduser(os.environ.get("HUB_STUDIO_DIR") or os.path.join(os.environ.get("HUB_CODE_DIR") or "~/code", "studio"))
     sites = os.environ.get("STUDIO_SITES") or os.path.join(studio, "sites.yaml")
     if not os.environ.get("STUDIO_SITES") and not os.path.exists(sites):
-        print(f"studio gate: no Studio configured (no $STUDIO_SITES, no {sites}); {label(t)} is not gated")
-        return
+        return  # Studio is optional; without it a ui task is ungated, silently
     where = f"{label(t)} is a UI task on {t.get('project')}"
     try:
         with open(os.path.expanduser(sites)) as f:

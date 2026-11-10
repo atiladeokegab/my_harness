@@ -38,7 +38,7 @@ text to paste.
 pool work and what got closed. A brief edited on GitHub is never overwritten: every sync warns until
 the lead decides with `hub edit N --take-github` or `hub edit N --keep-hub`.
 
-**Every GitHub command names the repo** (`-R <owner>/<p>`) and a number: Zeus runs from `~/hub`, where
+**Every GitHub command names the repo** (`-R <owner>/<p>`) and a number: Zeus runs from `$HUB_DIR`, where
 a bare `gh pr list` finds no repo, and from any other checkout it would act on the wrong one. **One
 integration pass at a time:** finish one merge's smoke and its promote or revert before merging the
 next.

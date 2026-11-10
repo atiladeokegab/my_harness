@@ -361,7 +361,7 @@ exec {shutil.which("uv")} "$@"
         self.assertEqual([t["status"] for t in self.read_board()["tasks"]], ["done"] * 3)
 
     def test_the_studio_gate_fails_closed_once_studio_is_configured(self):
-        """Zeus's ruling on T-1099: with no Studio configured a ui task is ungated (one line says so); once
+        """Zeus's ruling on T-1099: with no Studio configured a ui task is ungated (silently); once
         $STUDIO_SITES is set, a missing, crashing, timing-out or unparseable gate refuses hub done."""
         bin_, sites = self.root / "bin", self.root / "sites.yaml"
         bin_.mkdir()
@@ -386,7 +386,7 @@ esac
             self.assert_ok(self.run_hub("claim", str(n), project="web"))
         r = self.run_hub("done", "1", project="web", env_extra=none)
         self.assert_ok(r)
-        self.assertIn("no Studio configured", r.stdout)
+        self.assertNotIn("Studio", r.stdout + r.stderr)
         for m, why in (("deny", "exit 1"), ("crash", "boom"), ("garbage", "not a gate decision"),
                        ("liar", "allowed is not true")):
             mode.write_text(m)

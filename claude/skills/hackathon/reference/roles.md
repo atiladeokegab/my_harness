@@ -17,11 +17,11 @@ Zeus builds the lead's bigger tasks through background sub-agents (the lead's de
 and never in its own session, so it can always answer the lead and the queue.
 
 - One sub-agent per task, in its own worktree:
-  `git -C ~/code/<p> worktree add .worktrees/<N>-<slug> -b <N>-<slug> origin/integration`.
+  `git -C $HUB_CODE_DIR/<p> worktree add .worktrees/<N>-<slug> -b <N>-<slug> origin/integration`.
   It follows AGENTS.md like any agent on the lead's account: label `agent:zeus`, plan comment first,
   one commit per step, a PR that says `Closes #N`. The reviewers review those PRs like any other, so
   nobody reviews their own work.
-- **Use available runtime capacity** and current assignments; the old three-builder cap is retired.
+- **Use available runtime capacity** and current assignments; run as many builders as capacity allows.
 - Label the issue `agent:zeus` first. Then start it with the `builder` agent type
   (`~/.claude/agents/builder.md` holds its rules and current model default).
   `name` lets Zeus resume the same sub-agent later:
@@ -41,7 +41,7 @@ and never in its own session, so it can always answer the lead and the queue.
   `Lessons applied:`; a plan comment without that line goes back before the build.
 - A sub-agent can't ask the lead anything: it reports back, and Zeus asks.
 - When a builder's issue closes, remove its worktree:
-  `git -C ~/code/<p> worktree remove .worktrees/N-<slug> && git -C ~/code/<p> branch -D N-<slug>`.
+  `git -C $HUB_CODE_DIR/<p> worktree remove .worktrees/N-<slug> && git -C $HUB_CODE_DIR/<p> branch -D N-<slug>`.
 
 ## Hermes
 

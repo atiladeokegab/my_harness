@@ -14,7 +14,8 @@ sync keeps it. If a sync later conflicts with your change, the maintainer resolv
 
 1. **Keep the hub dependency-free.** `hub/` is Python standard library, bash, tmux and git. A new
    dependency needs a reason in the PR, and an optional one must degrade cleanly when absent.
-2. **Run the checks.** `make check` unsets every `HUB_*` variable, so nothing touches a live hub:
+2. **Run the checks.** `make check` unsets the roster and session variables (`HUB_DIR`, `HUB_AGENT`, `HUB_LEAD` and the
+   rest of its `unexport` line), so the suites build their own hub in a temp dir:
    ```bash
    cd hub && make check
    ```

@@ -9,12 +9,12 @@ unexport HUB_DIR HUB_AGENT HUB_PROJECT HUB_CODE_DIR HUB_LEAD HUB_REVIEWER HUB_CL
 
 # One make check at a time (8 cores, several agents): parallel runs time each other out. Workers get
 # 9>&- so a daemon a test leaves behind cannot hold the lock. Keep the lock in the shared hub tree.
-CHECK_LOCK ?= $(HOME)/hub/state/make-check.lock
+CHECK_LOCK ?= $(or $(HUB_DIR),$(HOME)/hub)/state/make-check.lock
 # A queued run whose tree is unchanged since the last passing run (tracked files, index, untracked
 # non-ignored files outside projects/, uv and python versions) skips the suite: agents' verifies used to re-test the same
 # tree back to back, about 6.5 minutes each. Agents write untracked notes under projects/ all the time
 # and no test reads them (test_setup guards that). FORCE=1 always runs. Outside a git checkout it never caches.
-CHECK_OK ?= $(HOME)/hub/state/make-check.ok
+CHECK_OK ?= $(or $(HUB_DIR),$(HOME)/hub)/state/make-check.ok
 .PHONY: check
 check:
 	@start=$$SECONDS; out=$$(mktemp -d); trap 'rm -rf "$$out"' EXIT; \

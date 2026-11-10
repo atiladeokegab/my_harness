@@ -139,11 +139,11 @@ run `git pull --no-rebase origin integration`, fix the conflicts in your area, p
 
 ## Smoke, then promote or revert
 
-After every merge into `integration`. Never in `~/code/<p>` itself: Prometheus works there. Use a
+After every merge into `integration`. Never in `$HUB_CODE_DIR/<p>` itself: Prometheus works there. Use a
 throwaway worktree:
 
 ```bash
-P=~/code/<p>
+P=$HUB_CODE_DIR/<p>
 git -C "$P" fetch -q origin && d=$(mktemp -d) &&
   git -C "$P" worktree add -q --detach "$d" origin/integration &&
   sha=$(git -C "$d" rev-parse HEAD) && {
@@ -177,7 +177,7 @@ never moved.
 
 Zeus's own commits on the event repo (the IDEA.md table, docs) follow the revert's pattern: a throwaway
 worktree on `origin/integration`, commit, `git -C "$d" push origin HEAD:integration`, then smoke and
-promote. Never commit in `~/code/<p>` once Prometheus works there.
+promote. Never commit in `$HUB_CODE_DIR/<p>` once Prometheus works there.
 
 ## Code freeze
 
