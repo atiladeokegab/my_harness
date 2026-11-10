@@ -43,7 +43,7 @@ At approval 1 Zeus also:
 - asks one question: "Needs UDP, a stable IP or a GPU?" If yes, the answer goes in "Changes to the
   platform spec:" with the deploy owner's plan;
 - turns the storyboard into the film's story: fills event.json, runs `film.story prepare`, writes
-  `criteria-map.md` and applies the lesson that the film is the pitch, per your film pipeline's notes (not shipped)
+  `criteria-map.md` and applies the lesson that the film is the pitch, per [film.md](film.md)
   "At approval 1";
 - **publishes the repo**: runs §6 steps 0–5 straight after it, so the designer's agent has a repo to
   work in (§2a) while Zeus writes the spec, plan and board. The issues for the verticals still wait for
@@ -74,7 +74,7 @@ For a product with a UI the mockup is gate G1 of `designing-products` ([SKILL.md
 The starter copied in as the first code commit, then `docs/CONTRACT.md`, then the day spec's P0 on the
 core with assigned builders within available runtime capacity: smoke-green on one case and deployed (`/health` ok) by the
 `spine` deadline. Every vertical extends it. Then the production audit after the first real-provider
-deploy. Steps and the copy script: your starter's notes (not shipped).
+deploy. Steps and the copy script: [spine.md](spine.md).
 
 
 ## 3. Submission track
@@ -85,7 +85,7 @@ Always add four tasks:
   spine works, with a complete draft by code freeze, then adjust after the final run;
 - **the recording**, `Deadline: submit` (or the demo-video deadline if the event has one), on the film
   pipeline; at the film freeze it submits the last-green film, never a newer red one (brief text and
-  pipeline: your film pipeline's notes (not shipped) "Recording on the pipeline");
+  pipeline: [film.md](film.md) "Recording on the pipeline");
 - **the submission form**, `Deadline: submit`; its Acceptance is "every Submission checklist row done";
 - **the README page**, `Deadline: spine + 30 min`: what it is, how to run it, the live URL and a
   screenshot, refreshed after the final run. Docs only, so it merges on a green smoke.

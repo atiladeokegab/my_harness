@@ -52,7 +52,7 @@ rather than wait, then smoke and promote as the Live loop does: the demo runs fr
 that never reaches it is missing from the demo.
 
 **The film, in the take window:** the lead records; the render machine builds; Zeus watches each take's
-message and routes a red gate per your film pipeline's notes (not shipped) "In the take window". Before
+message and routes a red gate per [film.md](film.md) "In the take window". Before
 submit, someone who did not cut it frame-checks the last-green film.
 
 **Each situation, in [live.md](live.md):** watching the breakdowns against the line (`FLAG:`,

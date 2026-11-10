@@ -12,6 +12,7 @@ Python + Next.js product; the lesson in each generalises.
 | Runbook | Symptom it solves |
 |---|---|
 | [`agents-die-on-unattended-upgrade.md`](agents-die-on-unattended-upgrade.md) | Every agent and sub-agent dies at once on a Linux host with no reboot: unattended-upgrades restarted logind and linger was off. |
+| [`cap-takes-wrong-bucket.md`](cap-takes-wrong-bucket.md) | A laptop Cap take never appears in the film pipeline's bucket ([Cap setup](../docs/optional/cap.md)). |
 | [`codex-sandbox-blocks-hub.md`](codex-sandbox-blocks-hub.md) | A Codex agent reads the board but cannot claim/finish tasks, always reports peers `asleep`, or exits instantly on launch. |
 | [`permission-prompts-stall-agents.md`](permission-prompts-stall-agents.md) | An agent sits at a permission or question dialog (`-> permission prompt`, `handed to ...: you were permission prompt`). 14-day stall counts, proposed allow rules, what must keep prompting. |
 | [`subagent-misses-background-notice.md`](subagent-misses-background-notice.md) | A background sub-agent waits hours on a `run_in_background` job that already finished; wait in the foreground in bounded slices instead. |

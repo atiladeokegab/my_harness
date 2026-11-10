@@ -68,7 +68,7 @@ acceptance criterion in a skill.
 | [`claude/CLAUDE.md`](claude/CLAUDE.md) | Global instructions for every session: the hub protocol, how I like to work, and engineering defaults (uv, testing, deploys). |
 | [`claude/settings.json`](claude/settings.json) | Settings template with agent teams on, the heartbeat hooks and an auto-mode skeleton. What the installer does to `~/.claude`, the plugin and the memory layout: [docs/claude-code.md](docs/claude-code.md). |
 | [`plugin/`](plugin/) | Manifests for packaging the skills and hooks as a Claude Code and Codex plugin; `install.sh` assembles it in `$HUB_DIR/plugin/`. |
-| [`claude/skills/`](claude/skills/) | Twelve skills every agent shares: planning, development, grilling, first-principles checks, intake, clean-repo, product design, a design system, Penpot design, 3D models and the hackathon pair. The [skills index](claude/skills/README.md) says when each loads and what it needs. |
+| [`claude/skills/`](claude/skills/) | Thirteen skills every agent shares: planning, development, grilling, first-principles checks, intake, clean-repo, product design, a design system, Penpot design, Studio, 3D models and the hackathon pair. The [skills index](claude/skills/README.md) says when each loads and what it needs. |
 | [`examples/refinery-design/`](examples/refinery-design/) | A real, filled-in design skill from a shipping product: the worked example. |
 | [`runbooks/`](runbooks/) | Problems that already cost real time, each with the symptom, how to confirm it, and the fix. |
 | [`templates/`](templates/) | Starting points for a project `CLAUDE.md` and `AGENTS.md`, project settings, runbooks, hub tasks, a memory layout, and a self-hosted Penpot. |
@@ -126,7 +126,7 @@ works: the factory section of [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
    the plugin, and the memory layout.
 9. **Optional modules**, each off until you configure it: [WhatsApp to the lead](docs/optional/whatsapp.md),
    [a cloud VM and the Cloud Run spend guard](docs/optional/cloud-run.md), [an agy seat](docs/optional/agy.md),
-   [a self-hosted Penpot](docs/optional/penpot.md). The watchdog that relaunches dead sessions is in
+   [a self-hosted Penpot](docs/optional/penpot.md), [demo takes recorded in the Cap fork](docs/optional/cap.md). The watchdog that relaunches dead sessions is in
    [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
 
 ---
@@ -201,6 +201,18 @@ python3 -m unittest tests.test_autonomy   # phases; also test_dashboard, test_cl
 Run single suites with every `HUB_*` variable unset (`env -u HUB_DIR -u HUB_AGENT ...`), so nothing
 touches your live hub. All suites are dependency-free and run against throwaway boards and scratch tmux sessions.
 They never type into a real agent's pane.
+
+## Related repos
+
+Three tools the author runs beside the hub live in their own repos, each optional:
+
+- [Studio](https://github.com/atiladeokegab/studio): a self-hosted Penpot plus a CLI that imports live
+  product pages as editable boards and turns design comments into hub tasks. The
+  [studio-design skill](claude/skills/studio-design/SKILL.md) is how agents work with it.
+- [film](https://github.com/atiladeokegab/film): the demo-film pipeline, from a recorded take to a gated,
+  edited film. The hub side is the hackathon skill's [film reference](claude/skills/hackathon/reference/film.md).
+- [Cap fork](https://github.com/atiladeokegab/Cap): the screen recorder the takes come from (AGPL-3.0;
+  no Cap code is in this repo). Setup glue: [docs/optional/cap.md](docs/optional/cap.md).
 
 ## Status and honesty
 

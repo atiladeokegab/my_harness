@@ -38,5 +38,5 @@ The lead's `agents` are Zeus, Hermes, Prometheus and Atlas (SKILL.md Roles), so 
   template's smoke workflow, a required check): after the first merge hub live tells Zeus once if one
   never did.
 - **`bring`** becomes the `Bring` column of HACKATHON.md's team table.
-- **`deadlines`** also take the film deadlines (your film pipeline's notes (not shipped) item 1) and the `design`
+- **`deadlines`** also take the film deadlines ([film.md](film.md) item 1) and the `design`
   deadline ([briefs.md](briefs.md) "The designer's mockup").

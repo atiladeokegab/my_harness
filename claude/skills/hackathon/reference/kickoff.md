@@ -75,7 +75,7 @@ the table does not go to approval 3, and Zeus re-reads the table at each checkpo
   voice is OpenAI `gpt-realtime` with the female voice `marin`; the lead rates it far above the others.
 - **The storyboard and the demo:** before the first take (the harsh rehearsal), Zeus checks every
   [demo] and [film] lesson against IDEA.md's storyboard, story.json and the shot list, and fixes the
-  script for any it fails (your film pipeline's notes (not shipped) "At approval 1"; this covers R-19 until the
+  script for any it fails ([film.md](film.md) "At approval 1"; needed until the
   story step reads the ledger itself).
 - **The release review at freeze minus 45:** Zeus walks the `Lessons applied` table against what
   shipped, beside Prometheus's release review; any row not met goes to the lead as a gap, with the fix or
@@ -86,7 +86,7 @@ the table does not go to approval 3, and Zeus re-reads the table at each checkpo
 - every date and time: submission, code freeze, judging, check-ins, mentor sessions;
 - the rules and the judging criteria;
 - the rules on pre-existing code. Read these before anything else is planned: if a full starter is not
-  allowed, follow your starter's notes (not shipped) "When a starter is not allowed".
+  allowed, follow [spine.md](spine.md) "When a starter is not allowed".
 
 **Deadlines.** Show them as one table with absolute ISO 8601 times and a timezone, and confirm with one
 AskUserQuestion. There is always a `code freeze` and a `submit`; if the brief names no freeze,
@@ -112,7 +112,7 @@ and an 82% → 91% number up front. The comparison is in the event's notes (not 
 
 **Film kickoff, as soon as the event is known**, before any
 team or idea: one `film kickoff` task on the board for Zeus with the seven items in
-your film pipeline's notes (not shipped) as its Acceptance (film deadlines, the film event folder, the lead's
+[film.md](film.md) as its Acceptance (film deadlines, the film event folder, the lead's
 laptop, the lead's chat channel, the render machine, pre-made assets, a rehearsal take the day before), and items
 3, 4 and 7 sent to the lead as one checklist.
 

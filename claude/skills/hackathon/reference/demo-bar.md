@@ -33,7 +33,7 @@ approval 1, so they get built rather than bolted on at freeze.
    the tour. A tour of features is not a story.
 4. **Production polish is table stakes.** Good mic, captions and music are expected and earn nothing on
    their own. Spend the effort on rules 1 to 3.
-5. **Film it on the film pipeline** (your film pipeline's notes (not shipped): the kickoff, the recording task, the take
+5. **Film it on the film pipeline** ([film.md](film.md): the kickoff, the recording task, the take
    window). Its gate and renderer are described there.
 6. **Record clean, then have someone else frame-check it**, independent of the gate. Record with
    notifications off, the taskbar hidden, the cursor parked off the player and embeds already playing.

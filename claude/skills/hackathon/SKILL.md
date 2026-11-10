@@ -56,6 +56,8 @@ Existing section numbers remain in those references for links from other skills.
 | Public repository setup, invites, issues and starting the crew (§6) | [publish](reference/publish.md); respect outward-facing authorization |
 | Live sync, clock, reviews, freeze, questions and take window (§7) | [operating](reference/operating.md), then the relevant situation in [live](reference/live.md) |
 | Demo claim and judging the script or film | [demo bar](reference/demo-bar.md) |
+| Film kickoff, story preparation, recording and take handling (optional pipeline) | [film](reference/film.md) |
+| Pre-existing-code rules and the first running slice | [spine](reference/spine.md) |
 | Writing hackathon.json, before `--init` | [schema](reference/hackathon-json.md) |
 | Day spec, vertical/task briefs, approval-3 board and mockup | [brief templates](reference/briefs.md) |
 
