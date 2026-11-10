@@ -17,6 +17,8 @@ const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
 
 function agentFor(input) {
+  // A sub-agent (Claude or Codex puts agent_id on its payloads) inherits its seat's identity: never its mail.
+  if (input.agent_id) return '';
   const i = process.argv.indexOf('--agent');
   if (i > 1) return process.argv[i + 1];
   if ('turn_id' in input || !process.env.CLAUDECODE) return '';

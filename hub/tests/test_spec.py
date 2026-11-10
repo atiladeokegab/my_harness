@@ -9,9 +9,10 @@ is a script that looks for its builders' lines, so a rewind turns exactly the ri
 """
 
 import hashlib
+import importlib.util
 import json
-import shlex
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -147,6 +148,17 @@ class Fixture(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def pytest_named(self):
+        """acceptance_cmd through a runner named pytest, so its exit 5 means no tests collected."""
+        runner = Path(self.temp.name) / "bin" / "pytest"
+        runner.parent.mkdir(exist_ok=True)
+        runner.write_text(f'#!/bin/sh\nexec {sys.executable} "$@"\n')
+        runner.chmod(0o755)
+        cfg = json.loads((self.hub / "factory.json").read_text())
+        cfg["repos"][0]["acceptance_cmd"] = f"{runner} {{test}}"
+        (self.hub / "factory.json").write_text(json.dumps(cfg))
+        return str(runner)
 
     def hub_spec(self, *args, ok=True):
         r = subprocess.run([sys.executable, str(HUB / "board.py"), "spec", *args, "--project", "linkly",
@@ -297,6 +309,7 @@ class SpecTest(Fixture):
         self.assertEqual(before, self.unchanged())
 
     def test_a_failed_notice_keeps_the_apply_and_is_reported(self):
+        self.add_plain_tasks(["A-5.1@1"])  # claimed T-9 cites a line C-001 modifies, so its owner is told
         boom = ("import sys; sys.path.insert(0, sys.argv[1]); import board\n"
                 "def boom(agent, text, message_id=None):\n"
                 "    raise OSError('inbox is read-only')\n"
@@ -346,6 +359,57 @@ class SpecTest(Fixture):
         self.assertNotIn("A-2.1 red", out)
         self.assertIn("3 of 4 kept checks green", out)
 
+    def test_a_check_that_collects_no_tests_is_unverified_never_green_or_a_hidden_dependency(self):
+        # pytest exits 5 when every test is deselected (live-only checks); any other failure stays red
+        self.pytest_named()
+        (self.repo / "tests/acceptance/test_A_1_1.py").write_text("import sys\nsys.exit(5)\n")
+        (self.repo / "tests/acceptance/test_A_2_1.py").write_text("import sys\nsys.exit(1)\n")
+        git(self.repo, "commit", "-qam", "checks: one collects nothing, one fails")
+        git(self.repo, "push", "-q", "origin", "main")
+        out = self.hub_spec("rewind", "C-001", "--dry-run")
+        self.assertNotIn("hidden dependency: A-1.1", out)
+        self.assertIn("hidden dependency: A-2.1", out)
+        self.assertIn("unverified: A-1.1 ran no tests", out)
+        self.assertIn("2 of 4 kept checks green", out)
+
+    def test_exit_5_is_unverified_only_from_a_pytest_runner(self):
+        exit5 = self.repo / "exit5.py"
+        exit5.write_text("import sys\nsys.exit(5)\n")
+        self.assertEqual(spec.verdict({"acceptance_cmd": f"{sys.executable} {{test}}"}, self.repo, str(exit5)), "fail")
+        self.assertEqual(spec.verdict({"acceptance_cmd": f'{sys.executable} -c "import sys; sys.exit(5)"'},
+                                      self.repo, "unused"), "fail")
+        self.assertEqual(spec.verdict({"acceptance_cmd": f"{self.pytest_named()} {{test}}"}, self.repo, str(exit5)),
+                         "unverified")
+        for args in ("--label pytest", "--report /tmp/pytest", "-m pytest", "--label py.test"):
+            with self.subTest(args=args):  # an argument naming pytest does not make the command pytest
+                cmd = f'{sys.executable} -c "import sys; sys.exit(5)" {args}'
+                self.assertEqual(spec.verdict({"acceptance_cmd": cmd}, self.repo, "unused"), "fail")
+
+    def test_only_the_launched_executable_or_module_is_read_as_pytest(self):
+        for cmd in ("pytest -q t.py", "/x/bin/py.test t.py", "python -m pytest t.py", "python3.11 -I -W error -m pytest",
+                    "uv run pytest -q t.py", "uv run --no-project --with pytest pytest -q t.py",
+                    "uv run --with pytest -- python -m pytest t.py", "/venv/bin/python3 -m py.test",
+                    "uv run --with=pytest --offline pytest t.py"):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(spec.runs_pytest(shlex.split(cmd)))
+        for cmd in ("python -c 'import sys' -m pytest", "python run.py -m pytest", "uv run --with pytest python t.py",
+                    "make pytest", "bash -c pytest", "uv run tox -e pytest", "pytest-runner t.py", "python",
+                    # an unknown uv option is never guessed at: its value could be taken for the command
+                    "uv run --offline --project x --only-group pytest python check.py", "uv run --bogus pytest",
+                    # `--` ends interpreter options: what follows is a script named -m, not module mode
+                    "python -- -m pytest", "python -Z -m pytest"):
+            with self.subTest(cmd=cmd):
+                self.assertFalse(spec.runs_pytest(shlex.split(cmd)))
+
+    @unittest.skipUnless(importlib.util.find_spec("pytest"), "needs pytest in this interpreter")
+    def test_a_real_pytest_run_that_deselects_every_test_is_unverified(self):
+        live = self.repo / "test_live_only.py"
+        live.write_text("import pytest\n\n\n@pytest.mark.live\ndef test_live():\n    assert False\n")
+        cmd = f"{sys.executable} -m pytest -q -p no:cacheprovider -m 'not live' {{test}}"
+        self.assertEqual(spec.verdict({"acceptance_cmd": cmd}, self.repo, str(live)), "unverified")
+        live.write_text("def test_red():\n    assert False\n")
+        self.assertEqual(spec.verdict({"acceptance_cmd": cmd}, self.repo, str(live)), "fail")
+
     def test_apply_regenerates_the_whole_tree(self):
         out = self.hub_spec("apply", "C-001")
         # PRD v5 and its lock
@@ -375,17 +439,19 @@ class SpecTest(Fixture):
             self.assertNotIn("stale", b[tid].get("tags") or [])
             self.assertEqual(b[tid]["generated_from"], "v5")
         self.assertEqual(b["T-001"]["reqs"], ["A-1.1@1", "A-2.1@1"])
-        for tid, status in (("T-005", "done"), ("T-007", "done"), ("T-008", "done"), ("T-009", "claimed")):
+        # T-9 is unfinished but its line A-4.2 holds: carried and repinned, still claimed, never told (T-1088)
+        self.assertEqual((b["T-009"]["status"], b["T-009"]["generated_from"]), ("claimed", "v5"))
+        self.assertNotIn("tags", b["T-009"])
+        for tid, status in (("T-005", "done"), ("T-007", "done"), ("T-008", "done")):
             self.assertEqual(b[tid]["status"], status)
             self.assertIn("stale", b[tid]["tags"])
             self.assertEqual(b[tid]["notes"][-1]["text"], "superseded by C-001")
         self.assertNotIn("tags", b["T-010"])  # another project's task
         new = {tid: t for tid, t in b.items() if t.get("created_by") == "Zeus" and t["created"] != b["T-001"]["created"]}
-        self.assertEqual(sorted(new), ["T-011", "T-012", "T-013", "T-014"])
+        self.assertEqual(sorted(new), ["T-011", "T-012", "T-013"])
         self.assertEqual([(new[t]["reqs"], new[t]["deps"], new[t]["owner"]) for t in sorted(new)], [
             (["A-3.2@2", "A-3.3@1", "A-5.1@2"], [], "Zeus"),       # check-writer first
             (["A-3.2@2", "A-3.3@1"], ["T-011"], None),
-            (["A-4.2@1"], ["T-011"], None),                        # T-9's unfinished line, regenerated
             (["A-5.1@2", "A-5.2@1"], ["T-011", "T-012"], None),    # R-5 needs R-3
         ])
         self.assertTrue(all(t["generated_from"] == "v5" and t["status"] == "open" for t in new.values()))
@@ -399,13 +465,69 @@ class SpecTest(Fixture):
             self.assertEqual(len(t["verify"].split(" && ")) - 1, len(tests))
         self.assertNotIn("clicks", "".join(t["title"] + t["detail"] for t in new.values()))
         files = {t: gh_sync.file_paths(new[t]["detail"]) for t in sorted(new)}  # the rewound commits' files
-        self.assertEqual(files, {"T-011": [], "T-012": ["app/routes/stats.py"], "T-013": [],  # T-9 built nothing
-                                 "T-014": ["app/models.py", "app/routes/dashboard.py", "web/dashboard.html",
+        self.assertEqual(files, {"T-011": [], "T-012": ["app/routes/stats.py"],
+                                 "T-013": ["app/models.py", "app/routes/dashboard.py", "web/dashboard.html",
                                            "web/dashboard.js"]})
         self.assertIn("`make check`", new["T-011"]["detail"])  # the check-writer lints its checks too
-        self.assertIn("superseded by C-001", (self.hub / "inbox" / "Hermes.jsonl").read_text())  # hb.actor
+        self.assertFalse((self.hub / "inbox" / "Hermes.jsonl").exists())  # nobody's work was superseded
         self.assertIn("applied C-001: spec v5", out)
         self.assertIn("written against v4, the spec is v5", self.hub_spec("apply", "C-001", ok=False))
+
+    def add_plain_tasks(self, t9_reqs):
+        """Two tasks with no spec lineage (no reqs, no generated_from), one open and one claimed (T-1088)."""
+        board = json.loads((self.hub / "board.json").read_text())
+        for t in board["tasks"]:
+            if t["id"] == "T-009":
+                t["reqs"] = t9_reqs
+        plain = [{k: v for k, v in task(n, status, [], owner).items() if k != "reqs"}
+                 for n, status, owner in ((11, "open", None), (12, "claimed", "Atlas"))]
+        board["tasks"] += [plain[0], {**plain[1], "agent": "Atlas"}]
+        board["next_id"] = 13
+        (self.hub / "board.json").write_text(json.dumps(board))
+        return {t["id"]: t for t in plain}
+
+    def assert_plain_untouched(self, before):
+        b = self.board()
+        for tid, t in before.items():
+            self.assertEqual({k: v for k, v in b[tid].items() if k != "updated"},
+                             {k: v for k, v in t.items() if k != "updated"} | ({"agent": "Atlas"} if tid == "T-012" else {}))
+        self.assertFalse((self.hub / "inbox" / "Atlas.jsonl").exists())
+
+    def test_apply_marks_only_the_lineage_task_on_a_changed_line(self):
+        before = self.add_plain_tasks(["A-5.1@1"])  # T-009 is unfinished and cites a line C-001 modifies
+        out = self.hub_spec("apply", "C-001")
+        self.assertIn("marks 4 task(s) stale: T-005, T-007, T-008, T-009", out)
+        b = self.board()
+        self.assertIn("stale", b["T-009"]["tags"])
+        self.assertIn("superseded by C-001", (self.hub / "inbox" / "Hermes.jsonl").read_text())
+        self.assert_plain_untouched(before)
+
+    def test_a_radius_0_change_marks_none(self):
+        before = self.add_plain_tasks(["A-4.2@1"])
+        self.write_change({"id": "C-002", "base_version": 4, "modified": [], "removed": [],
+                           "added": [{"id": "A-3.3", "req": "R-3", "text": "a visitor counts once a day"}],
+                           "reason": "count unique visitors"})
+        out = self.hub_spec("apply", "C-002")
+        self.assertEqual(self.radius(out), {})
+        self.assertIn("marks 0 task(s) stale: -", out)
+        b = self.board()
+        self.assertFalse(any("stale" in (t.get("tags") or []) for t in b.values()))
+        self.assertEqual(b["T-009"]["status"], "claimed")  # carried: its line holds
+        self.assertEqual(b["T-009"]["generated_from"], "v5")
+        self.assertFalse((self.hub / "inbox" / "Hermes.jsonl").exists())
+        self.assert_plain_untouched(before)
+
+    def test_a_retired_task_is_never_counted_as_building_its_lines(self):
+        board = json.loads((self.hub / "board.json").read_text())
+        next(t for t in board["tasks"] if t["id"] == "T-009").update(status="done", retired=True)  # hub retire
+        (self.hub / "board.json").write_text(json.dumps(board))
+        out = self.hub_spec("apply", "C-001")
+        self.assertIn("radius: 3 of 8 done tasks", out)
+        self.assertIn("carried over: T-001, T-002, T-003, T-004, T-006\n", out)
+        self.assertIn("4 of 4 kept checks green", out)  # A-4.2's check is no longer kept: nobody built it
+        self.assertIn("no checks yet, not rebuilt (untouched by this change): A-4.2", out)
+        self.assertEqual(self.board()["T-009"], {**task(9, "done", ["A-4.2@1"], owner="Prometheus"),
+                                                 "agent": "Hermes", "retired": True})  # never stamped or staled
 
     def test_apply_keeps_migrations_and_reconciles_shared_files(self):
         self.write_change({"id": "C-002", "base_version": 4, "added": [], "removed": [],
@@ -549,8 +671,38 @@ class HiddenDependencyTest(Fixture):
         self.assertEqual(set(self.radius(out)), {"T-005", "T-007", "T-008"})  # T-6 is not reverted
         self.assertIn("3 of 4 kept checks green", out)
         self.assertIn("hidden dependency: A-4.1 red after the rewind; joins the rebuild", out)
-        self.assertIn("new [R-4] R-4 expiry: A-4.1@1, A-4.2@1  deps checks", out)
-        self.assertIn("carried over: T-001, T-002, T-003, T-004, T-006", out)
+        self.assertIn("new [R-4] R-4 expiry: A-4.1@1  deps checks", out)  # A-4.2 stays with claimed T-9
+        self.assertIn("carried over: T-001, T-002, T-003, T-004, T-006, T-009", out)
+
+
+class PlainTaskEntangledInKTest(Fixture):
+    """T-8 is a plain task (no reqs, no generated_from; its commit has no Req: trailer) whose commit C-001 rewinds
+    because it shares web/dashboard.html with T-7. The commit is reverted, but the task is never tagged or told."""
+
+    def setUp(self):
+        plain = [(t, [] if t == "T-8" else reqs, files) for t, reqs, files in TASKS]
+        with mock.patch(f"{__name__}.TASKS", plain):
+            super().setUp()
+
+    def check(self, status):
+        board = json.loads((self.hub / "board.json").read_text())
+        t8 = next(t for t in board["tasks"] if t["id"] == "T-008")
+        del t8["reqs"]
+        t8.update(status=status, **({"owner": "Atlas", "agent": "Atlas"} if status == "claimed" else {}))
+        (self.hub / "board.json").write_text(json.dumps(board))
+        out = self.hub_spec("apply", "C-001")
+        self.assertEqual(self.radius(out)["T-008"], "entangled with T-007 via web/dashboard.html")
+        self.assertIn("Rewind for C-001: T-005, T-007, T-008", git(self.repo, "log", "-1", "--format=%s", "change/C-001"))
+        self.assertIn("marks 2 task(s) stale: T-005, T-007\n", out)
+        after = self.board()["T-008"]
+        self.assertEqual((after.get("tags"), after["notes"], after.get("generated_from")), (None, [], None))
+        self.assertFalse((self.hub / "inbox" / "Atlas.jsonl").exists())
+
+    def test_done(self):
+        self.check("done")
+
+    def test_claimed(self):
+        self.check("claimed")
 
 
 class CheckLandedInRewoundCommitTest(Fixture):
@@ -759,6 +911,17 @@ class ConvergeRetryTest(Fixture):
             "linkly spec drift: A-4.2@1: acceptance check red on origin/integration: tests/acceptance/test_A_4_2.py"])
         self.assertIn("flaky: A-2.1", out)
         self.assertEqual(self.count.read_text(), "2")  # red, then green: no third run
+
+    def test_checks_that_ran_no_tests_are_shown_unverified_and_open_nothing(self):
+        self.pytest_named()
+        for aid in CHECKS:
+            (self.repo / spec.default_test(aid)).write_text("import sys\nsys.exit(5)\n")
+        git(self.repo, "commit", "-qam", "every check collects nothing")
+        git(self.repo, "push", "-q", "origin", "main:integration")
+        out = self.hub_spec("converge")
+        self.assertIn("unverified, no tests ran: " + ", ".join(CHECKS), out)
+        self.assertIn("0 drift(s)", out)
+        self.assertEqual(self.titles(), [])
 
     def test_every_check_red_opens_one_environment_task(self):
         cfg = json.loads((self.hub / "factory.json").read_text())
@@ -1104,6 +1267,18 @@ class SpecAutonomyTests(Fixture):
 
         out = self.hub_spec("approve", "C-002", ok=False)
         self.assertIn("cannot approve their own correction", out)
+
+    def test_lead_approves_and_applies_their_own_proposal(self):
+        """2026-11-09: Zeus authors every proposal and only the lead may approve one, so the self-approval guard
+        made every proposal unapprovable. A proposal carries the human's approved intent; only a correction
+        (an agent's own fix) needs a second pair of eyes."""
+        draft = self.temp.name + "/prop.json"
+        Path(draft).write_text(json.dumps({"added": [{"id": "A-3.3", "req": "R-3", "text": "a visitor counts once a day"}]}))
+        self.env["HUB_AGENT"] = "Zeus"
+        self.hub_spec("propose", draft, ok=True)
+        self.assertEqual(json.loads((self.spec / "changes" / "C-002.json").read_text())["author"], "Zeus")
+        self.assertIn("approved C-002", self.hub_spec("approve", "C-002", "--why", "lead approved intent"))
+        self.assertIn("applied C-002", self.hub_spec("apply", "C-002", ok=True))
 
     def test_correction_approval_requires_hermes_or_zeus_reviewer_or_lead(self):
         draft = self.temp.name + "/corr.json"

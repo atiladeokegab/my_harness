@@ -98,7 +98,6 @@
     "hub"
   ],
   "snapshot_bucket": "gs://your-hub-snapshots",
-  "lead_alert": [],
   "intervals": {
     "poll_seconds": 100,
     "stuck_minutes": 30,

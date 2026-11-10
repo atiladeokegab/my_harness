@@ -97,12 +97,6 @@ import json, os, sys
 with open(os.path.join(os.environ["FAKE_LOG"], "systemd-run.jsonl"), "a") as f:
     f.write(json.dumps(sys.argv[1:]) + "\n")
 ''',
-    "lead-alert": r'''#!/usr/bin/env python3
-import json, os, sys
-with open(os.path.join(os.environ["FAKE_LOG"], "lead-alert.jsonl"), "a") as f:
-    f.write(json.dumps(sys.argv[1:]) + "\n")
-sys.exit(1)  # a failing alert channel must be ignored
-''',
 }
 
 
@@ -113,7 +107,7 @@ def task(tid, owner="Hermes", status="open", **extra):
 
 
 class Factory(unittest.TestCase):
-    """A throwaway hub with stub tmux, hubmsg, systemd-run and lead-alert on PATH. No tests here."""
+    """A throwaway hub with stub tmux, hubmsg, and systemd-run on PATH. No tests here."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="hub-dispatch-test-")
@@ -129,8 +123,7 @@ class Factory(unittest.TestCase):
             "agents": [{"name": "Prometheus", "kind": "codex", "session": "hub-prometheus"},
                        {"name": "Hermes", "kind": "claude", "session": "hub-hermes"},
                        {"name": "Zeus", "kind": "claude", "session": "hub-zeus", "dispatch": False}],
-            "repos": [], "intervals": {"poll_seconds": 10 ** 12, "stuck_minutes": 30},
-            "lead_alert": ["lead-alert", "send"]}))
+            "repos": [], "intervals": {"poll_seconds": 10 ** 12, "stuck_minutes": 30}}))
         self.board([])
         env = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
         self.env = {**env, "HUB_DIR": str(self.hub), "HOME": str(self.hub), "HUB_LEAD": "Zeus",

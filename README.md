@@ -21,6 +21,22 @@ source ~/.bashrc
 zeus                       # start the lead agent. Ctrl-b d to detach.
 ```
 
+### Five minutes to a first task
+
+With only `python3`, `tmux`, `git` and Claude Code installed:
+
+1. `./install.sh --dry-run`, then `./install.sh` and `source ~/.bashrc` (about a minute). If it notes that
+   `~/.local/bin` is not on `PATH`, add the line it prints.
+2. `zeus`: sign in on first run, accept folder trust, `Ctrl-b d` to detach.
+3. `hub new "Add a --version flag" --project myrepo` puts a task on the board; `hub list` shows it.
+4. In a second shell, `apollo myrepo` starts a worker in `~/code/myrepo`. Ask it to take the next task: it runs `hub next`,
+   `hub claim`, does the work in its own worktree, and `hub done` runs the repo's `make check` if it has one.
+5. `hubs` shows who is running; `hub show <id>` shows the handoff note.
+
+One account is enough to try it: run `zeus` alone and let it start sub-agents. The full
+walkthrough, including plan → tasks → execute with the lead, is
+[docs/getting-started.md](docs/getting-started.md).
+
 ---
 
 ## Why it's built this way
@@ -51,15 +67,7 @@ acceptance criterion in a skill.
 | [`hub/`](hub/) | The multi-agent hub: `board.py` (the `hub` CLI), `gh_sync.py` (`hub gh-sync`), `live.py` (`hub live`), `spec.py` and `prd.py` (`hub spec`, `hub prd`: the PRD tree), `autonomy.py` (`hub agents`: per-agent phases), `workspace.py` (`hub ws`, a worktree per claim), `clean_repo.py` (`hub init-repo`, `hub ship-check`, `hub scrub`), `dashboard.py` (`hub dashboard`), `hub_trace.py` (`hub trace`), `map.py` (`hub map`), `hubmsg`, `hubwaked`, `shell.sh`, optional agent hooks (`hooks/`), the optional factory (`dispatch.py`, `run.py`, `systemd/`, `factory.example.json`), and their test suites (`make check`). [`HUB.md`](hub/HUB.md) is the index to the operating manual in [`hub/docs/hub/`](hub/docs/hub/). |
 | [`claude/CLAUDE.md`](claude/CLAUDE.md) | Global instructions for every session: the hub protocol, how I like to work, and engineering defaults (uv, testing, deploys). |
 | [`claude/settings.json`](claude/settings.json) | Settings template with agent teams on and an auto-mode skeleton. |
-| [`claude/skills/hub-planning/`](claude/skills/hub-planning/) | The lead's planning layer: where specs and plans go, grilling and C4 before approval, seeding the PRD, and turning an approved plan into board tasks with one owner per file. |
-| [`claude/skills/development/`](claude/skills/development/) | Focused development: debug from evidence, test the behaviour that matters, review the connected change, and verify before claiming done. |
-| [`claude/skills/grilling/`](claude/skills/grilling/) | Stress-test a plan or design as a tree of decisions, asked a round at a time with a recommended answer for each. |
-| [`claude/skills/thinking-from-first-principles/`](claude/skills/thinking-from-first-principles/) | Five steps from the goal and the hard constraints, for acceptance tests, direction checks and any build judged on data it has not seen. |
-| [`claude/skills/designing-products/`](claude/skills/designing-products/) | Plan a product's intent, UX, UI and brand on Impeccable: a blind direction tournament, generated tokens and brand page, four gates, the judge tour and a blind finish check. Run `npm ci` in its `kit/` before the kit's fixture build. |
-| [`claude/skills/3d-model-workflow/`](claude/skills/3d-model-workflow/) | Build a real place or machine as an interactive 3D model in the browser: data contract, LiDAR ground, simulated mechanisms, eras, the look, GPU stills on Cloud Run and a tag, check, promote deploy. |
-| [`claude/skills/intake/`](claude/skills/intake/) | Label pasted material (yours, an outside brief, or for later) before acting on it, so someone else's document never becomes your instructions. |
-| [`claude/skills/clean-repo/`](claude/skills/clean-repo/) | Keep plans, reviews and agent config out of repos other people work in. |
-| [`claude/skills/design-system/`](claude/skills/design-system/) | A skill for authoring and enforcing a binding design system, then verifying it in a real browser. Includes a WCAG contrast and Display-P3 colour tool. |
+| [`claude/skills/`](claude/skills/) | Eleven skills every agent shares: planning, development, grilling, first-principles checks, intake, clean-repo, product design, a design system, 3D models and the hackathon pair. The [skills index](claude/skills/README.md) says when each loads and what it needs. |
 | [`examples/refinery-design/`](examples/refinery-design/) | A real, filled-in design skill from a shipping product: the worked example. |
 | [`runbooks/`](runbooks/) | Problems that already cost real time, each with the symptom, how to confirm it, and the fix. |
 | [`templates/`](templates/) | Starting points for a project `CLAUDE.md` and `AGENTS.md`, project settings, runbooks and hub tasks. |
@@ -116,6 +124,42 @@ works: the factory section of [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
 
 ---
 
+## Configuration: the roster
+
+`hub/shell.sh` reads these from your environment (set them in `~/.bashrc` before the line
+that sources it). Names are case-insensitive; the tmux session is `hub-<name>`.
+
+| Variable | Default | What it sets |
+|---|---|---|
+| `HUB_DIR` | `~/hub` | Where the board, inboxes, runbooks and project notes live |
+| `HUB_CODE_DIR` | `~/code` | Where your git checkouts live; `apollo myrepo` starts in `$HUB_CODE_DIR/myrepo` |
+| `HUB_LEAD` | `Zeus` | The planning agent. It runs on the default `~/.claude` account and gets lead-only messages |
+| `HUB_CLAUDE_AGENTS` | `Zeus Apollo Hermes Athena` | Claude Code agents, space-separated. Each non-lead one uses `~/.claude-<name>` |
+| `HUB_CODEX_AGENTS` | `Prometheus` | Codex agents. Set it to `""` for a Claude-only team |
+| `HUB_REVIEWER` | `Hermes` | The agent `hub live` sends event PRs to |
+| `HUB_HOME_PROJECT` | unset | Where a bare agent command starts when you are not inside a repo |
+| `HUB_DASHBOARD` | on | `0` stops the launcher starting `hub dashboard` |
+
+`HUB_AGENT` and `HUB_PROJECT` are set per session by the launcher; you do not set them yourself.
+The optional factory has its own per-agent settings in `hub/factory.example.json`. Renaming the
+agents and running a second hub: [docs/customizing.md](docs/customizing.md).
+
+## What is specific to Claude Code, Codex or agy
+
+The board, `hub` CLI, worktrees and `hubmsg` are plain files and shell, so any agent that can run
+a command can use them. The rest is per CLI:
+
+| | Claude Code | Codex CLI | agy (Antigravity CLI) |
+|---|---|---|---|
+| Instructions | `~/.claude/CLAUDE.md` | `~/.codex/AGENTS.md` → `$HUB_DIR/AGENTS-codex.md` | none shipped |
+| Skills | `claude/skills/`, all installed | not loaded; point it at the file path | not loaded |
+| Launcher | `shell.sh`, one config dir per agent | `shell.sh`, `--sandbox workspace-write --add-dir $HUB_DIR` | **not shipped**; add your own |
+| Wakes | typed into the tmux pane, guarded | through the `hubwaked` relay (its sandbox can't reach tmux) | the relay and dialog guards recognise agy panes |
+| Turn-end delivery hook (optional, needs `node`; [setup](runbooks/install-factory-timers.md)) | `hub/hooks/stop-deliver.js` | the same hook, from `~/.codex/hooks.json` | the same hook, `--format agy` |
+| Agent-to-agent | `hubmsg`, plus Claude's own SendMessage between Claude sessions | `hubmsg` only | `hubmsg` only |
+
+The factory's watchdog reads all three CLIs' busy footers, dialogs and rate-limit screens.
+
 ## Requirements
 
 - Linux or WSL2 with **bash**, **tmux**, **git** and **python3**.
@@ -157,6 +201,11 @@ lists what has been verified by running it and what is only inferred. The main o
 the transport wakes agents by typing into their tmux pane. That is guarded (it never types
 into a pane a human is attached to, or one showing a confirmation dialog), but it is still
 keystrokes. See the known limitations in [`hub/OVERVIEW.md`](hub/OVERVIEW.md).
+
+## Contributing
+
+Issues and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) covers the checks a
+change must pass and what must never be committed.
 
 ## Licence
 

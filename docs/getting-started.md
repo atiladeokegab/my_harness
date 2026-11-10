@@ -28,7 +28,7 @@ What the installer does, in order:
 |---|---|
 | hub | Copies the hub code, docs, tests and runbooks to `~/hub` and seeds an empty `board.json`. |
 | commands | Links `hub`, `hubmsg` and `hubwaked` into `~/.local/bin`. |
-| claude | Installs `~/.claude/CLAUDE.md` and the `design-system` skill. Adds one env key to an existing `settings.json`, or installs the template if you have none. |
+| claude | Installs `~/.claude/CLAUDE.md` and every skill in `claude/skills/` ([index](../claude/skills/README.md)). Adds one env key to an existing `settings.json`, or installs the template if you have none. |
 | codex | Links `~/.codex/AGENTS.md` → `~/hub/AGENTS-codex.md`, if Codex is present. |
 | shell | Adds one line to `~/.bashrc` that sources `~/hub/shell.sh`. |
 

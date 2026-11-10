@@ -6,17 +6,17 @@ in step at the end of every sync. Any failure here is one warning line; the sync
 
 import re
 
-from gh_sync import GhError, deadline
+from gh_sync import GhError, branch_ahead, branch_heads, deadline
 
 TEMPLATE_TITLE = "Hackathon board (template)"
 ITEM_LIMIT, PR_LIMIT = 500, 200
 
 
-def status_of(issue, open_prs, branches):
+def status_of(issue, open_prs, branches, unmerged=()):
     """Todo / In progress / In review / Done, from facts GitHub already has."""
     n = issue["number"]
     if issue.get("state") == "CLOSED":
-        return "Done"
+        return "In progress" if any(b.startswith(f"{n}-") for b in unmerged) else "Done"
     closes = re.compile(rf"(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#{n}\b")
     if any(closes.search(p.get("body") or "") for p in open_prs):
         return "In review"
@@ -58,8 +58,9 @@ def init_board(cfg, gh, repo):
 def sync_board(tasks, cfg, gh, repo, issues):
     b = cfg.get("board")
     if not b:
-        return
+        return []
     owner = lead_login(cfg)
+    changes = []
     try:
         fields = {f["name"]: f for f in gh.json("project", "field-list", b["number"], "--owner",
                                                   owner, "--format", "json")["fields"]}
@@ -73,12 +74,35 @@ def sync_board(tasks, cfg, gh, repo, issues):
                       "--limit", str(PR_LIMIT)) or []
         if len(prs) >= PR_LIMIT:
             print(f"warning: more than {PR_LIMIT - 1} open PRs; In review may miss some")
-        refs = gh("api", f"repos/{repo}/git/matching-refs/heads/", "--jq", ".[].ref", write=False)
-        branches = [r.removeprefix("refs/heads/") for r in (refs or "").split()]
+        heads = branch_heads(gh, repo)
+        branches = list(heads)
+        closed = {i["number"] for t in tasks if (i := issues.get(t.get("issue")))
+                  and i.get("state") == "CLOSED"}
+        candidates = [(name, sha) for name, sha in heads.items()
+                      if any(name.startswith(f"{n}-") for n in closed)]
+        unmerged = []
+        if candidates:
+            merged = gh.json("pr", "list", "-R", repo, "--state", "merged", "--limit", "200",
+                             "--json", "headRefName,headRefOid")
+            if not isinstance(merged, list):
+                raise GhError("cannot list merged PRs for board status")
+            merged_heads = {(p.get("headRefName"), p.get("headRefOid")) for p in merged}
+            unmerged = [name for name, sha in candidates if (name, sha) not in merged_heads
+                        and branch_ahead(gh, repo, name)]
+        statuses = {t["id"]: status_of(issues[t["issue"]], prs, branches, unmerged)
+                    for t in tasks if t.get("issue") in issues}
+        for t in tasks:
+            if t.get("kind") == "vertical" and statuses.get(t["id"]) == "Todo" and any(
+                    statuses.get(child["id"]) in ("In progress", "In review", "Done")
+                    for child in tasks if child.get("parent") == t["id"]):
+                statuses[t["id"]] = "In progress"
         for t in tasks:
             i = issues.get(t.get("issue"))
             if not i:
                 continue
+            status = statuses[t["id"]]
+            if t.get("gh_status") != status:
+                changes.append((t["id"], {"gh_status": status}, "gh-status"))
             item = by_issue.get(i["number"])
             if not item:
                 # GitHub lists a new card a few seconds after adding it, so this can re-add one
@@ -86,8 +110,8 @@ def sync_board(tasks, cfg, gh, repo, issues):
                 # checked 2026-09-28), so that edits the existing card, never a duplicate.
                 item = {"id": gh.json("project", "item-add", b["number"], "--owner", owner,
                                       "--url", i["url"], "--format", "json")["id"]}
-            want = {"Status": status_of(i, prs, branches), "Agent": t.get("agent") or "",
-                    "Deadline": deadline(t.get("detail"))}
+            want = {"Status": status, "Agent": t.get("agent") or "",
+                    "Deadline": deadline(t.get("detail"), [d["name"] for d in cfg["deadlines"]])}
             # item-list reports field values keyed by the field's lower-case name.
             have = {name: item.get(name.lower()) or "" for name in want}
             for name, value in want.items():
@@ -95,8 +119,10 @@ def sync_board(tasks, cfg, gh, repo, issues):
                     continue
                 args = ["project", "item-edit", "--id", item["id"], "--project-id", b["id"],
                         "--field-id", fields[name]["id"]]
+                # gh refuses `--text ''` ("no changes to make"), so an emptied field is cleared.
                 args += (["--single-select-option-id", options[value]] if name == "Status"
-                         else ["--text", value])
+                         else ["--text", value] if value else ["--clear"])
                 gh(*args)
     except (GhError, KeyError, TypeError) as e:
         print(f"warning: board not updated: {e}")
+    return changes

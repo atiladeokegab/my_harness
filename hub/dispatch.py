@@ -197,16 +197,6 @@ def config(notify=False):
     return agents, intervals
 
 
-def lead_alert():
-    """factory.json "lead_alert": argv of a command that reaches the human lead (a chat bot, a pager);
-    the message is appended as the last argument. Missing means Zeus's inbox is the only alert."""
-    try:
-        argv = json.loads((HUB / "factory.json").read_text()).get("lead_alert")
-    except (OSError, ValueError, AttributeError):
-        return None
-    return argv if isinstance(argv, list) and argv and all(isinstance(x, str) for x in argv) else None
-
-
 def load(name):
     try:
         return json.loads((STATE / name).read_text())
@@ -622,39 +612,32 @@ def heartbeat(name):
         return None
 
 
-def report(name, before, cause, line, dry, lead, key=None):
+def report(name, before, cause, line, dry, key=None):
+    """Log a change and alert the lead agent's inbox. Watchdog news never goes to the human's phone."""
     msg = f"{name}: {before} -> {cause}" + (f" ({line})" if line else "")
     alert = cause != "healthy"
     key = key or f"watchdog:{name}"  # one current alert per agent in Zeus's inbox, each replacing the last
     if dry:
-        print(f"  would log '{msg}'" + (f", notify {LEAD}" if alert else "") + (", alert the lead" if lead else ""))
+        print(f"  would log '{msg}'" + (f", notify {LEAD}" if alert else ""))
         return
     with open(HUB / "watchdog.log", "a") as f:
         f.write(f"{datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%SZ} {msg}\n")
     if not alert:  # recovered or relaunched: its stale alert leaves Zeus's inbox
         hb.deliver(LEAD, None, key=key)
         return
-    text = (f"[watchdog] {msg}. The watchdog never relaunches a live session; "
-            f"look at tmux hub-{name.lower()}.")
+    notify_lead(f"[watchdog] {msg}. The watchdog never relaunches a live session; "
+                f"look at tmux hub-{name.lower()}.", key)
+
+
+def notify_lead(text, key):
     r = subprocess.run([sys.executable, str(HERE / "board.py"), "notify", LEAD, text, "--key", key],
                        env={**os.environ, "HUB_AGENT": "Watchdog"}, capture_output=True, text=True, timeout=30)
     if r.returncode:
         print(f"  notify failed: {r.stderr.strip()}", file=sys.stderr)
-    if lead:
-        alert_lead(text)
-
-
-def alert_lead(text):
-    argv = lead_alert()
-    if argv:
-        try:  # best effort: the lead's channel may be down or rate limited
-            subprocess.run([*argv, text], capture_output=True, timeout=45)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
 
 
 def prompt_waits(name, cur, cause, line, now, intervals, dry):
-    """Any agent at a prompt or asking a question for 3 min: the lead hears through lead_alert, again every 15 min."""
+    """Any agent at a prompt or asking a question for 3 min: the lead's inbox hears, again every 15 min."""
     if cause not in PROMPT_CAUSES:
         cur.pop("prompt_since", None)
         cur.pop("lead_told", None)
@@ -668,9 +651,9 @@ def prompt_waits(name, cur, cause, line, now, intervals, dry):
     text = (f"[watchdog] {name} has been {cause} for {int(waited // 60)} min: {line}. "
             f"Answer it in tmux hub-{name.lower()}.")
     if dry:
-        print(f"  would alert the lead: {text}")
+        print(f"  would tell {LEAD}: {text}")
         return
-    alert_lead(text)
+    notify_lead(text, f"watchdog:prompt:{name}")
     cur["lead_told"] = now
 
 
@@ -705,8 +688,7 @@ def watch(dry):
             # The same message still on screen keeps its first reading: re-reading "try again at 7:28 PM"
             # after 7:28 PM would push the breaker to tomorrow (T-506 run 2).
             until = quota[0] if quota else prev["until"] if prev.get("line") == line and prev.get("until") else None
-            cur["limited"] = {"until": until or reset_at(tail(pane), now) or prev.get("until"), "line": line,
-                              "told": prev.get("told", False)}
+            cur["limited"] = {"until": until or reset_at(tail(pane), now) or prev.get("until"), "line": line}
         elif cur.get("limited") and (cur["limited"].get("until") or 0) <= now:  # no time shown: lifts with the message
             del cur["limited"]
         cause = cause or "healthy"
@@ -716,13 +698,7 @@ def watch(dry):
         before = cur.get("cause", "healthy")
         # A new dialog under the same cause is news too: the alert names what is being asked.
         if cause != before or (cause in PROMPT_CAUSES and line != cur.get("line")):
-            # The lead hears of a limit once per reset window (the breaker's life), and of the lead agent's other trouble;
-            # of prompts, through prompt_waits once one has waited 3 minutes.
-            lead = (not cur["limited"]["told"]) if cause == "rate limited" else (
-                cause not in ("healthy", *PROMPT_CAUSES) and name == LEAD)
-            report(name, before, cause, line, dry, lead)
-            if cause == "rate limited" and not dry:
-                cur["limited"]["told"] = True
+            report(name, before, cause, line, dry)
         prompt_waits(name, cur, cause, line, now, intervals, dry)
         cur["cause"], cur["line"] = cause, line
     budgets(agents, all_tasks, state, now, dry)
@@ -733,7 +709,7 @@ def watch(dry):
 
 def budgets(agents, all_tasks, state, now, dry):
     """Living spec §4: a claimed task past its budget (its own, else its claimer's phase's) tells Zeus once and
-    gets a note; past twice its budget, the lead too, once. Nothing is killed or released: work is never lost."""
+    gets a note; past twice its budget, the lead agent again, once. Nothing is killed or released: work is never lost."""
     names = {a["name"].lower(): a for a in agents}
     over = state.setdefault("over_budget", {})
     for tid in [tid for tid in over if not any(t["id"] == tid and t["status"] == "claimed" for t in all_tasks)]:
@@ -763,14 +739,14 @@ def budgets(agents, all_tasks, state, now, dry):
         cause = f"over {'2x ' if level == 2 else ''}budget"
         line = f"{t['id']} {cause}: claimed {minutes} min ago, budget {budget} min"
         print(f"{who}: {line}")
-        report(who, "on time", cause, line, dry, lead=level == 2, key=f"watchdog:budget:{t['id']}")
+        report(who, "on time", cause, line, dry, key=f"watchdog:budget:{t['id']}")
         if dry:
             continue
         with hb.board(write=True) as (data, events):
             x = next((x for x in data["tasks"] if x["id"] == t["id"]), None)
             if x is not None:
                 x["notes"].append({"at": hb.now(), "by": "Watchdog",
-                                   "text": f"{line}. Nothing is stopped: finish it, hub block it, or ask Zeus."})
+                                   "text": f"{line}. Nothing is stopped: finish it, hub block it, or ask {LEAD}."})
                 x["updated"] = hb.now()
             hb.log(events, "Watchdog", "over_budget", t["id"], agent=who, level=level, minutes=minutes, budget=budget)
         over[t["id"]] = level

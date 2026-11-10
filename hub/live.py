@@ -603,7 +603,7 @@ class Live:
             if now - when(since.setdefault(str(n), now.isoformat())) > timedelta(minutes=10):
                 self.once(f"gatewait:{n}", LEAD_AGENT,
                           f"{self.project} PR #{n} has waited 10+ min for LGTM: review it "
-                          f"(a sub-agent can load hub:hackathon-reviewer) or chase {reviewer()}.")
+                          f"(a sub-agent can load hackathon-reviewer) or chase {reviewer()}.")
 
     def heldout_notes(self):
         """A held-out red on a change branch (live_merge's heldout_red): a note on each of its tasks citing the
@@ -872,7 +872,7 @@ class Live:
         if freeze and freeze - timedelta(minutes=45) <= now < freeze:
             merged = ", ".join(f"#{n}" for n in self.state.get("unreviewed", [])) or "none"
             self.once("release-review", reviewer(),
-                      f"{self.project} release review: code freeze in 45 min, run it now (hub:hackathon-reviewer): "
+                      f"{self.project} release review: code freeze in 45 min, run it now (hackathon-reviewer): "
                       "the runner at main's head on 5 practice cases, per-tool error counts, the final-state mix, "
                       f"and these PRs merged without review, each reviewed: {merged}.")
         start = self.deadlines.get("build start")

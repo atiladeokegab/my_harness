@@ -162,6 +162,16 @@ class InboxSurface(HubBed):
         out = json.loads(self.run_js(HOOK, codex, "--agent", "Prometheus", CLAUDECODE=""))
         self.assertIn("for prometheus", out["hookSpecificOutput"]["additionalContext"])
 
+    def test_a_subagent_never_takes_its_parents_mail(self):
+        """2026-11-09: Zeus's builders inherit HUB_AGENT=Zeus; their tool calls marked Zeus's mail seen, so Zeus
+        missed review verdicts for hours. Claude and Codex both put agent_id only on a sub-agent's hook payloads."""
+        self.send("Atlas CHANGES on c51b249")
+        sub = {"hook_event_name": "PostToolUse", "agent_id": "abuild-1", "agent_type": "builder"}
+        self.assertEqual(self.run_js(HOOK, sub, HUB_AGENT="Zeus"), "")
+        codex_sub = {**sub, "turn_id": "t-1", "agent_type": "default"}
+        self.assertEqual(self.run_js(HOOK, codex_sub, "--agent", "Zeus", CLAUDECODE=""), "")
+        self.assertIn("Atlas CHANGES on c51b249", self.hook("PostToolUse"))  # the seat itself still gets it
+
     def test_agy_format_injects_an_ephemeral_step_only_when_new(self):
         """agy runs this before every model call (PreInvocation): silent with nothing new, and `hub` is not spawned
         while the inbox file is older than the --unseen cursor."""
@@ -232,6 +242,16 @@ class StopDeliver(HubBed):
         self.assertEqual(self.stop(HUB_AGENT="Zeus"), "")
         self.assertEqual(self.stop("--agent", "zeus", codex=True), "")
         self.assertFalse((Path(self.env["HUB_DIR"]) / "inbox/.received/Zeus/m-6").exists())
+
+    def test_a_subagent_is_not_blocked_with_its_parents_mail(self):
+        """A builder started by Hermes inherits HUB_AGENT=Hermes: its Stop must leave Hermes's mail unreceived."""
+        self.notify("for the real hermes", "m-14")
+        receipt = Path(self.env["HUB_DIR"]) / "inbox/.received/Hermes/m-14"
+        sub = {"hook_event_name": "Stop", "stop_hook_active": False, "agent_id": "abuild-1"}
+        self.assertEqual(self.run_js(STOP, sub, HUB_AGENT="Hermes"), "")
+        self.assertEqual(self.run_js(STOP, {**sub, "turn_id": "t-1"}, "--agent", "Hermes", CLAUDECODE=""), "")
+        self.assertFalse(receipt.exists())
+        self.assertIn("for the real hermes", json.loads(self.stop(HUB_AGENT="Hermes"))["reason"])
 
     def test_attached_session_is_left_alone(self):
         """The lead talking to an agent directly must not have every answer roll into peer mail."""

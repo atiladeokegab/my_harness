@@ -1,6 +1,6 @@
 """`hub gh-sync` against a stub `gh` on PATH. Never touches the live board.
 
-    python3 tests/test_gh_sync.py
+    uv run python tests/test_gh_sync.py
 """
 
 import hashlib
@@ -38,6 +38,9 @@ if "--input" in a and a[a.index("--input") + 1] == "-":
     data = sys.stdin.read()
     with open(os.path.join(d, "stdin.json"), "w") as f:
         f.write(data)
+    if a[:4] == ["api", "-X", "PATCH", "repos/o/hk"]:
+        with open(os.path.join(d, "security.jsonl"), "a") as f:
+            f.write(data + "\n")
     if "/protection" in a[-3]:
         with open(os.path.join(d, "protection-" + a[-3].split("/branches/")[1].split("/")[0] + ".json"), "w") as f:
             f.write(data)
@@ -61,6 +64,13 @@ elif a[:2] == ["issue", "list"]:
                            "url": f"https://github.com/o/hk/issues/{k}"} for k in range(1, n + 1)]))
     else:
         print("[]")
+elif a[:2] == ["issue", "reopen"]:
+    p = os.path.join(d, "issues.json")
+    issues = json.load(open(p))
+    for issue in issues:
+        if issue["number"] == int(a[2]):
+            issue.update(state="OPEN", stateReason="")
+    json.dump(issues, open(p, "w"))
 elif a[:2] == ["issue", "view"]:
     print(json.dumps({"body": open(os.path.join(d, f"body-{a[2]}.txt")).read()}))
 elif a[:1] == ["api"] and "/sub_issues" in a[-1]:
@@ -70,6 +80,9 @@ elif a[:1] == ["api"] and "/sub_issues" in a[-1]:
 elif a[:1] == ["api"] and "milestones" in a[-1] and "-X" not in a:
     p = os.path.join(d, "milestones.json")
     print(open(p).read() if os.path.exists(p) else "[]")
+elif a[:1] == ["api"] and "/invitations" in a[-1] and "-X" not in a:
+    people = [p for p in os.environ.get("GH_INVITED", "").split(",") if p]
+    print(json.dumps([{"invitee": {"login": p}} for p in people]))
 elif a[:1] == ["api"] and "collaborators" in a[-1] and "-X" not in a:
     people = os.environ.get("GH_COLLABORATORS", "lead-gh,sam-gh").split(",")
     print(json.dumps([{"login": p} for p in people if p]))
@@ -78,14 +91,30 @@ elif a[:2] == ["api", "user"]:
 elif a[:1] == ["api"] and a[-1] == "repos/o/hk/branches" and "-X" not in a:
     names = [n for n in os.environ.get("GH_BRANCHES", "main").split(",") if n]
     print(json.dumps([{"name": n} for n in names[:30]]))      # GitHub's first page
+elif a[:2] == ["api", "repos/o/hk/branches?per_page=100"] and "--paginate" in a:
+    heads = json.loads(os.environ.get("GH_BRANCH_HEADS", "{}"))
+    print("\n".join(n + "\t" + heads.get(n, "sha-" + n)
+                    for n in os.environ.get("GH_BRANCHES", "main").split(",") if n))
 elif a[:1] == ["api"] and a[-1].startswith("repos/o/hk/git/matching-refs/heads/"):
     prefix = a[-1].rsplit("/heads/", 1)[1]
     names = [n for n in os.environ.get("GH_BRANCHES", "main").split(",") if n]
     print(json.dumps([{"ref": f"refs/heads/{n}"} for n in names if n.startswith(prefix)]))
+elif a[:1] == ["api"] and "/compare/integration..." in a[-1]:
+    name = a[-1].split("...", 1)[1]
+    ahead = name in os.environ.get("GH_AHEAD_BRANCHES", "").split(",")
+    print(json.dumps({"ahead_by": int(ahead)}))
 elif a[:1] == ["api"] and a[-1] == "repos/o/hk/git/ref/heads/main":
     print(json.dumps({"object": {"sha": "abc123"}}))
 elif a[:1] == ["api"] and a[-1] == "repos/o/hk" and "-X" not in a:
-    print(json.dumps({"default_branch": os.environ.get("GH_DEFAULT", "main")}))
+    status = os.environ.get("GH_SECRET_SCANNING", "enabled")
+    print(json.dumps({"default_branch": os.environ.get("GH_DEFAULT", "main"),
+                      "security_and_analysis": {"secret_scanning": {"status": "enabled"},
+                                                "secret_scanning_push_protection": {"status": status}}}))
+elif a[:1] == ["api"] and a[-1] == "repos/o/hk/contents/.github/workflows/smoke.yml?ref=integration":
+    if not os.environ.get("GH_SMOKE_WORKFLOW"):
+        sys.stderr.write("gh: Not Found (HTTP 404)")
+        sys.exit(1)
+    print(json.dumps({"name": "smoke.yml"}))
 elif a[:2] == ["api", "graphql"]:
     p = os.path.join(d, "graphql.json")
     if not os.path.exists(p):
@@ -107,7 +136,7 @@ elif a[:2] == ["run", "view"]:
     json.dump(seq, open(p, "w"))
     print(json.dumps({"status": status}))
 elif a[:2] == ["pr", "list"]:
-    p = os.path.join(d, "prs.json")
+    p = os.path.join(d, "merged-prs.json" if "merged" in a else "prs.json")
     print(open(p).read() if os.path.exists(p) else "[]")
 elif a[:1] == ["api"] and a[-1] == "repos/o/hk/git/ref/tags/freeze" and "-X" not in a:
     if os.environ.get("GH_TAG_ERROR"):
@@ -140,19 +169,19 @@ elif a[:2] == ["repo", "view"]:
     if os.environ.get("GH_REPO_ERROR"):
         sys.stderr.write(os.environ["GH_REPO_ERROR"])
         sys.exit(1)
-    tpl = os.environ.get("GH_TEMPLATE", "tpl/hackathon_teamwork")
+    tpl = os.environ.get("GH_TEMPLATE", "atiladeokegab/hackathon_teamwork")
     owner, _, name = tpl.partition("/")
     print(json.dumps({"templateRepository": {"name": name, "owner": {"login": owner}} if tpl else None}))
 '''
 
 CFG = {
     "repo": "o/hk",
-    "template": "tpl/hackathon_teamwork",
     "timezone": "Europe/London",
     "event": "Hack Day",
     "title": "Sample App",
     "summary": "A sample app for the accessibility track.",
     "smoke": "python3 -m unittest",
+    "review_before": ["verify/*"],
     "deadlines": [{"name": "code freeze", "at": "2026-10-04T14:00:00+01:00"},
                   {"name": "submit", "at": "2026-10-04T15:00:00+01:00"}],
     "roster": [{"name": "Alex", "github": "lead-gh", "lead": True},
@@ -180,8 +209,7 @@ class GhSyncTest(unittest.TestCase):
         gh.write_text(STUB)
         gh.chmod(0o755)
         self.env = {k: v for k, v in os.environ.items()
-                    if k not in ("HUB_DIR", "HUB_AGENT", "HUB_PROJECT",
-                                 "HUB_LEAD", "HUB_CLAUDE_AGENTS", "HUB_CODEX_AGENTS", "HUB_CODE_DIR")}
+                    if k not in ("HUB_DIR", "HUB_AGENT", "HUB_PROJECT")}
         self.env.update(HUB_DIR=str(self.hub), HUB_AGENT="Zeus", GH_STUB=str(self.stub),
                         PATH=f"{self.stub / 'bin'}:{os.environ['PATH']}")
 
@@ -507,6 +535,96 @@ class GhSyncTest(unittest.TestCase):
         self.sync("--pull-only")
         self.assertEqual(self.tasks()["T-001"]["status"], "done")
 
+    def test_pull_reopens_self_closed_issue_with_unmerged_branch(self):
+        self.add_task("T-001", issue=4, issue_hash="h", issue_assignee="sam-gh")
+        (self.stub / "issues.json").write_text(json.dumps([
+            {"number": 4, "title": "t", "state": "CLOSED", "stateReason": "COMPLETED",
+             "assignees": [{"login": "sam-gh"}], "labels": [], "url": "u"}]))
+        (self.stub / "graphql.json").write_text(json.dumps({"data": {"repository": {"issue": {
+            "timelineItems": {"nodes": [{"createdAt": "2026-10-13T12:00:00Z", "closer": None}]},
+            "comments": {"nodes": []}}}}}))
+        self.env.update(GH_BRANCHES="main,4-feature", GH_AHEAD_BRANCHES="4-feature")
+        result = self.sync("--pull-only")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        reopen = self.calls(["issue", "reopen"])[0]
+        self.assertIn("@sam-gh", reopen[-1])
+        self.assertIn("@lead-gh", reopen[-1])
+        self.assertEqual(self.tasks()["T-001"]["status"], "open")
+        self.assertEqual(json.loads((self.stub / "issues.json").read_text())[0]["state"], "OPEN")
+        self.assertEqual(len([c for c in self.calls() if c[:2] == ["api", "repos/o/hk/branches?per_page=100"]]), 1)
+        issues = json.loads((self.stub / "issues.json").read_text())
+        issues[0].update(state="CLOSED", stateReason="COMPLETED")
+        (self.stub / "issues.json").write_text(json.dumps(issues))
+        graphql = json.loads((self.stub / "graphql.json").read_text())
+        graphql["data"]["viewer"] = {"login": "sync-bot"}
+        graphql["data"]["repository"]["issue"]["comments"]["nodes"] = [
+            {"body": reopen[-1], "author": {"login": "sync-bot"}}]
+        (self.stub / "graphql.json").write_text(json.dumps(graphql))
+        self.assertEqual(self.sync("--pull-only").returncode, 0)
+        self.assertEqual(len(self.calls(["issue", "reopen"])), 2)
+
+    def test_pull_leaves_pr_closed_issue_and_abandoned_branch_closed(self):
+        self.add_task("T-001", issue=4, issue_hash="h", issue_assignee="sam-gh")
+        (self.stub / "issues.json").write_text(json.dumps([
+            {"number": 4, "title": "t", "state": "CLOSED", "stateReason": "COMPLETED",
+             "assignees": [{"login": "sam-gh"}], "labels": [], "url": "u"}]))
+        path = self.stub / "graphql.json"
+        event = {"createdAt": "2026-10-13T12:00:00Z", "closer": {"__typename": "PullRequest", "merged": True}}
+        issue = {"timelineItems": {"nodes": [event]}, "comments": {"nodes": []}}
+        path.write_text(json.dumps({"data": {"repository": {"issue": issue}}}))
+        self.env.update(GH_BRANCHES="main,4-feature", GH_AHEAD_BRANCHES="4-feature")
+        self.assertEqual(self.sync("--pull-only").returncode, 0)
+        self.assertFalse(self.calls(["issue", "reopen"]))
+        issue["timelineItems"]["nodes"] = [{"createdAt": "2026-10-13T12:00:00Z", "closer": None}]
+        issue["comments"]["nodes"] = [{"body": "branch abandoned for time", "author": {"login": "sam-gh"}}]
+        path.write_text(json.dumps({"data": {"viewer": {"login": "sync-bot"}, "repository": {"issue": issue}}}))
+        self.assertEqual(self.sync("--pull-only").returncode, 0)
+        self.assertFalse(self.calls(["issue", "reopen"]))
+
+    def test_pull_reopens_closed_issue_with_linked_open_pr(self):
+        self.add_task("T-001", issue=4, issue_hash="h", issue_assignee="sam-gh")
+        (self.stub / "issues.json").write_text(json.dumps([
+            {"number": 4, "title": "t", "state": "CLOSED", "stateReason": "NOT_PLANNED",
+             "assignees": [{"login": "sam-gh"}], "labels": [], "url": "u"}]))
+        (self.stub / "prs.json").write_text(json.dumps([{"number": 9, "headRefName": "frontend", "body": "Closes #4"}]))
+        (self.stub / "graphql.json").write_text(json.dumps({"data": {"repository": {"issue": {
+            "timelineItems": {"nodes": [{"createdAt": "2026-10-13T12:00:00Z", "closer": None}]},
+            "comments": {"nodes": []}}}}}))
+        self.assertEqual(self.sync("--pull-only").returncode, 0)
+        self.assertEqual(len(self.calls(["issue", "reopen"])), 1)
+
+    def test_pull_does_not_reopen_squash_merged_branch_closed_by_hand(self):
+        self.add_task("T-001", issue=4, issue_hash="h", issue_assignee="sam-gh")
+        (self.stub / "issues.json").write_text(json.dumps([
+            {"number": 4, "title": "t", "state": "CLOSED", "stateReason": "COMPLETED",
+             "assignees": [{"login": "sam-gh"}], "labels": [], "url": "u"}]))
+        (self.stub / "graphql.json").write_text(json.dumps({"data": {"repository": {"issue": {
+            "timelineItems": {"nodes": [{"closer": None}]}, "comments": {"nodes": []}}}}}))
+        (self.stub / "merged-prs.json").write_text(json.dumps([
+            {"headRefName": "4-feature", "headRefOid": "merged-head"}]))
+        self.env.update(GH_BRANCHES="main,4-feature", GH_AHEAD_BRANCHES="4-feature",
+                        GH_BRANCH_HEADS=json.dumps({"4-feature": "merged-head"}))
+        self.assertEqual(self.sync("--pull-only").returncode, 0)
+        self.assertFalse(self.calls(["issue", "reopen"]))
+        self.env["GH_BRANCH_HEADS"] = json.dumps({"4-feature": "new-unmerged-head"})
+        self.assertEqual(self.sync("--pull-only").returncode, 0)
+        self.assertEqual(len(self.calls(["issue", "reopen"])), 1)
+
+    def test_guard_api_failure_does_not_skip_other_closed_issue_updates(self):
+        self.add_task("T-001", issue=4, issue_hash="h", issue_assignee="sam-gh")
+        self.add_task("T-002", issue=5, issue_hash="h", issue_assignee="sam-gh")
+        (self.stub / "issues.json").write_text(json.dumps([
+            {"number": n, "title": "t", "state": "CLOSED", "stateReason": "COMPLETED",
+             "assignees": [{"login": "sam-gh"}], "labels": [], "url": "u"} for n in (4, 5)]))
+        self.env.update(GH_BRANCHES="main,4-feature", GH_AHEAD_BRANCHES="4-feature")
+        for fail_arg in ("repos/o/hk/compare/integration...4-feature",
+                         "repos/o/hk/branches?per_page=100"):
+            self.env["GH_FAIL_ARG"] = fail_arg
+            result = self.sync("--pull-only")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("warning:", result.stdout)
+            self.assertEqual(self.tasks()["T-002"]["status"], "done")
+
     def test_pull_pool_assignee_sets_owner(self):
         self.add_task("T-001", owner="", issue=4, issue_hash="h", issue_assignee=None)
         (self.stub / "issues.json").write_text(json.dumps([
@@ -597,13 +715,22 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         bodies = (self.stub / "bodies.jsonl").read_text().splitlines()
         self.assertEqual(json.loads(bodies[0]), body.rstrip() + "\n\n<!-- hub-task: T-001 -->")
 
+    def test_init_rerun_skips_pending_invites(self):
+        # GitHub answers a repeat invite with an empty body that gh can't parse (dry run, 2026-10-12)
+        self.use_agents()
+        self.env["GH_COLLABORATORS"] = "lead-gh"
+        self.env["GH_INVITED"] = "sam-gh"
+        self.sync("--init")
+        self.assertFalse(any(c[:3] == ["api", "-X", "PUT"] and "collaborators/sam-gh" in c[3]
+                             for c in self.calls()))
+
     def test_init_creates_everything(self):
         self.use_agents()
         self.env["GH_REPO_MISSING"] = "1"
         r = self.sync("--init")
         self.assertEqual(r.returncode, 0, r.stderr)
         calls = self.calls()
-        self.assertIn(["repo", "create", "o/hk", "--template", "tpl/hackathon_teamwork",
+        self.assertIn(["repo", "create", "o/hk", "--template", "atiladeokegab/hackathon_teamwork",
                        "--public", "--clone"], calls)
         self.assertTrue(any(c[:3] == ["api", "-X", "PUT"] and c[3] == "repos/o/hk/collaborators/sam-gh" for c in calls))
         self.assertFalse(any("collaborators/lead-gh" in " ".join(c) for c in calls))
@@ -754,7 +881,8 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         clone, remote = self.event_clone()
         self.write_cfg(board={"number": 9, "url": "https://github.com/users/lead-gh/projects/9", "id": "P9"},
                        roster=[{**CFG["roster"][0], "strengths": "architecture", "agents": [{"name": "Zeus"}]},
-                               {**CFG["roster"][1], "strengths": "web design", "designer": True, "tool": "Codex"}])
+                               {**CFG["roster"][1], "strengths": "web design", "designer": True, "tool": "Codex",
+                                "bring": "branch ledgers, FCA rules"}])
         (self.hub / "projects" / "hk" / "c4_context.png").write_bytes(b"PNG")
         r = self.sync("--init")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -764,8 +892,9 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         hackathon = show("integration", "HACKATHON.md")
         self.assertIn("# Hack Day", hackathon)
         self.assertIn("| code freeze | 2026-10-04T14:00+01:00 | 2026-10-04T13:00Z |", hackathon)
-        self.assertIn("| Alex | @lead-gh | lead, architecture |", hackathon)
-        self.assertIn("| Sam | @sam-gh | designer, web design |", hackathon)
+        self.assertIn("| Name | GitHub | Role | Bring |\n|---|---|---|---|\n", hackathon)
+        self.assertIn("| Alex | @lead-gh | lead, architecture |  |", hackathon)
+        self.assertIn("| Sam | @sam-gh | designer, web design | branch ledgers, FCA rules |", hackathon)
         self.assertIn("The lead's agents: Zeus.", hackathon)
         self.assertIn("Board: https://github.com/users/lead-gh/projects/9", hackathon)
         readme = show("integration", "README.md")
@@ -994,7 +1123,6 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
             "name with a space": json.dumps({**CFG, "roster": [*CFG["roster"], {"name": "Sam Lee", "github": "sl"}]}),
             "no submit deadline": json.dumps({**CFG, "deadlines": CFG["deadlines"][:1]}),
             "wrong shape": json.dumps(["o/hk"]),
-            "no template": json.dumps({k: v for k, v in CFG.items() if k != "template"}),
             "handle not text": json.dumps({**CFG, "roster": [*CFG["roster"], {"name": "Bo", "github": 123}]}),
             "handle not a handle": json.dumps({**CFG, "roster": [*CFG["roster"], {"name": "Bo", "github": "bo gh!"}]}),
             "deadline without a name": json.dumps({**CFG, "deadlines": [*CFG["deadlines"], {"at": "2026-10-04T16:00+01:00"}]}),
@@ -1019,7 +1147,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertEqual(self.calls(), [])
 
     def test_init_requires_event_fields_before_github(self):
-        for field in ("event", "title", "summary", "smoke"):
+        for field in ("event", "title", "summary", "smoke", "review_before"):
             with self.subTest(field=field):
                 cfg = {**CFG}
                 del cfg[field]
@@ -1074,6 +1202,13 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertIn("code freeze", r.stderr)
         self.assertEqual(self.calls(["issue", "create"]), [])
 
+    def test_deadline_with_a_note_after_the_name_syncs(self):
+        self.add_task("T-001", detail="Context: x\nDeadline: submit (15:00 BST).")
+        r = self.sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [create] = self.calls(["issue", "create"])
+        self.assertEqual(create[create.index("--milestone") + 1], "submit")
+
     def test_done_tasks_are_left_alone(self):
         self.add_task("T-001", status="done", issue=1, issue_hash="stale", issue_assignee="old-gh")
         r = self.sync()
@@ -1095,7 +1230,7 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertEqual(self.writes(), [])           # no issue, no invite, no protection
 
     def test_repo_name_must_match_the_project(self):
-        self.write_cfg(repo="o/webapp")
+        self.write_cfg(repo="o/refinery")
         r = self.sync("--init")
         self.assertEqual(r.returncode, 1)
         self.assertIn("project", r.stderr)
@@ -1238,16 +1373,6 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertEqual(len(comments), 2)              # one failed, one delivered
         self.assertEqual(len(self.calls(["issue", "edit"])), 1)
 
-    def test_roster_comes_from_the_environment(self):
-        self.env.update(HUB_LEAD="Lead", HUB_CLAUDE_AGENTS="Lead Builder", HUB_CODEX_AGENTS="")
-        self.add_task("T-001", owner="Alex", agent="Builder")    # owners are humans; agents are delegates
-        r = self.sync()
-        self.assertEqual(r.returncode, 0, r.stderr)
-        [create] = self.calls(["issue", "create"])
-        self.assertIn("task,agent:builder", create)
-        self.assertIn("lead-gh", create)                 # hub agents work as the lead's hands
-        # an unknown delegate is refused earlier, by `hub delegate` (board.py agents_of)
-
     def test_init_creates_the_code_dir_on_a_fresh_machine(self):
         home = self.hub / "fresh-home"                  # no ~/code yet
         home.mkdir()
@@ -1376,13 +1501,13 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
 
     def test_config_rejects_bad_agents(self):
         for roster, needle in [
-            ([{"name": "Alex", "github": "lead-gh", "lead": True, "agents": [{"name": "robin"}]},
-              {"name": "Robin", "github": "mx-gh"}], "Robin"),
+            ([{"name": "Alex", "github": "lead-gh", "lead": True, "agents": [{"name": "matrix"}]},
+              {"name": "Matrix", "github": "mx-gh"}], "Matrix"),
             ([{"name": "Alex", "github": "lead-gh", "lead": True,
                "agents": [{"name": "Prometheus", "github": "mx-gh"}]},
-              {"name": "Robin", "github": "mx-gh"}], "mx-gh"),
+              {"name": "Matrix", "github": "mx-gh"}], "mx-gh"),
             ([{"name": "Alex", "github": "lead-gh", "lead": True, "agents": [{"name": "Zeus"}]},
-              {"name": "Robin", "github": "mx-gh", "agents": [{"name": "zeus"}]}], "Zeus")]:
+              {"name": "Matrix", "github": "mx-gh", "agents": [{"name": "zeus"}]}], "Zeus")]:
             self.use_agents({**CFG, "roster": roster})
             r = self.sync()
             self.assertNotEqual(r.returncode, 0)
@@ -1564,6 +1689,35 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         cfg = json.loads((self.hub / "projects" / "hk" / "hackathon.json").read_text())
         self.assertEqual(cfg["freeze_at_pushed"], "2026-10-04T13:00:00Z")
 
+    def test_init_requires_smoke_only_when_the_repo_has_its_workflow(self):
+        self.env.update(GH_BRANCHES="main,integration", GH_DEFAULT="integration")
+        for workflow, contexts in (("", ["freeze-gate"]), ("1", ["freeze-gate", "smoke"])):
+            with self.subTest(workflow=workflow):
+                self.env["GH_SMOKE_WORKFLOW"] = workflow
+                r = self.sync("--init")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                integration = json.loads((self.stub / "protection-integration.json").read_text())
+                self.assertEqual(integration["required_status_checks"], {"strict": False, "contexts": contexts})
+
+    def test_init_turns_on_push_protection_once(self):
+        self.env.update(GH_BRANCHES="main,integration", GH_DEFAULT="integration", GH_SECRET_SCANNING="disabled")
+        r = self.sync("--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        patches = [c for c in self.calls() if c[:4] == ["api", "-X", "PATCH", "repos/o/hk"]]
+        self.assertEqual(patches, [["api", "-X", "PATCH", "repos/o/hk", "--input", "-"]])
+        bodies = [json.loads(l) for l in (self.stub / "security.jsonl").read_text().splitlines()]
+        self.assertEqual(bodies, [{"security_and_analysis": {"secret_scanning_push_protection": {"status": "enabled"}}}])
+        self.env["GH_SECRET_SCANNING"] = "enabled"               # GitHub now reports it on
+        (self.stub / "calls.jsonl").unlink()
+        self.assertEqual(self.sync("--init").returncode, 0)
+        self.assertFalse([c for c in self.calls() if c[:4] == ["api", "-X", "PATCH", "repos/o/hk"]])
+
+    def test_dry_run_init_of_a_new_repo_shows_both_new_settings(self):
+        self.env.update(GH_REPO_404="1", GH_REPO_MISSING="1")
+        r = self.sync("--init", "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("would run: gh api -X PATCH repos/o/hk --input -", r.stdout)
+
     def test_moved_freeze_is_pushed_once(self):
         self.add_task("T-001")
         cfg = json.loads((self.hub / "projects" / "hk" / "hackathon.json").read_text())
@@ -1690,6 +1844,68 @@ with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 60)) as
         self.assertTrue(var and tag and var[0] < tag[0], calls)
         self.assertIn("2026-10-04T14:00:00Z", calls[var[0]])
 
+
+class ConfigTest(unittest.TestCase):
+    """Pure functions, no stub: gh_sync imports cleanly with the hub env stripped."""
+
+    def setUp(self):
+        sys.path.insert(0, str(HUB))
+        import gh_sync
+        self.gh_sync = gh_sync
+
+    def test_logged_deadline_values_resolve_to_known_names(self):
+        names = ["build start", "contracts", "design", "first e2e", "code freeze", "reality test", "demo video", "submit"]
+        devin = "### Deadline\n\ncode freeze\n\n[Written by Devin](https://app.devin.ai/sessions/7cad5fdfc53945e4a0bc94a081239d92)"
+        logged = {"Context: x\nDeadline: first e2e (13:45 BST).": "first e2e",   # 4 of the 7 errors
+                  "Context: x\nDeadline: demo": "demo video",                     # 1
+                  devin: "code freeze",                                          # 2
+                  "Context: x\nDeadline: Code Freeze": "code freeze",
+                  "Context: x\nDeadline: designer review": "designer review",   # not "design"
+                  "Context: x\nDeadline: freeze": "freeze",                     # still an error
+                  "Context: x": "code freeze"}
+        for detail, want in logged.items():
+            with self.subTest(detail=detail):
+                self.assertEqual(self.gh_sync.deadline(detail, names), want)
+
+    def test_review_before_must_be_a_list_of_globs(self):
+        cfg = json.loads(json.dumps(CFG))
+        for bad in ("docs/*", [""], ["docs/*", 3]):
+            with self.subTest(bad=bad):
+                self.assertIn("review_before must be a list of path globs",
+                              self.gh_sync.check_config({**cfg, "review_before": bad}, "hk"))
+        self.assertEqual(self.gh_sync.check_config({**cfg, "review_before": ["verify/*", "*.lock"]}, "hk"), [])
+
+    def test_bring_must_be_text(self):
+        cfg = json.loads(json.dumps(CFG))
+        cfg["roster"][1]["bring"] = ["ledgers"]
+        self.assertIn("roster entry 'Sam': bring must be text", self.gh_sync.check_config(cfg, "hk"))
+        cfg["roster"][1]["bring"] = "branch ledgers, FCA rules"
+        self.assertEqual(self.gh_sync.check_config(cfg, "hk"), [])
+
+    def test_deploy_needs_owner_and_command(self):
+        cfg = json.loads(json.dumps(CFG))
+        for bad in ("make deploy", {"command": "make deploy"}, {"owner": "Zeus", "command": " "}):
+            with self.subTest(bad=bad):
+                self.assertIn('deploy must be {"owner": "<who deploys>", "command": "<shell command>"}',
+                              self.gh_sync.check_config({**cfg, "deploy": bad}, "hk"))
+        self.assertEqual(self.gh_sync.check_config({**cfg, "deploy": {"owner": "Zeus", "command": "make deploy"}}, "hk"), [])
+
+    def test_checks_must_be_a_list_of_names(self):
+        cfg = json.loads(json.dumps(CFG))
+        for bad in ("freeze-gate", [""], ["freeze-gate", 1]):
+            with self.subTest(bad=bad):
+                self.assertIn("checks must be a list of CI check names",
+                              self.gh_sync.check_config({**cfg, "checks": bad}, "hk"))
+        self.assertEqual(self.gh_sync.check_config({**cfg, "checks": ["freeze-gate", "tests"]}, "hk"), [])
+
+    def test_init_refuses_a_config_without_review_before_and_says_the_fix(self):
+        """The hackathon skill: "Never leave the key out: hub live then gates every PR"."""
+        cfg = {k: v for k, v in CFG.items() if k != "review_before"}
+        fix = ("review_before is missing: copy the default list from the hackathon-reviewer skill, then add "
+               "this event's runner, safety and verify paths (without it every PR waits for review)")
+        self.assertIn(fix, self.gh_sync.check_config(cfg, "hk", init=True))
+        self.assertNotIn(fix, self.gh_sync.check_config(cfg, "hk"))  # a running event still syncs
+        self.assertEqual(self.gh_sync.check_config(CFG, "hk", init=True), [])
 
 def spec(version, text, v=None):
     return {"version": version, "requirements": [{"id": "R-1", "title": "Create link", "needs": [], "acceptance": [

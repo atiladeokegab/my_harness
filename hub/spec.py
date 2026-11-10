@@ -3,7 +3,8 @@
 The PRD (projects/<project>/spec/prd.json, or legacy requirements.json) is the root. An approved change
 (spec/changes/C-NNN.json)
 writes PRD v+1 and regenerates the project's whole task tree: done tasks outside the blast radius are carried
-over, done tasks inside it are rewound on branch change/C-NNN, every unfinished task is marked stale, and new
+over, done tasks inside it are rewound on branch change/C-NNN, unfinished tasks citing a changed line are marked
+stale (tasks with no spec lineage are never touched), and new
 tasks are generated for every acceptance line no carried-over task covers. Deterministic: no model anywhere,
 standard library plus git. Same spec, board and repo in, same bytes out.
 
@@ -13,7 +14,7 @@ standard library plus git. Same spec, board and repo in, same bytes out.
     hub spec lint C-NNN             deterministic overlap checks
     hub spec impact C-NNN            the radius from the graph alone
     hub spec rewind C-NNN --dry-run  the radius, the rewind in a throwaway clone, and the check run
-    hub spec apply C-NNN [--force]   all of it, for real
+    hub spec apply C-NNN [--force] [--yes]  all of it, for real
     hub spec converge [--project P]  weekly: one board task per drift from origin's live line
 """
 
@@ -424,7 +425,7 @@ def analyse(project, repo, cid):
     new = apply_change(spec, change)
     cfg = repo_cfg(project)
     with hb.board() as (data, _):
-        tasks = [t for t in data["tasks"] if t.get("project") == project and "stale" not in (t.get("tags") or [])]
+        tasks = [t for t in data["tasks"] if tree_task(t, project)]
     base, base_sha = base_ref(repo, cfg)
     try:
         with open(os.path.join(spec_dir(project), "spec.lock")) as f:
@@ -444,8 +445,23 @@ def analyse(project, repo, cid):
                                   if st == "A" and under(f, cfg.get("migrations", []))})}
 
 
+def tree_task(t, project):
+    """A task of the project's spec tree. A retired task (hub retire) was closed without being built, so it is left
+    out: it carries no reqs as built, is never stamped or staled, and its lines are rebuilt or reported unchecked."""
+    return (t.get("project") == project and "stale" not in (t.get("tags") or [])
+            and not (t.get("retired") and t["status"] == "done"))
+
+
+def lineage(t):
+    return bool(t.get("reqs") or t.get("generated_from"))
+
+
+def cites_changed(t, changed):
+    return any(c.split("@")[0] in changed for c in t.get("reqs") or [])
+
+
 def plan_tree(an, cid, hidden):
-    """Section 9: carry over done tasks outside K, stale K and every unfinished task, and generate a task for
+    """Section 9: carry over lineage tasks outside K, stale K and unfinished tasks on a changed line, and generate a task for
     every acceptance line of the new PRD that no carried-over task covers: one check-writer first, then one
     task per requirement, each depending on the check-writer and on the tasks of the requirements it needs."""
     import prd
@@ -471,12 +487,12 @@ def plan_tree(an, cid, hidden):
         guidance.append(f"Spine: {spine['path']} sha256 {spine['sha256']}")
     lines = lines_of(new)
     cur = {aid: a["v"] for aid, (_, a) in lines.items()}
-    if change.get("kind") == "correction":
-        carry = [t for t in an["tasks"] if t["id"] not in k]
-        stale = [t for t in an["tasks"] if t["id"] in k]
-    else:
-        carry = [t for t in an["tasks"] if t["status"] == "done" and t["id"] not in k]
-        stale = [t for t in an["tasks"] if t["id"] in k or t["status"] != "done"]
+    # Only the tree's own tasks: one with no spec lineage is never carried (stamped) or staled, even when its
+    # commit is entangled into K and rewound (T-1088); an unfinished one is superseded only when it cites a line
+    # the change modified or removed.
+    stale = [t for t in an["tasks"] if lineage(t)
+             and (t["id"] in k or (t["status"] != "done" and cites_changed(t, an["changed"])))]
+    carry = [t for t in an["tasks"] if lineage(t) and t not in stale]
     covered = {c.split("@")[0] for t in carry for c in t.get("reqs", [])} - set(hidden)
     added = {x["id"] for x in change.get("added", [])}
     touched = [aid for aid, (rid, _) in lines.items()
@@ -641,25 +657,70 @@ def rewind(an, repo, cid, clone):
     return sorted(set(kept))
 
 
-def red(cfg, clone, test):
-    """One acceptance check in clone with the repo's acceptance_cmd; a timeout is red."""
+def verdict(cfg, clone, test):
+    """One acceptance check in clone with the repo's acceptance_cmd: "pass", "fail" (a timeout too) or
+    "unverified": pytest's exit 5, no tests collected (e.g. every test live-only and deselected). Exit 5 means
+    that only from a pytest runner; from any other command it is a failure like any non-zero exit."""
     argv = [x.replace("{test}", test) for x in shlex.split(cfg.get("acceptance_cmd", DEFAULT_CHECK))]
     env = {k: v for k, v in os.environ.items() if k not in ("HUB_DIR", "HUB_AGENT")}  # as board.run_verify
     try:
-        return subprocess.run(argv, cwd=clone, env=env, capture_output=True, stdin=subprocess.DEVNULL,
-                              timeout=cfg.get("acceptance_timeout", 300)).returncode != 0
+        code = subprocess.run(argv, cwd=clone, env=env, capture_output=True, stdin=subprocess.DEVNULL,
+                              timeout=cfg.get("acceptance_timeout", 300)).returncode
     except subprocess.TimeoutExpired:
+        return "fail"
+    return "pass" if code == 0 else "unverified" if code == 5 and runs_pytest(argv) else "fail"
+
+
+# Only these options are understood, with their arity; any other option means the launcher is not recognised.
+UV_RUN_OPTS = {**dict.fromkeys(("--with", "--with-editable", "--with-requirements", "--python", "-p", "--project",
+                                "--directory", "--extra", "--group", "--env-file", "--package", "--index",
+                                "--default-index", "--cache-dir"), 1),
+               **dict.fromkeys(("--no-project", "--offline", "--frozen", "--locked", "--isolated", "--no-sync",
+                                "--exact", "--all-extras", "--no-dev", "--active", "--no-cache", "-q", "--quiet",
+                                "-v", "--verbose"), 0)}
+PYTHON_OPTS = {**dict.fromkeys(("-W", "-X"), 1),
+               **dict.fromkeys(("-b", "-B", "-d", "-E", "-i", "-I", "-O", "-OO", "-P", "-q", "-s", "-S", "-u",
+                                "-v", "-x", "-R"), 0)}
+
+
+def runs_pytest(argv):
+    """The command launched is pytest itself: `pytest`, `python -m pytest`, either behind `uv run [options]`.
+    Only the launched executable or module counts, never an argument that merely names pytest, and an option
+    this does not know makes the command unrecognised (not pytest) rather than guessed at."""
+    i = 0
+    if argv[:2] and os.path.basename(argv[0]) == "uv" and argv[1:2] == ["run"]:
+        i = 2
+        while i < len(argv) and argv[i].startswith("-"):
+            if argv[i] == "--":
+                i += 1
+                break
+            key, eq, _ = argv[i].partition("=")
+            if UV_RUN_OPTS.get(key) is None or (eq and UV_RUN_OPTS[key] != 1):
+                return False
+            i += 1 if eq else 1 + UV_RUN_OPTS[key]
+    if i >= len(argv):
+        return False
+    exe = os.path.basename(argv[i])
+    if exe in ("pytest", "py.test"):
         return True
+    if not re.fullmatch(r"python[\d.]*", exe):
+        return False
+    i += 1
+    while i < len(argv) and argv[i] in PYTHON_OPTS:  # interpreter options before -m; `--` or a script ends them
+        i += 1 + PYTHON_OPTS[argv[i]]
+    return argv[i:i + 2] in (["-m", "pytest"], ["-m", "py.test"])
 
 
 def run_checks(an, clone):
-    """Every check of a carried-over line on the rewound tree, TRIES times. Red every time = hidden dependency."""
+    """Every check of a carried-over line on the rewound tree, TRIES times. Red every time = hidden dependency;
+    a check that ran no tests is unverified: neither green nor a hidden dependency."""
     lines = lines_of(an["new"])
-    hidden, flaky = [], []
+    hidden, flaky, unverified = [], [], []
     for aid in an["kept"]:
-        reds = sum(red(an["cfg"], clone, lines[aid][1]["test"]) for _ in range(TRIES))
-        (hidden if reds == TRIES else flaky if reds else []).append(aid)
-    return an["kept"], hidden, flaky
+        vs = [verdict(an["cfg"], clone, lines[aid][1]["test"]) for _ in range(TRIES)]
+        reds = vs.count("fail")
+        (hidden if reds == TRIES else flaky if reds else unverified if "unverified" in vs else []).append(aid)
+    return an["kept"], hidden, flaky, unverified
 
 
 def sort_key(aid):
@@ -714,9 +775,10 @@ def report(an, cid, checks=None, shared_kept=(), plan=None):
         grew = bool(more)
     out.append("suspect, re-verify: " + (", ".join(sorted(suspect, key=sort_key)) or "-"))
     if checks:
-        ran, hidden, flaky = checks
-        out.append(f"checks on the rewound tree, {TRIES} runs each: {len(ran) - len(hidden) - len(flaky)} of "
-                   f"{len(ran)} kept checks green")
+        ran, hidden, flaky, unverified = checks
+        out.append(f"checks on the rewound tree, {TRIES} runs each: {len(ran) - len(hidden) - len(flaky) - len(unverified)}"
+                   f" of {len(ran)} kept checks green")
+        out += [f"  unverified: {a} ran no tests (pytest exit 5); not green, not a hidden dependency" for a in unverified]
         out += [f"  hidden dependency: {a} red after the rewind; joins the rebuild (depends on rewound behaviour)"
                 for a in hidden]
         out += [f"  flaky, quarantined: {a}" for a in flaky]
@@ -752,7 +814,7 @@ def own_verify(an, reqs, project, collect=False):
 def write_tree(an, cid, plan, project, who):
     snap = {t["id"]: t["status"] for t in an["tasks"]}
     with hb.board(write=True) as (data, events):
-        mine = [t for t in data["tasks"] if t.get("project") == project and "stale" not in (t.get("tags") or [])]
+        mine = [t for t in data["tasks"] if tree_task(t, project)]
         if {t["id"]: t["status"] for t in mine} != snap:
             die("the board changed while apply ran; nothing was written. Run it again.")
         by = {t["id"]: t for t in mine}
@@ -818,7 +880,11 @@ def commit_spec(project, cid, version, receipt):
 def cmd_init(a):
     project = hb.valid_project(a.project_name)
     d = spec_dir(project)
-    if os.path.exists(spec_path(project)):
+    existing = spec_path(project)
+    promoting_draft = (os.path.exists(existing) and os.path.basename(existing) == "prd.json"
+                       and a.from_file and os.path.realpath(a.from_file) == os.path.realpath(existing)
+                       and not os.path.exists(os.path.join(d, "requirements.json")))
+    if os.path.exists(os.path.join(d, "spec.lock")) or (os.path.exists(existing) and not promoting_draft):
         die(f"{project} already has a spec; change it with an approved C-NNN")
     spec = {"requirements": []}
     if a.from_file:
@@ -829,11 +895,16 @@ def cmd_init(a):
             die(f"cannot read {a.from_file}: {e}")
     if not isinstance(spec, dict):
         die("the spec must be a JSON object")
+    if promoting_draft:
+        import prd
+        import prd_grill
+        if spec.get("version") != 1 or not prd_grill.ready(spec, prd.bases(project)):
+            die(f"finish `hub prd grill {project}` on the initial v1 draft before initializing it")
     spec = {**spec, "version": 1}
     errs = schema_errors(spec)
     if errs:
         die("invalid spec: " + "; ".join(errs))
-    name = "prd.json" if a.from_file and os.path.basename(a.from_file) == "prd.json" else "requirements.json"
+    name = "prd.json" if promoting_draft or (a.from_file and os.path.basename(a.from_file) == "prd.json") else "requirements.json"
     path = os.path.join(d, name)
     os.makedirs(os.path.join(d, "changes"), exist_ok=True)
     hb._write_json_atomic(path, spec)
@@ -1236,7 +1307,8 @@ def cmd_approve(a):
         die(f"no change {cid} for {project}")
     change = load_change(project, cid)
     author = change.get("author") or change.get("by")
-    if author and hb.canon(who) == hb.canon(author):
+    # Only a correction (an agent's own fix) needs another approver; a proposal carries the human's approved intent.
+    if change.get("kind") == "correction" and author and hb.canon(who) == hb.canon(author):
         die(f"author {who} cannot approve their own correction {cid}")
     who_phase, _ = autonomy.phase_of(who)
     if change.get("kind") == "correction":
@@ -1286,7 +1358,7 @@ def run(a, apply):
 
         change = an["change"]
         author = change.get("author") or change.get("by")
-        if reviewer and author and hb.canon(reviewer) == hb.canon(author):
+        if change.get("kind") == "correction" and reviewer and author and hb.canon(reviewer) == hb.canon(author):
             die(f"correction {cid} was approved by its author {reviewer}; self-approval is forbidden")
 
         is_correction = change.get("kind") == "correction"
@@ -1326,6 +1398,11 @@ def run(a, apply):
         checks = run_checks(an, clone)
         plan = plan_tree(an, cid, checks[1])
         print(report(an, cid, checks, shared_kept, plan))
+        print(f"marks {len(plan['stale'])} task(s) stale: " + (", ".join(t["id"] for t in plan["stale"]) or "-"))
+        reach = {t["id"] for t in an["tasks"] if t["id"] in an["k"] or cites_changed(t, an["changed"])}
+        if apply and len(plan["stale"]) > len(reach) and not a.yes:  # a guard against a sweep like T-1088's
+            die(f"{len(plan['stale'])} tasks to mark stale, but the change's blast radius reaches {len(reach)}; "
+                "nothing written. Check the list, then rerun with --yes.")
         if not apply:
             print("dry run: nothing written")
             return
@@ -1377,9 +1454,10 @@ def run(a, apply):
 
 
 def drifts(project, repo):
-    """(base, every way the spec and origin's live line disagree, flaky lines): `check` on a fresh clone of the
-    live line, then each acceptance check whose test exists, re-run while red up to TRIES times. Red every time is
-    drift, mixed is flaky (as run_checks). Every check red is the environment, not the code: one drift for it."""
+    """(base, every way the spec and origin's live line disagree, flaky lines, unverified lines): `check` on a
+    fresh clone of the live line, then each acceptance check whose test exists, re-run while red up to TRIES times.
+    Red every time is drift, mixed is flaky (as run_checks), no tests run is unverified (not counted as run).
+    Every check red is the environment, not the code: one drift for it."""
     cfg = repo_cfg(project)
     base, base_sha = base_ref(repo, cfg)
     tmp = tempfile.mkdtemp(prefix="hub-spec-converge-")
@@ -1390,15 +1468,19 @@ def drifts(project, repo):
         git(clone, "checkout", "-q", "--detach", base_sha)
         if os.path.isfile(os.path.join(repo, ".env")):  # as live_merge's gate, so a check sees what the gate sees
             shutil.copy2(os.path.join(repo, ".env"), os.path.join(clone, ".env"))
-        errs, spec, ran, reds, flaky = check_errors(project, clone), load_spec(project), 0, [], []
+        errs, spec, ran, reds, flaky, unverified = check_errors(project, clone), load_spec(project), 0, [], [], []
         if not schema_errors(spec):
             for aid, (_, a) in sorted(lines_of(spec).items(), key=lambda x: sort_key(x[0])):
                 if not os.path.isfile(os.path.join(clone, a["test"])):
                     continue
+                vs = [verdict(cfg, clone, a["test"])]
+                while vs[-1] == "fail" and len(vs) < TRIES:
+                    vs.append(verdict(cfg, clone, a["test"]))
+                if vs[-1] == "unverified" and "fail" not in vs:
+                    unverified.append(aid)
+                    continue
                 ran += 1
-                n = 0
-                while n < TRIES and red(cfg, clone, a["test"]):
-                    n += 1
+                n = vs.count("fail")
                 if n == TRIES:
                     reds.append(f"{aid}@{a['v']}: acceptance check red on {base}: {a['test']}")
                 elif n:
@@ -1409,7 +1491,7 @@ def drifts(project, repo):
         errs += [f"converge could not run checks on {base}"] if ran > 1 and len(reds) == ran else reds
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    return f"{base} {base_sha[:12]}", errs, flaky
+    return f"{base} {base_sha[:12]}", errs, flaky, unverified
 
 
 def cmd_converge(a):
@@ -1429,13 +1511,15 @@ def cmd_converge(a):
     who, opened, failed = hb.whoami(a.as_agent), [], []
     for p in projects:
         try:
-            base, errs, flaky = drifts(p, os.path.abspath(os.path.expanduser(a.repo or os.path.join(CODE_DIR, p))))
+            base, errs, flaky, unverified = drifts(p, os.path.abspath(os.path.expanduser(a.repo or os.path.join(CODE_DIR, p))))
         except SystemExit as e:  # one project's dead origin must not hide the others' drift
             failed.append(f"{p}: {e}")
             continue
         print(f"{p}: {len(errs)} drift(s) from {base}")
         if flaky:
             print(f"  flaky: {', '.join(flaky)}")
+        if unverified:  # shown, never a drift task: the check ran no tests offline
+            print(f"  unverified, no tests ran: {', '.join(unverified)}")
         with hb.board(write=True) as (data, events):
             live = {t["title"] for t in data["tasks"] if t["status"] != "done" and "stale" not in (t.get("tags") or [])}
             for e in errs:
@@ -1511,6 +1595,7 @@ def register(sub):
             c.add_argument("--dry-run", action="store_true")
         if name == "apply":
             c.add_argument("--force", action="store_true", help="rewind even a cross-cutting radius")
+            c.add_argument("--yes", action="store_true", help="mark stale more tasks than the blast radius reaches")
         c.set_defaults(fn=fn)
     cv = s.add_parser("converge", help="weekly: one board task per drift of each spec project from its live line")
     cv.add_argument("--project", help="one project (default: $HUB_PROJECT, else every spec project)")

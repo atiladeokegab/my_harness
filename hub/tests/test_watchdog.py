@@ -48,7 +48,6 @@ class WatchTest(Factory):
         self.assertRegex(line, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ Hermes: healthy -> at a prompt")
         self.assertEqual(len(self.zeus_inbox()), 1)
         self.assertIn("never relaunches a live session", self.zeus_inbox()[0])
-        self.assertEqual(self.calls("lead-alert"), [])  # only limits and Zeus reach the lead
         self.run_cmd("watch")
         self.assertEqual(len(self.log_lines()), 1)
         self.assertEqual(len(self.zeus_inbox()), 1)
@@ -103,35 +102,34 @@ class WatchTest(Factory):
         self.assertEqual(cause, "asking a question")
         self.assertIn("Which branch should the fix land on?", line)
 
-    def test_any_agent_at_a_prompt_for_3_min_alerts_the_lead_every_15(self):
+    def test_any_agent_at_a_prompt_for_3_min_tells_zeus_every_15(self):
         self.pane("hub-hermes", CLAUDE_PERMISSION)
         self.run_cmd("watch")
-        self.assertEqual(self.calls("lead-alert"), [])  # not yet: most prompts are answered within a minute
+        self.assertNotIn("lead_told", self.state("watch.json")["Hermes"])  # not yet: most are answered within a minute
         state = json.loads((self.hub / "state" / "watch.json").read_text())
         state["Hermes"]["prompt_since"] = time.time() - 181
         self.write_state("watch.json", state)
         self.run_cmd("watch")
-        [call] = self.calls("lead-alert")
-        self.assertIn("Hermes has been at a prompt for 3 min", call[-1])
-        self.assertIn("rm -rf build", call[-1])
+        [wait] = [m for m in self.zeus_inbox() if "Hermes has been at a prompt for 3 min" in m]
+        self.assertIn("rm -rf build", wait)
+        told = self.state("watch.json")["Hermes"]["lead_told"]
         self.run_cmd("watch")
-        self.assertEqual(len(self.calls("lead-alert")), 1)
+        self.assertEqual(self.state("watch.json")["Hermes"]["lead_told"], told)
         state = json.loads((self.hub / "state" / "watch.json").read_text())
         state["Hermes"]["lead_told"] = time.time() - 901
         self.write_state("watch.json", state)
         self.run_cmd("watch")
-        self.assertEqual(len(self.calls("lead-alert")), 2)
+        self.assertGreater(self.state("watch.json")["Hermes"]["lead_told"], time.time() - 60)
         self.pane("hub-hermes", CLAUDE_IDLE)
         self.run_cmd("watch")
         self.assertNotIn("prompt_since", json.loads((self.hub / "state" / "watch.json").read_text())["Hermes"])
 
-    def test_rate_limit_trips_the_breaker_alerts_the_lead_and_stops_wakes(self):
+    def test_rate_limit_trips_the_breaker_alerts_zeus_and_stops_wakes(self):
         self.board([task("T-002", owner="Prometheus")])
         self.pane("hub-prometheus", CODEX_LIMIT)
         self.run_cmd("watch")
         lim = self.state("watch.json")["Prometheus"]["limited"]
         self.assertEqual(datetime.fromtimestamp(lim["until"]).strftime("%H:%M"), "19:28")
-        self.assertEqual(self.calls("lead-alert")[0][0], "send")  # its failure is ignored
         self.assertEqual(len(self.zeus_inbox()), 1)
         self.pane("hub-prometheus", CLAUDE_IDLE)  # message scrolled away, reset not reached
         self.run_cmd("watch")
@@ -139,14 +137,13 @@ class WatchTest(Factory):
         self.assertIn("Prometheus: rate limited until", self.run_cmd("tick"))
         self.assertEqual(self.calls("hubmsg"), [])
 
-    def test_the_lead_hears_about_a_limit_once_per_reset_window(self):
+    def test_zeus_holds_one_current_limit_alert_and_the_lead_hears_nothing(self):
         self.pane("hub-prometheus", CODEX_LIMIT)
         self.run_cmd("watch")
         self.pane("hub-prometheus", CLAUDE_IDLE)  # scrolled away; the breaker stays on until 19:28
         self.run_cmd("watch")
         self.pane("hub-prometheus", CODEX_LIMIT)
         self.run_cmd("watch")
-        self.assertEqual(len(self.calls("lead-alert")), 1)
         [alert] = self.zeus_inbox()  # Zeus still hears each change; only the current one stays
         self.assertIn("healthy -> rate limited", alert)
 
@@ -223,7 +220,6 @@ class WatchTest(Factory):
         self.pane("hub-iris", AGY["idle"])
         self.run_cmd("watch")
         self.assertEqual(len(self.zeus_inbox()), 1)
-        self.assertEqual(len(self.calls("lead-alert")), 1)
         self.assertIn("Iris: rate limited until", self.run_cmd("tick"))
         self.assertNotIn("Iris", [c["argv"][0] for c in self.calls("hubmsg")])
 
@@ -290,15 +286,14 @@ class WatchTest(Factory):
         self.assertEqual([(e["task"], e["level"], e["agent"]) for e in self.budget_events()], [("T-002", 1, "Hermes")])
         self.run_cmd("watch")
         self.assertEqual(len(self.zeus_inbox()), 1)
-        self.assertEqual(self.calls("lead-alert"), [])
         self.assertEqual(json.loads((self.hub / "board.json").read_text())["tasks"][0]["status"], "claimed")
 
-    def test_two_x_budget_tells_lead(self):
+    def test_two_x_budget_tells_zeus_not_the_lead(self):
         self.over_budget(181)
         self.assertIn("T-002 over 2x budget", self.run_cmd("watch"))
-        self.assertEqual(len(self.calls("lead-alert")), 1)
         self.run_cmd("watch")
-        self.assertEqual(len(self.calls("lead-alert")), 1)
+        [alert] = self.zeus_inbox()
+        self.assertIn("T-002 over 2x budget", alert)
         self.assertEqual([e["level"] for e in self.budget_events()], [2])
 
     def test_two_x_budget_replaces_the_first_alert_and_release_withdraws_it(self):

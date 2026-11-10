@@ -34,9 +34,6 @@ $EDITOR ~/hub/factory.json
   project's repo may set `acceptance_cmd` (default `uv run pytest -q {test}`).
 - `projects`: the only hub projects the dispatcher offers work from. Missing means every project.
 - `snapshot_bucket`: a `gs://` bucket you own (step 2). Leave the placeholder to skip snapshots.
-- `lead_alert`: optional argv of a command that reaches you, the human (a chat bot, a pager,
-  `["notify-send", "hub"]`). The message is appended as the last argument. Empty means only the lead
-  agent's inbox hears of trouble.
 
 factory.json is gitignored: it names your repos.
 

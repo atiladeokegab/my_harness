@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "header": {
+    "problem": "",
+    "users": [],
+    "goals": [],
+    "principles": [
+      "Each requirement explains which user goal it serves and names observable acceptance checks; validate intent against those goals during review.",
+      "For a UI, use designing-products before implementation. Pin the approved design with references.design (path and sha256); name PRODUCT.md, DESIGN.md, tokens and the blind judge disposition in the UI acceptance criteria.",
+      "Use the existing Spec Tree for any project: seed with hub prd grill and hub spec init; once spec.lock exists, change intent through a checked changes/C-NNN.json delta and cite Req:/Task: in delivery."
+    ],
+    "non_goals": [],
+    "owner": "",
+    "glossary": {}
+  },
+  "constraints": {
+    "stack": "",
+    "limits": null,
+    "invariants": [],
+    "offline_tests": null,
+    "tags": []
+  },
+  "requirements": [],
+  "references": {},
+  "status": {
+    "state": {},
+    "open_questions": [],
+    "waiting_room": []
+  }
+}

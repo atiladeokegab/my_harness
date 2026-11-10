@@ -1121,13 +1121,13 @@ class ChangeBranchRewindTest(Fixture):
         self.hub_spec("apply", "C-001")
         git(self.repo, "checkout", "-q", "change/C-001")
         rewind = git(self.repo, "rev-parse", "HEAD").strip()
-        # T-012 carries its trailers; T-014's squash has none, so only its merge_sha claims it
+        # T-012 carries its trailers; T-013's squash has none, so only its merge_sha claims it  (C-001 builds T-011..T-013: T-9 keeps A-4.2, T-1088)
         events = [self.rebuild(["app/routes/stats.py"], "T-012", 5, True),
-                  self.rebuild(["web/dashboard.html", "app/routes/stats.py"], "T-014", 6, False)]
+                  self.rebuild(["web/dashboard.html", "app/routes/stats.py"], "T-013", 6, False)]
         git(self.repo, "checkout", "-q", "main")
         board = json.loads((self.hub / "board.json").read_text())
         for t in board["tasks"]:
-            t["status"] = "done" if t["id"] in ("T-011", "T-012", "T-013", "T-014") else t["status"]
+            t["status"] = "done" if t["id"] in ("T-011", "T-012", "T-013") else t["status"]
         (self.hub / "board.json").write_text(json.dumps(board))
         # hub live lands change/C-001: the real detached gate, then a later pass merges it --no-ff
         state, gates = {"merge_events": list(events), "sent": []}, Path(self.temp.name) / "gates"
@@ -1149,17 +1149,17 @@ class ChangeBranchRewindTest(Fixture):
         lv = self.live_mod.Live("linkly", run=run, send=lambda a, m: None)
         lv.state = state
         lv.merge_shas()
-        self.assertEqual([self.board()[t].get("merge_sha") for t in ("T-012", "T-014")], [e["sha"] for e in events])
+        self.assertEqual([self.board()[t].get("merge_sha") for t in ("T-012", "T-013")], [e["sha"] for e in events])
         sha = events[1]["sha"]  # a change-branch commit is on the line history() walks, so bootstrap-sha takes it
-        self.assertIn(f"T-014 merge_sha {sha}", self.hub_spec("bootstrap-sha", f"T-14={sha}"))
+        self.assertIn(f"T-013 merge_sha {sha}", self.hub_spec("bootstrap-sha", f"T-13={sha}"))
         # C-002 changes A-3.2 again: the line T-012 built in C-001's rebuild
         self.write_change({"id": "C-002", "base_version": 5, "added": [], "removed": [],
                            "modified": [{"id": "A-3.2", "text": "stats returns {total, unique, by_week}"}],
                            "reason": "weekly"})
         out = self.hub_spec("apply", "C-002")
         self.assertEqual(self.radius(out), {"T-011": "cites A-3.2@2 (modified)", "T-012": "cites A-3.2@2 (modified)",
-                                            "T-014": "entangled with T-012 via app/routes/stats.py"})
-        self.assertIn(f"rewind, newest first: T-014 {events[1]['sha'][:12]}, T-012 {events[0]['sha'][:12]}\n", out)
+                                            "T-013": "entangled with T-012 via app/routes/stats.py"})
+        self.assertIn(f"rewind, newest first: T-013 {events[1]['sha'][:12]}, T-012 {events[0]['sha'][:12]}\n", out)
         self.assertIn(f"base: origin/integration {merge[:12]}", out)  # the merge is the base, never a unit
         self.assertNotIn(rewind[:12], out)
         self.assertEqual(json.loads((self.spec / "spec.lock").read_text())["rewound"]["C-002"],  # what it reverted

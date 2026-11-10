@@ -168,9 +168,8 @@ prose, so an agent quoting an error is not flagged. Stuck means a claimed task a
 with `--agent <Name>`. Without a Codex heartbeat, stuck for a Codex agent means the pane has not changed
 for 30 minutes.
 A rate limit trips a breaker until the reset time shown, and the dispatcher wakes nobody behind it.
-Changes go to `watchdog.log` and to the lead agent; the human hears of a limit once per reset window
-through the optional `lead_alert` command, and of any agent at a prompt or asking for 3 minutes,
-again every 15 minutes until it is answered. It never kills or relaunches a session.
+Changes go to `watchdog.log` and to the lead agent's inbox, which also hears of any agent at a prompt
+or asking for 3 minutes, again every 15 minutes until it is answered. It never kills or relaunches a session.
 
 **Weekly** (`dispatch.py weekly`). Two tasks for the lead: a cleanup of stale tasks, branches and
 worktrees, and a promotion of the week's `rule candidate:` lines from the reviewer into rules,

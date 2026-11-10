@@ -53,16 +53,23 @@ function atRest() {
   out.contrast = worst ? [worst.r >= worst.need, `lowest ${worst.r.toFixed(2)}:1 against ${worst.need}:1 at ${q(worst.el)}${unmeasured ? `; ${unmeasured} on an image unmeasured` : ''}`] : [false, 'no text found']
 
   const HIT = 'a[href], button, input:not([type=hidden]), select, textarea, summary, [role=button], [role=link], [role=tab], [role=checkbox], [role=switch], [tabindex]:not([tabindex="-1"])'
-  const small = []
-  for (const el of document.querySelectorAll(HIT)) {
-    if (!vis(el) || el instanceof SVGElement) continue
-    // WCAG 2.5.8: a link inside running text is exempt; every other target is held to 44 by 44.
-    if (el.matches('a') && getComputedStyle(el).display === 'inline' && own(el.parentElement)) continue
-    const b = el.getBoundingClientRect()
-    if (b.width < 44 || b.height < 44) small.push(`${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') ?? el.textContent).trim().slice(0, 24)}" ${Math.round(b.width)}x${Math.round(b.height)}`)
-  }
-  const nHit = [...document.querySelectorAll(HIT)].filter(vis).length
-  out.targets = [!small.length, small.length ? small.join(', ') : `${nHit} target(s), all 44x44 or more`]
+  // A coarse pointer (the 390 run emulates touch) is held to 44 by 44. A fine pointer is held to WCAG 2.5.8 AA:
+  // 24 by 24, or a 24px circle on the target's centre that meets no other target and no other such circle.
+  // A link inside running text is exempt from its own size check at both, but it is still a target another
+  // target's 24px circle must not reach.
+  const coarse = matchMedia('(pointer: coarse)').matches, need = coarse ? 44 : 24
+  const all = [...document.querySelectorAll(HIT)].filter((el) => vis(el) && !(el instanceof SVGElement))
+    .map((el) => ({ el, b: el.getBoundingClientRect() })).filter(({ b }) => b.width && b.height)
+  const hits = all.filter(({ el }) => !(el.matches('a') && getComputedStyle(el).display === 'inline' && own(el.parentElement)))
+  const centre = ({ b }) => [b.left + b.width / 2, b.top + b.height / 2]
+  const gap = ([x, y], b) => Math.hypot(Math.max(b.left - x, 0, x - b.right), Math.max(b.top - y, 0, y - b.bottom))
+  const under = hits.filter(({ b }) => b.width < need || b.height < need)
+  const spaced = (t) => !coarse && all.every((o) => o === t || o.el.contains(t.el) || t.el.contains(o.el)
+    || (gap(centre(t), o.b) >= 12 && (!under.includes(o) || Math.hypot(...centre(t).map((v, i) => v - centre(o)[i])) >= 24)))
+  const small = under.filter((t) => !spaced(t))
+    .map(({ el, b }) => `${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') ?? el.textContent).trim().slice(0, 24)}" ${Math.round(b.width)}x${Math.round(b.height)}`)
+  out.targets = [!small.length, small.length ? `under ${need}x${need}${coarse ? '' : ' and not spaced'}: ${small.join(', ')}`
+    : `${hits.length} target(s), all ${need}x${need} or more${coarse ? ' (coarse pointer)' : ' or spaced (WCAG 2.5.8)'}`]
 
   const rules = []
   const walk = (list) => { for (const r of list) { if (r.cssRules) walk(r.cssRules); if (r.selectorText || r.style) rules.push(r) } }
@@ -133,10 +140,14 @@ function atRest() {
     const t = a.textContent.trim()
     if (vis(a) && t && acts.some((b) => b !== t && first(b) === first(t))) bad.push(`link worded as the action "${t.slice(0, 32)}"`)
   }
-  for (const el of texts) for (const line of own(el).split(/(?<=[.!?])\s+/)) {
+  // A text alternative read only by a screen reader (the sr-only pattern) is exempt from the sentence rule.
+  const srOnly = (el) => { for (let e = el; e; e = e.parentElement) { const s = getComputedStyle(e), r = e.getBoundingClientRect(); if (s.position === 'absolute' && s.overflow === 'hidden' && r.width <= 1 && r.height <= 1) return true } return false }
+  // A list ("x, y, z and w": every item after the lead-in 4 words or fewer) is one idea, so its commas are not joins.
+  const list = (line) => { const parts = line.split(', '); return parts.length >= 3 && parts.slice(1).every((p) => p.split(/\s+/).length <= 4) && /\b(and|or)\b/.test(parts.at(-1)) }
+  for (const el of texts) for (const line of srOnly(el) ? [] : own(el).split(/(?<=[.!?])\s+/)) {
     // 4 joins, not 3: "Fed at 08:10: 50 g flour, 50 g water, 50 g starter" is one idea, a list (T-1015 Rise)
     // 4 joins, not 3: "Fed at 08:10: 50 g flour, 50 g water, 50 g starter" is one idea, a list (T-1015 Rise)
-    const words = line.split(/\s+/).length, joins = (line.match(/[,;:—] /g) || []).length
+    const words = line.split(/\s+/).length, joins = (line.match(list(line) ? /[;:—] /g : /[,;:—] /g) || []).length
     if (words > 25 || joins >= 4) bad.push(`more than one idea (${words} words, ${joins} joins) "${line.slice(0, 32)}"`)
   }
   const inView = (el) => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.width > 0 }
@@ -178,7 +189,8 @@ export async function evidence(urls, prefix) {
       for (const [i, url] of urls.entries()) {
         const screen = urls.length > 1 ? `screen ${i + 1}: ` : ''
         const errors = []
-        const page = await browser.newPage({ viewport: { width, height }, reducedMotion: 'no-preference' })
+        const touch = name === 'mobile' // a phone has a coarse pointer, so its pointer-coarse styles apply
+        const page = await browser.newPage({ viewport: { width, height }, reducedMotion: 'no-preference', hasTouch: touch, isMobile: touch })
         page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 80)))
         page.on('pageerror', (e) => errors.push(e.message.slice(0, 80)))
         page.on('requestfailed', (r) => errors.push(`failed to load ${r.url().split('/').pop()}`))

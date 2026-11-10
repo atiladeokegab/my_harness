@@ -49,9 +49,8 @@ Log: `journalctl --user -u hub-dispatch`. Install: `runbooks/install-factory-tim
 bottom of each live pane and classifies it: permission prompt, rate limited, logged out, or stuck
 (a claimed task and no heartbeat for 30 minutes). It matches the CLIs' own chrome, never prose, so an
 agent quoting an error is not flagged. A rate limit trips a breaker until the reset time shown, and
-the dispatcher wakes nobody behind it. Changes go to `watchdog.log` and to the lead agent; the human
-hears of a limit once per reset window through the optional `lead_alert` command in `factory.json`
-(the argv of anything that reaches you: a chat bot, a pager). It never kills or relaunches a session.
+the dispatcher wakes nobody behind it. Changes go to `watchdog.log` and to the lead agent's inbox; an agent
+at a prompt for 3 minutes is reported there too, again every 15 minutes. It never kills or relaunches a session.
 Log: `journalctl --user -u hub-watch`.
 
 ## Fresh context per task

@@ -47,3 +47,29 @@ test('evidence: copy goes red on the battery eval screens\' old copy', { timeout
   assert.equal(line.ok, false)
   for (const want of ['link worded as the action', 'more than one idea', 'no source or illustrative mark']) assert.ok(line.line.includes(want), `${want}: ${line.line}`)
 })
+
+// T-483: a fine pointer is held to WCAG 2.5.8 AA (24px, or spaced), a coarse one to 44; a list is one idea and
+// an sr-only text alternative is exempt from the sentence rule.
+test('evidence: targets by pointer, lists and sr-only copy', { timeout: 120000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'evidence-aa-'))
+  const page = (name, body) => { const f = join(dir, `${name}.html`); writeFileSync(f, `<!doctype html><meta name="viewport" content="width=device-width"><body style="margin:40px">${body}</body>`); return pathToFileURL(f).href }
+  const line = async (url, check) => (await evidence([url])).find((r) => r.check === check).line
+  const btn = (x) => `<button style="position:absolute;left:${x}px;top:40px;width:20px;height:20px;padding:0;border:0">${x}</button>`
+
+  const touching = await line(page('touching', btn(40) + btn(60)), 'targets')
+  assert.match(touching, /^FAIL targets: 1280x633 under 24x24 and not spaced: button "40" 20x20, button "60" 20x20; 390x757 under 44x44: /, touching)
+  const spaced = await line(page('spaced', btn(40) + btn(100)), 'targets')
+  assert.match(spaced, /1280x633 2 target\(s\), all 24x24 or more or spaced \(WCAG 2\.5\.8\); 390x757 under 44x44: /, spaced)
+  // Atlas (bdd5bc4): an inline prose link is exempt from its own size, not from another target's circle.
+  const prose = (x) => `<p style="position:absolute;left:${x}px;top:41px;margin:0;font:14px/17px sans-serif"><a href="#">help</a> for more</p>`
+  assert.match(await line(page('alone', btn(40)), 'targets'), /1280x633 1 target\(s\), all 24x24 or more or spaced/)
+  const near = await line(page('inline-near', btn(40) + prose(60)), 'targets')
+  assert.match(near, /^FAIL targets: 1280x633 under 24x24 and not spaced: button "40" 20x20; 390x757 /, near)
+  assert.match(await line(page('inline-far', btn(40) + prose(100)), 'targets'), /1280x633 1 target\(s\), all 24x24 or more or spaced/)
+
+  const list = 'Eleven named checks cover arithmetic drift, data declarations, control flow, exception paths, I/O order, dataflow and formal equivalence.'
+  const long = 'Product preview, in eight steps: an AI tool edits a program; Refinery maps the programs, copybooks, datasets and batch jobs linked to it; it checks the changed program, finds the moved threshold, and asks a person to accept or return the change.'
+  const sr = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)'
+  assert.match(await line(page('copy-ok', `<p>${list}</p><p style="${sr}">${long}</p>`), 'copy'), /^PASS copy/)
+  assert.match(await line(page('copy-red', `<p>${long}</p>`), 'copy'), /^FAIL copy: .*more than one idea/)
+})

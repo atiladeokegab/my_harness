@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import board as hb
 
+TEMPLATE = "atiladeokegab/hackathon_teamwork"
 # The same roster shell.sh uses. Hub agents' issues are assigned to the lead's GitHub
 # handle and labelled agent:<name>; change-requests go to the lead agent's inbox.
 LEAD_AGENT = hb.canon(os.environ.get("HUB_LEAD") or "Zeus")
@@ -345,12 +346,13 @@ def check_config(cfg, project, init=False):
             or not isinstance(cfg.get("deadlines"), list):
         return ["needs an object with repo, deadlines (a list) and roster (a list)"]
     problems = []
-    if not re.fullmatch(r"[\w.-]+/[\w.-]+", str(cfg.get("template", ""))):
-        problems.append("template must be owner/name: your copy of the hackathon_teamwork template repo")
     if init:
         for field in ("event", "title", "summary", "smoke"):
             if not isinstance(cfg.get(field), str) or not cfg[field].strip():
                 problems.append(f"{field} needs non-empty text")
+        if "review_before" not in cfg:
+            problems.append("review_before is missing: copy the default list from the hackathon-reviewer skill, "
+                            "then add this event's runner, safety and verify paths (without it every PR waits for review)")
         if "rules" in cfg and (not isinstance(cfg["rules"], str) or not cfg["rules"].strip()):
             problems.append("rules must be text or a link")
         if "judging" in cfg and (not isinstance(cfg["judging"], list) or
@@ -381,6 +383,16 @@ def check_config(cfg, project, init=False):
     for need in ("code freeze", "submit"):
         if need not in names:
             problems.append(f"no {need!r} deadline")
+    globs = cfg.get("review_before", [])
+    if not isinstance(globs, list) or not all(isinstance(g, str) and g.strip() for g in globs):
+        problems.append("review_before must be a list of path globs")
+    deploy = cfg.get("deploy")
+    if "deploy" in cfg and not (isinstance(deploy, dict) and all(
+            isinstance(deploy.get(k), str) and deploy[k].strip() for k in ("owner", "command"))):
+        problems.append('deploy must be {"owner": "<who deploys>", "command": "<shell command>"}')
+    checks = cfg.get("checks", [])
+    if not isinstance(checks, list) or not all(isinstance(c, str) and c.strip() for c in checks):
+        problems.append("checks must be a list of CI check names")
     roster = [p for p in cfg["roster"] if isinstance(p, dict)]
     if len(roster) != len(cfg["roster"]) or sum(1 for p in roster if p.get("lead")) != 1:
         problems.append("roster needs objects, with exactly one marked \"lead\": true")
@@ -390,6 +402,8 @@ def check_config(cfg, project, init=False):
     for p in roster:
         if "designer" in p and not isinstance(p["designer"], bool):
             problems.append(f"roster entry {p.get('name')!r}: designer must be a boolean")
+        if "bring" in p and not isinstance(p["bring"], str):
+            problems.append(f"roster entry {p.get('name')!r}: bring must be text")
         if p.get("designer") is True and not str(p.get("tool") or "").strip():
             problems.append(f"designer {p.get('name')!r} has no AI tool: the designer's agent builds the mockup")
     seen = set()
@@ -428,8 +442,17 @@ def check_config(cfg, project, init=False):
     return problems
 
 
-def deadline(detail):
-    return field_line(detail, "Deadline") or "code freeze"
+def deadline(detail, names):
+    """The Deadline: value as one of `names`. Agents add to it ('first e2e (13:45 BST).', a
+    '[Written by Devin]' footer under the form field) or shorten it ('demo'), so its first line
+    matches the longest name it starts with, else the one name that starts with it."""
+    value = (field_line(detail, "Deadline") or "code freeze").splitlines()[0].strip()
+    low = value.lower()
+    starts = [n for n in names if re.match(rf"{re.escape(n.lower())}(?!\w)", low)]
+    if starts:
+        return max(starts, key=len)
+    short = [n for n in names if n.lower().startswith(low)]
+    return short[0] if len(short) == 1 else value
 
 
 def snapshot(project):
@@ -454,7 +477,7 @@ def apply(changes, dry):
             hb.log(events, who, event, tid, **{k: v for k, v in fields.items() if k in ("status", "owner")})
 
 
-def repo_state(gh, repo, template):
+def repo_state(gh, repo):
     """'missing', or 'ours' for a repo made from the template. Anything else is refused
     before a single write: --init rewrites branch protection and invites people."""
     try:
@@ -466,8 +489,8 @@ def repo_state(gh, repo, template):
         sys.exit(f"gh-sync: can't read {repo}: {e}")
     tpl = (info or {}).get("templateRepository") or {}
     made_from = f"{(tpl.get('owner') or {}).get('login')}/{tpl.get('name')}"
-    if made_from.lower() != template.lower():
-        sys.exit(f"gh-sync: refusing to touch {repo}: it was not created from {template}. "
+    if made_from.lower() != TEMPLATE.lower():
+        sys.exit(f"gh-sync: refusing to touch {repo}: it was not created from {TEMPLATE}. "
                  "Check the repo in hackathon.json.")
     return "ours"
 
@@ -476,6 +499,86 @@ def list_issues(gh, repo):
     return {i["number"]: i for i in gh.json(
         "issue", "list", "-R", repo, "--state", "all", "--limit", "1000",
         "--json", "number,title,state,stateReason,assignees,labels,url,body")}
+
+
+def branch_ahead(gh, repo, branch):
+    comparison = gh.json("api", f"repos/{repo}/compare/integration...{quote(branch, safe='')}")
+    if not isinstance(comparison, dict) or not isinstance(comparison.get("ahead_by"), int):
+        raise GhError(f"cannot compare {branch} with integration")
+    return comparison["ahead_by"] > 0
+
+
+def branch_heads(gh, repo):
+    rows = gh("api", f"repos/{repo}/branches?per_page=100", "--paginate", "--jq",
+              ".[] | [.name, .commit.sha] | @tsv", write=False).splitlines()
+    if not rows or any(len(row.split("\t")) != 2 for row in rows):
+        raise GhError("cannot list repository branches")
+    return dict(row.split("\t", 1) for row in rows)
+
+
+def reopen_active_issues(issues, cfg, gh, repo, skip=()):
+    closed = [i for i in issues.values() if i["state"] == "CLOSED" and i["number"] not in skip]
+    if not closed:
+        return
+    try:
+        prs = gh.json("pr", "list", "-R", repo, "--state", "open", "--limit", "200",
+                      "--json", "number,body,headRefName")
+        if not isinstance(prs, list):
+            raise GhError("cannot list open PRs before checking closed issues")
+        heads = branch_heads(gh, repo)
+        merged = gh.json("pr", "list", "-R", repo, "--state", "merged", "--limit", "200",
+                         "--json", "headRefName,headRefOid")
+        if not isinstance(merged, list):
+            raise GhError("cannot list merged PRs before checking closed issues")
+    except GhError as e:
+        print(f"warning: cannot guard closed issues this sync: {e}")
+        return
+    merged_heads = {(pr.get("headRefName"), pr.get("headRefOid")) for pr in merged}
+    lead = next((p["github"] for p in cfg["roster"] if p.get("lead")), None)
+    owner, name = repo.split("/", 1)
+    query = ("query($o:String!,$r:String!,$n:Int!){viewer{login}repository(owner:$o,name:$r){issue(number:$n)"
+             "{timelineItems(last:1,itemTypes:[CLOSED_EVENT]){nodes{... on ClosedEvent{createdAt closer"
+             "{__typename ... on PullRequest{merged}}}}}comments(last:100){nodes{body author{login}}}}}}")
+    for issue in closed:
+        n = issue["number"]
+        try:
+            linked = [pr["number"] for pr in prs if (pr.get("headRefName") or "").startswith(f"{n}-")
+                      or re.search(rf"\b(?:closes|fixes|resolves)\s+#{n}\b", pr.get("body") or "", re.I)]
+            branches = []
+            if not linked:
+                branches = [branch for branch, sha in heads.items() if branch.startswith(f"{n}-")
+                            and (branch, sha) not in merged_heads and branch_ahead(gh, repo, branch)]
+            if not linked and not branches:
+                continue
+            data = gh.json("api", "graphql", "-f", f"query={query}", "-f", f"o={owner}",
+                           "-f", f"r={name}", "-F", f"n={n}")
+            try:
+                details = data["data"]["repository"]["issue"]
+                close = details["timelineItems"]["nodes"][-1] if details["timelineItems"]["nodes"] else {}
+                comments = details["comments"]["nodes"]
+            except (TypeError, KeyError, IndexError):
+                raise GhError(f"cannot verify how issue #{n} was closed") from None
+            closer = close.get("closer") or {}
+            if closer.get("__typename") == "PullRequest" and closer.get("merged"):
+                continue
+            viewer = (data["data"].get("viewer") or {}).get("login")
+            if any(re.match(r"\s*branch abandoned\b", comment.get("body") or "", re.I)
+                   and (comment.get("author") or {}).get("login") != viewer for comment in comments):
+                continue
+        except GhError as e:
+            print(f"warning: cannot guard closed issue #{n} this sync: {e}")
+            continue
+        work = ", ".join([*(f"PR #{pr}" for pr in linked), *branches])
+        mentions = " ".join(f"@{login}" for login in dict.fromkeys(
+            [*(a["login"] for a in issue.get("assignees") or []), lead]) if login)
+        message = (f"Reopened #{n}: {work} still has unmerged work. {mentions} "
+                   "If deliberately dropped, start a comment with 'branch abandoned', then close it again.")
+        if gh.dry:
+            print("would", message)
+            continue
+        gh("issue", "reopen", n, "-R", repo, "--comment", message)
+        issue.update(state="OPEN", stateReason="")
+        hb.deliver(LEAD_AGENT, f"{repo} {message}")
 
 
 def import_subissues(tasks, cfg, gh, repo):
@@ -527,7 +630,8 @@ def import_subissues(tasks, cfg, gh, repo):
                  "issue_hash": digest(body), "issue_source_body": body,
                  "issue_assignee": assignee, "issue_agent": agent.lower() if agent else None,
                  "issue_title": child["title"],
-                 "issue_milestone": (child.get("milestone") or {}).get("title") or deadline(body)}
+                 "issue_milestone": (child.get("milestone") or {}).get("title")
+                                    or deadline(body, [d["name"] for d in cfg["deadlines"]])}
             data["tasks"].append(t)
             by_issue[n] = tid
             imported.append((t, body))
@@ -549,6 +653,7 @@ def import_subissues(tasks, cfg, gh, repo):
 def pull(tasks, cfg, gh, repo):
     """Returns (changes, issues by number, imported count)."""
     issues = list_issues(gh, repo)
+    reopen_active_issues(issues, cfg, gh, repo, skip={t["issue"] for t in tasks if "issue" in t and stale(t)})
     names = {p["github"].lower(): hb.canon(p["name"]) for p in cfg["roster"]}
     agent_handles = {a["github"].lower(): (hb.canon(a["name"]), hb.canon(p["name"]))
                      for p in cfg["roster"] for a in p.get("agents", []) if a.get("github")}
@@ -648,7 +753,7 @@ def push(tasks, cfg, gh, repo, failures, assignable, issues):
                 if name.startswith("agent:") and name not in on_issue and name not in made_labels:
                     gh("label", "create", name, "-R", repo, "--force")
                     made_labels.add(name)
-            milestone = deadline(t.get("detail"))
+            milestone = deadline(t.get("detail"), deadlines)
             if milestone not in deadlines:
                 raise GhError(f"Deadline: {milestone!r} is not a deadline in hackathon.json "
                               f"(choose from {', '.join(deadlines)})")
@@ -874,6 +979,35 @@ def ensure_integration(gh, repo, new, failures):
         return False
 
 
+def smoke_workflow(gh, repo, new):
+    """True when integration carries the template's smoke workflow. Only then is `smoke` a required
+    check: required on a repo made before the workflow existed, it would hold every PR forever."""
+    if new and gh.dry:  # made from the template, which has it
+        return True
+    try:
+        return bool(gh.json("api", f"repos/{repo}/contents/.github/workflows/smoke.yml?ref=integration"))
+    except GhError:
+        return False
+
+
+def secret_scanning(gh, repo, new, failures):
+    """Secret scanning runs on every public repo; push protection is off until a repo admin turns
+    it on. Turns on whichever is off, so a rerun writes nothing."""
+    wanted = ("secret_scanning", "secret_scanning_push_protection")
+    try:
+        if new and gh.dry:
+            off = wanted
+        else:
+            current = (gh.json("api", f"repos/{repo}") or {}).get("security_and_analysis") or {}
+            off = [k for k in wanted if (current.get(k) or {}).get("status") != "enabled"]
+        if off:
+            gh("api", "-X", "PATCH", f"repos/{repo}", "--input", "-",
+               stdin=json.dumps({"security_and_analysis": {k: {"status": "enabled"} for k in off}}))
+    except GhError as e:
+        print(f"error: secret scanning: {e}", file=sys.stderr)
+        failures.append("secret scanning")
+
+
 def freeze_utc(cfg):
     at = next(d["at"] for d in cfg["deadlines"] if d["name"] == "code freeze")
     return datetime.fromisoformat(at).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -983,7 +1117,7 @@ def event_docs(cfg, project, clone, dry):
                 role = ", ".join(x for x in ("lead" if p.get("lead") else "",
                                                 "designer" if p.get("designer") else "",
                                                 p.get("strengths", "")) if x) or "team member"
-                team.append(f"| {p['name']} | @{p['github']} | {role} |")
+                team.append(f"| {p['name']} | @{p['github']} | {role} | {p.get('bring') or ''} |")
             lead = next(p for p in cfg["roster"] if p.get("lead"))
             agents = ", ".join(a["name"] for a in lead.get("agents", [])) or "none listed"
             (work / "HACKATHON.md").write_text(
@@ -997,7 +1131,7 @@ def event_docs(cfg, project, clone, dry):
                 "| Deadline | Event time | UTC |\n|---|---|---|\n" + "\n".join(deadlines) +
                 "\n\n## Judging criteria\n\n" +
                 "\n".join(f"- {s}" for s in (cfg.get("judging") or ["Not published in the brief."])) +
-                "\n\n## Team\n\n| Name | GitHub | Role |\n|---|---|---|\n" + "\n".join(team) +
+                "\n\n## Team\n\n| Name | GitHub | Role | Bring |\n|---|---|---|---|\n" + "\n".join(team) +
                 f"\n\nThe lead's agents: {agents}. When this page or a review says \"the lead\", "
                 "it may be one of them acting for the lead.\n")
             readme = (work / "README.md").read_text()
@@ -1048,24 +1182,32 @@ def init(cfg, gh, repo, failures, exists):
     if not gh.dry:
         os.makedirs(code, exist_ok=True)  # a fresh machine has no code dir yet
     if new:
-        gh("repo", "create", repo, "--template", cfg["template"], "--public", "--clone", cwd=code)
+        gh("repo", "create", repo, "--template", TEMPLATE, "--public", "--clone", cwd=code)
     elif not os.path.isdir(dest):  # a rerun on another machine, or after a clean-up
         gh("repo", "clone", repo, dest)
-    if os.path.isdir(dest) and not gh.dry:
+    if os.path.isdir(dest) and gh.dry:
+        pass  # a dry run reads; it doesn't restamp the clone's identity or hooks
+    elif os.path.isdir(dest):
         # Commit as the account that owns the repo, via its no-reply address: a clone that
         # inherits some other global identity credits the lead's work to the wrong person.
         me = gh.json("api", "user")
         for key, value in (("user.email", f"{me['id']}+{me['login']}@users.noreply.github.com"),
                            ("user.name", me["login"])):
             subprocess.run(["git", "-C", dest, "config", key, value], check=False, timeout=30)
-    elif not os.path.isdir(dest):
-        print(f"warning: {dest} not cloned; clone it there (gh repo clone {repo} {dest}) and rerun --init")
+        subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "board.py"),
+                        "init-repo", dest], check=False, timeout=60)
+    else:
+        print(f"warning: {dest} not cloned; run `hub init-repo` on your clone")
     steps = []
+    # A rerun skips anyone already in or invited: GitHub answers a repeat invite with a body gh can't parse.
+    joined = set() if new else (
+        {c["login"].lower() for c in gh.json("api", f"repos/{repo}/collaborators?per_page=100") or []}
+        | {i["invitee"]["login"].lower() for i in gh.json("api", f"repos/{repo}/invitations") or []})
     for p in cfg["roster"]:
-        if not p.get("lead"):
+        if not p.get("lead") and p["github"].lower() not in joined:
             steps.append(("api", "-X", "PUT", f"repos/{repo}/collaborators/{p['github']}"))
         for agent in p.get("agents", []):
-            if agent.get("github"):
+            if agent.get("github") and agent["github"].lower() not in joined:
                 steps.append(("api", "-X", "PUT", f"repos/{repo}/collaborators/{agent['github']}"))
     agent_labels = [f"agent:{a['name'].lower()}" for p in cfg["roster"] for a in p.get("agents", [])]
     for label in ["task", "vertical", "draft", "pool", "change-request", "submission", "question", "fix", *agent_labels]:
@@ -1091,7 +1233,11 @@ def init(cfg, gh, repo, failures, exists):
     except GhError as e:
         print(f"error: FREEZE_AT: {e}", file=sys.stderr)
         failures.append("variable FREEZE_AT")
+    secret_scanning(gh, repo, new, failures)
     branches = ("main", "integration") if ensure_integration(gh, repo, new, failures) else ("main",)
+    # Both are template workflows on pull requests into integration. After code freeze only PRs
+    # labelled fix pass freeze-gate, so GitHub, not just Zeus's clock check, refuses a feature merge.
+    required = ["freeze-gate", "smoke"] if smoke_workflow(gh, repo, new) else ["freeze-gate"]
     protection = {"required_status_checks": None, "enforce_admins": False, "restrictions": None,
                   "required_pull_request_reviews": {"required_approving_review_count": 1,
                                                     "require_code_owner_reviews": True,
@@ -1099,9 +1245,7 @@ def init(cfg, gh, repo, failures, exists):
                                                     # only gets what the lead actually reviewed
                                                     "dismiss_stale_reviews": True}}
     for branch in branches:
-        # After code freeze only PRs labelled fix pass freeze-gate (a template workflow), so
-        # GitHub, not just Zeus's clock check, refuses a feature merge into integration.
-        checks = {"strict": False, "contexts": ["freeze-gate"]} if branch == "integration" else None
+        checks = {"strict": False, "contexts": required} if branch == "integration" else None
         try:
             gh("api", "-X", "PUT", f"repos/{repo}/branches/{branch}/protection", "--input", "-",
                stdin=json.dumps({**protection, "required_status_checks": checks}))
@@ -1146,7 +1290,7 @@ def cmd_gh_sync(a):
         except BlockingIOError:
             sys.exit(f"gh-sync: another gh-sync is already running for {project}; try again in a minute")
     repo, failures = cfg["repo"], []
-    exists = repo_state(gh, repo, cfg["template"]) == "ours"
+    exists = repo_state(gh, repo) == "ours"
     if not exists and not a.init:
         sys.exit(f"gh-sync: {repo} doesn't exist yet -- run with --init first")
     try:
@@ -1179,7 +1323,7 @@ def cmd_gh_sync(a):
                     tasks = snapshot(project)
                     if any(t.get("issue") and t["issue"] not in issues for t in tasks):
                         issues = list_issues(gh, repo)  # push created some: the board needs them too
-                    gh_board.sync_board(tasks, cfg, gh, repo, issues)
+                    apply(gh_board.sync_board(tasks, cfg, gh, repo, issues), False)
             if not a.dry_run and not failures:
                 update_idea_owners(snapshot(project), cfg, project)
     except GhError as e:
