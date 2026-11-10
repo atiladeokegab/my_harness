@@ -294,7 +294,7 @@ def apply_change(spec, change):
 def changed_lines(spec, change):
     """Acceptance ids whose old version no longer holds: {id: 'modified' | 'removed'}.
 
-    For corrections (Fergus lesson 1 / Living spec §4), the blast radius is 0 by design:
+    For corrections (Living spec §4), the blast radius is 0 by design:
     corrections fix wording, typos, or test paths within bounded limits (enforced by
     cmd_correct) without bumping line versions or invalidating existing code/tasks.
     Therefore, no existing tasks or commits are rewound.

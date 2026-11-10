@@ -830,7 +830,7 @@ class HeldoutSpecTest(Fixture):
         self.assertIn("HIDDEN-ASSERT", (self.hub / "projects/linkly/heldout/gate.log").read_text())
 
     def test_briefs_issue_bodies_and_the_repo_never_carry_the_canary(self):
-        """Fergus lesson 2 (Hermes on T-581): a canary in every held-out file proves nothing a builder reads has one."""
+        """A canary in every held-out file proves nothing a builder reads has one."""
         self.heldout({"A-3.2": {"v": 2, "tests": ["A-3.2/test_by_day.py"]},
                       "A-3.3": {"v": 1, "tests": ["A-3.3/test_once_a_day.py"]}})
         self.hub_spec("apply", "C-001")
