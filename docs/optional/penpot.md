@@ -4,7 +4,7 @@
 design files with no browser through its RPC API, and draw through its official MCP server. The
 `penpot-design` skill is how agents use it.
 
-[Studio](https://github.com/atiladeokegab/studio) builds on this: it imports a live product's pages
+Studio ([related repos](../../README.md#related-repos)) builds on this: it imports a live product's pages
 as editable boards and files Penpot comments as hub tasks. The `studio-design` skill covers it.
 
 ## Run it

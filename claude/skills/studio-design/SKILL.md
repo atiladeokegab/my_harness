@@ -1,11 +1,11 @@
 ---
 name: studio-design
-description: Works with Studio (https://github.com/atiladeokegab/studio), a self-hosted Penpot plus a CLI that imports a live product's pages as native, editable Penpot boards and turns Penpot comments into hub tasks. Covers importing a page into a scratch file, reading a board's text for a design brief, how comment tasks reach the board, and approval (never by the proposal's author). The design method itself is penpot-design. Use when a task says Studio, "import the site", "the live design", or a task carries a `studio-thread:` line. Not for Penpot work with no Studio installed (penpot-design), a product's intent or style guide (designing-products), or code-only UI fixes.
+description: Works with Studio (linked in the my_harness README's Related repos), a self-hosted Penpot plus a CLI that imports a live product's pages as native, editable Penpot boards and turns Penpot comments into hub tasks. Covers importing a page into a scratch file, reading a board's text for a design brief, how comment tasks reach the board, and approval (never by the proposal's author). The design method itself is penpot-design. Use when a task says Studio, "import the site", "the live design", or a task carries a `studio-thread:` line. Not for Penpot work with no Studio installed (penpot-design), a product's intent or style guide (designing-products), or code-only UI fixes.
 ---
 
 # Studio design
 
-[Studio](https://github.com/atiladeokegab/studio) is a CLI (`studio`) beside a self-hosted Penpot
+Studio (its repo is linked in the my_harness README's Related repos) is a CLI (`studio`) beside a self-hosted Penpot
 (here `https://penpot.example.com`). It imports each page a site lists in its `sites.yaml` as native
 Penpot shapes (frames, text, fills; editable, not an image) into the file `<Site> (live design)`, and
 files Penpot comment threads as hub tasks. Its README covers install and every setting. The design

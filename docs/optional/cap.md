@@ -5,7 +5,7 @@ is recorded on the lead's laptop in a fork of [Cap](https://github.com/CapSoftwa
 source screen recorder: [atiladeokegab/Cap](https://github.com/atiladeokegab/Cap). The fork adds a shot
 list in the teleprompter, shot marks (`shots.json`), a foreground-window log, and an upload mirror that
 streams each Studio take to S3-compatible storage while it records, writing `take-manifest.json` last.
-The film pipeline ([atiladeokegab/film](https://github.com/atiladeokegab/film)) watches that bucket,
+The film pipeline (film-kit, [related repos](../../README.md#related-repos)) watches that bucket,
 cuts the take and sends the film back.
 
 This harness ships none of Cap's code (Cap is AGPL-3.0; the fork keeps that licence). What is here is
@@ -25,9 +25,10 @@ gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
 gcloud storage hmac create "film-mirror@$PROJECT.iam.gserviceaccount.com" --project "$PROJECT"
 ```
 
-Bind the role on the bucket only, so the laptop's key can touch nothing else. The last command prints
-an HMAC access id and secret once: they go into the laptop's `mirror.json` and nowhere else. Creating a
-key is the lead's call.
+Bind the role on the bucket only, so the laptop's key can touch nothing else. **Untested:** the role
+`roles/storage.objectUser` is an inference, not checked against a real bucket; if uploads fail with 403,
+check the role first. The last command prints an HMAC access id and secret once: they go into the
+laptop's `mirror.json` and nowhere else. Creating a key is the lead's call.
 
 ## The lead's laptop
 

@@ -204,12 +204,13 @@ They never type into a real agent's pane.
 
 ## Related repos
 
-Three tools the author runs beside the hub live in their own repos, each optional:
+Three tools the author runs beside the hub live in their own repos, each optional. Their links
+appear only here, so a repo rename is one edit:
 
 - [Studio](https://github.com/atiladeokegab/studio): a self-hosted Penpot plus a CLI that imports live
   product pages as editable boards and turns design comments into hub tasks. The
   [studio-design skill](claude/skills/studio-design/SKILL.md) is how agents work with it.
-- [film](https://github.com/atiladeokegab/film): the demo-film pipeline, from a recorded take to a gated,
+- [film-kit](https://github.com/atiladeokegab/film-kit): the demo-film pipeline, from a recorded take to a gated,
   edited film. The hub side is the hackathon skill's [film reference](claude/skills/hackathon/reference/film.md).
 - [Cap fork](https://github.com/atiladeokegab/Cap): the screen recorder the takes come from (AGPL-3.0;
   no Cap code is in this repo). Setup glue: [docs/optional/cap.md](docs/optional/cap.md).

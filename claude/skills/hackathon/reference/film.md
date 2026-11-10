@@ -15,7 +15,7 @@ video by hand and still follows the demo bar.
 ## The pipeline
 
 Two repos outside this harness: the film pipeline
-([atiladeokegab/film](https://github.com/atiladeokegab/film); its README covers install and every
+(film-kit, linked in the my_harness README's Related repos; its README covers install and every
 setting) and the Cap fork the lead records in ([atiladeokegab/Cap](https://github.com/atiladeokegab/Cap)).
 The lead records a Studio take in Cap, the take streams to the takes bucket, and the render machine cuts
 it and sends the film back on the lead's chat channel (`hubwa`, when set up) and Drive. The pipeline's
